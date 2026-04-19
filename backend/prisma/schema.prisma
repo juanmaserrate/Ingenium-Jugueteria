@@ -1,0 +1,716 @@
+// Ingenium POS + Tienda Nube integration
+// Schema completo: 24 stores originales + tablas para integraci\u00f3n TN
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =========================================================
+// CORE
+// =========================================================
+
+model Branch {
+  id        String   @id
+  name      String
+  address   String?
+  phone     String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  users        User[]
+  stocks       Stock[]
+  sales        Sale[]
+  returns      Return[]
+  cashMoves    CashMovement[]
+  expenses     Expense[]
+  employees    Employee[]
+  transfersIn  Transfer[]      @relation("TransferTo")
+  transfersOut Transfer[]      @relation("TransferFrom")
+  notifications Notification[]
+
+  @@map("branches")
+}
+
+model User {
+  id          String   @id
+  branchId    String   @map("branch_id")
+  name        String
+  lastname    String?
+  role        String   // admin | manager | seller
+  email       String?  @unique
+  pinSalt     String   @map("pin_salt")
+  pinHash     String   @map("pin_hash")
+  pinIters    Int      @map("pin_iters")
+  passwordHash String? @map("password_hash") // for backend login via JWT
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  branch     Branch       @relation(fields: [branchId], references: [id])
+  sales      Sale[]
+  cashMoves  CashMovement[]
+  auditLog   AuditLog[]
+  notifications Notification[]
+
+  @@index([branchId])
+  @@map("users")
+}
+
+model Config {
+  key   String @id
+  value Json
+
+  @@map("config")
+}
+
+// =========================================================
+// CATALOG
+// =========================================================
+
+model Category {
+  id        String   @id
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  subcategories Subcategory[]
+  products      Product[]
+
+  @@map("categories")
+}
+
+model Subcategory {
+  id         String @id
+  categoryId String @map("category_id")
+  name       String
+
+  category Category  @relation(fields: [categoryId], references: [id])
+  products Product[]
+
+  @@index([categoryId])
+  @@map("subcategories")
+}
+
+model Brand {
+  id   String @id
+  name String
+
+  products Product[]
+
+  @@map("brands")
+}
+
+model Supplier {
+  id      String  @id
+  name    String
+  phone   String?
+  email   String?
+  address String?
+  cuit    String?
+
+  products Product[]
+  checks   Check[]
+
+  @@map("suppliers")
+}
+
+model Product {
+  id            String   @id
+  code          String   @unique // SKU (producto padre)
+  name          String
+  description   String?
+  cost          Float    @default(0)
+  marginPct     Float    @default(0) @map("margin_pct")
+  price         Float    @default(0)
+  categoryId    String?  @map("category_id")
+  subcategoryId String?  @map("subcategory_id")
+  brandId       String?  @map("brand_id")
+  supplierId    String?  @map("supplier_id")
+  publishedTn   Boolean  @default(false) @map("published_tn")
+  active        Boolean  @default(true)
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  category    Category?    @relation(fields: [categoryId], references: [id])
+  subcategory Subcategory? @relation(fields: [subcategoryId], references: [id])
+  brand       Brand?       @relation(fields: [brandId], references: [id])
+  supplier    Supplier?    @relation(fields: [supplierId], references: [id])
+  variants    Variant[]
+  images      ProductImage[]
+  tnMapping   ProductTnMapping?
+
+  @@index([code])
+  @@index([name])
+  @@index([categoryId])
+  @@index([brandId])
+  @@index([supplierId])
+  @@map("products")
+}
+
+// Cada Producto tiene al menos UNA Variant (si no tiene variantes reales,
+// se crea una variant "default" autom\u00e1ticamente). Eso unifica el manejo
+// de stock: el stock vive siempre a nivel variante + sucursal.
+model Variant {
+  id            String   @id
+  productId     String   @map("product_id")
+  name          String   // ej: "Talle M / Rojo" o "default"
+  attributes    Json     @default("{}") // { "talle": "M", "color": "rojo" }
+  code          String?  @unique // SKU propio (puede heredar del producto)
+  barcode       String?  @unique
+  priceOverride Float?   @map("price_override")
+  costOverride  Float?   @map("cost_override")
+  isDefault     Boolean  @default(false) @map("is_default")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  product    Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  stocks     Stock[]
+  tnMapping  VariantTnMapping?
+  saleItems  SaleItem[]
+
+  @@index([productId])
+  @@map("variants")
+}
+
+model Stock {
+  id          String   @id // "{variantId}|{branchId}"
+  variantId   String   @map("variant_id")
+  branchId    String   @map("branch_id")
+  qty         Int      @default(0)
+  reservedQty Int      @default(0) @map("reserved_qty")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  variant Variant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  branch  Branch  @relation(fields: [branchId], references: [id])
+
+  @@unique([variantId, branchId])
+  @@index([variantId])
+  @@index([branchId])
+  @@map("stock")
+}
+
+model ProductImage {
+  id        String   @id
+  productId String   @map("product_id")
+  url       String   // URL p\u00fablica (storage centralizado)
+  storageKey String  @map("storage_key") // path interno en el storage
+  position  Int      @default(0)
+  tnImageId String?  @map("tn_image_id") // id en TN para mantener sync
+  createdAt DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@map("product_images")
+}
+
+// =========================================================
+// SALES
+// =========================================================
+
+model Sale {
+  id                  String   @id
+  number              Int
+  datetime            DateTime
+  branchId            String   @map("branch_id")
+  sellerId            String?  @map("seller_id")
+  customerId          String?  @map("customer_id")
+  itemsSubtotal       Float    @map("items_subtotal")
+  discountTotal       Float    @default(0) @map("discount_total")
+  surchargeTotal      Float    @default(0) @map("surcharge_total")
+  total               Float
+  discountGlobalPct   Float?   @map("discount_global_pct")
+  discountGlobalFixed Float?   @map("discount_global_fixed")
+  surchargeGlobalPct  Float?   @map("surcharge_global_pct")
+  surchargeGlobalFixed Float?  @map("surcharge_global_fixed")
+  status              String   // draft | confirmed | cancelled
+  source              String   @default("pos") // pos | tn
+  tnOrderId           String?  @map("tn_order_id")
+  offlineId           String?  @map("offline_id") // id temporal antes de sync
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  branch    Branch     @relation(fields: [branchId], references: [id])
+  seller    User?      @relation(fields: [sellerId], references: [id])
+  customer  Customer?  @relation(fields: [customerId], references: [id])
+  items     SaleItem[]
+  payments  SalePayment[]
+  returns   Return[]
+
+  @@index([datetime])
+  @@index([branchId])
+  @@index([sellerId])
+  @@index([customerId])
+  @@index([status])
+  @@index([tnOrderId])
+  @@map("sales")
+}
+
+model SaleItem {
+  id              String  @id
+  saleId          String  @map("sale_id")
+  variantId       String  @map("variant_id")
+  productNameSnap String  @map("product_name_snap")
+  variantNameSnap String? @map("variant_name_snap")
+  qty             Int
+  unitPrice       Float   @map("unit_price")
+  costSnapshot    Float   @map("cost_snapshot")
+  discountPct     Float?  @map("discount_pct")
+  discountFixed   Float?  @map("discount_fixed")
+  priceOverridden Boolean @default(false) @map("price_overridden")
+  subtotal        Float
+
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  variant Variant @relation(fields: [variantId], references: [id])
+
+  @@index([saleId])
+  @@map("sale_items")
+}
+
+model SalePayment {
+  id         String  @id
+  saleId     String  @map("sale_id")
+  methodId   String  @map("method_id")
+  methodName String  @map("method_name")
+  amount     Float
+
+  sale Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@map("sale_payments")
+}
+
+model DraftSale {
+  id        String   @id
+  branchId  String   @map("branch_id")
+  userId    String?  @map("user_id")
+  data      Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([branchId])
+  @@map("draft_sales")
+}
+
+// =========================================================
+// RETURNS
+// =========================================================
+
+model Return {
+  id             String   @id
+  number         Int
+  datetime       DateTime
+  branchId       String   @map("branch_id")
+  originalSaleId String?  @map("original_sale_id")
+  customerId     String?  @map("customer_id")
+  returnedItems  Json     @map("returned_items")
+  takenItems     Json     @map("taken_items")
+  returnedTotal  Float    @map("returned_total")
+  takenTotal     Float    @map("taken_total")
+  difference     Float
+  payments       Json
+  reason         String?
+  creditNoteId   String?  @map("credit_note_id")
+  userId         String?  @map("user_id")
+  source         String   @default("pos") // pos | tn_cancelled
+  tnOrderId      String?  @map("tn_order_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  branch       Branch     @relation(fields: [branchId], references: [id])
+  originalSale Sale?      @relation(fields: [originalSaleId], references: [id])
+  customer     Customer?  @relation(fields: [customerId], references: [id])
+
+  @@index([datetime])
+  @@index([branchId])
+  @@index([originalSaleId])
+  @@index([tnOrderId])
+  @@map("returns")
+}
+
+model CreditNote {
+  id         String    @id
+  code       String    @unique
+  customerId String?   @map("customer_id")
+  amount     Float
+  issuedAt   DateTime  @map("issued_at")
+  expiresAt  DateTime  @map("expires_at")
+  redeemedAt DateTime? @map("redeemed_at")
+  redeemedSaleId String? @map("redeemed_sale_id")
+
+  customer Customer? @relation(fields: [customerId], references: [id])
+
+  @@index([code])
+  @@index([customerId])
+  @@index([redeemedAt])
+  @@map("credit_notes")
+}
+
+// =========================================================
+// CASH & FINANCE
+// =========================================================
+
+model CashMovement {
+  id          String   @id
+  datetime    DateTime
+  branchId    String   @map("branch_id")
+  type        String   // opening | closing | sale | return | expense | adjustment
+  amountIn    Float    @default(0) @map("amount_in")
+  amountOut   Float    @default(0) @map("amount_out")
+  description String?
+  refId       String?  @map("ref_id")
+  userId      String?  @map("user_id")
+
+  branch Branch @relation(fields: [branchId], references: [id])
+  user   User?  @relation(fields: [userId], references: [id])
+
+  @@index([datetime])
+  @@index([branchId])
+  @@index([type])
+  @@map("cash_movements")
+}
+
+model Expense {
+  id              String   @id
+  datetime        DateTime
+  branchId        String   @map("branch_id")
+  amount          Float
+  category        String?
+  description     String?
+  paymentMethodId String?  @map("payment_method_id")
+  userId          String?  @map("user_id")
+
+  branch Branch @relation(fields: [branchId], references: [id])
+
+  @@index([datetime])
+  @@index([branchId])
+  @@map("expenses")
+}
+
+model MonthlyPnl {
+  id        String @id // YYYY-MM
+  snapshot  Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("monthly_pnl")
+}
+
+model Check {
+  id         String    @id
+  number     String
+  supplierId String?   @map("supplier_id")
+  amount     Float
+  dueAt      DateTime  @map("due_at")
+  issueDate  DateTime? @map("issue_date")
+  status     String    // pending | paid | bounced
+  notes      String?
+  notified   Boolean   @default(false)
+
+  supplier Supplier? @relation(fields: [supplierId], references: [id])
+
+  @@index([dueAt])
+  @@index([supplierId])
+  @@index([status])
+  @@map("checks")
+}
+
+// =========================================================
+// PEOPLE
+// =========================================================
+
+model Customer {
+  id             String    @id
+  name           String
+  phone          String?
+  email          String?
+  birthday       DateTime?
+  documentType   String?   @map("document_type")
+  documentNumber String?   @map("document_number")
+  address        String?
+  city           String?
+  notes          String?
+  tnCustomerId   String?   @unique @map("tn_customer_id")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  sales       Sale[]
+  returns     Return[]
+  creditNotes CreditNote[]
+
+  @@index([email])
+  @@index([birthday])
+  @@index([tnCustomerId])
+  @@map("customers")
+}
+
+model Employee {
+  id         String   @id
+  name       String
+  lastname   String
+  branchId   String   @map("branch_id")
+  role       String
+  email      String?
+  phone      String?
+  active     Boolean  @default(true)
+  hourlyRate Float?   @map("hourly_rate")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  branch Branch  @relation(fields: [branchId], references: [id])
+  shifts Shift[]
+
+  @@index([active])
+  @@map("employees")
+}
+
+model Shift {
+  id         String    @id
+  employeeId String    @map("employee_id")
+  date       DateTime
+  checkIn    DateTime? @map("check_in")
+  checkOut   DateTime? @map("check_out")
+  notes      String?
+
+  employee Employee @relation(fields: [employeeId], references: [id])
+
+  @@index([employeeId])
+  @@index([date])
+  @@map("shifts")
+}
+
+// =========================================================
+// OPERATIONS
+// =========================================================
+
+model Transfer {
+  id          String   @id
+  number      Int
+  datetime    DateTime
+  fromBranch  String   @map("from_branch")
+  toBranch    String   @map("to_branch")
+  items       Json     // [{ variantId, qty }]
+  status      String   @default("confirmed")
+  notes       String?
+  userId      String?  @map("user_id")
+
+  from Branch @relation("TransferFrom", fields: [fromBranch], references: [id])
+  to   Branch @relation("TransferTo", fields: [toBranch], references: [id])
+
+  @@index([datetime])
+  @@index([fromBranch])
+  @@index([toBranch])
+  @@map("transfers")
+}
+
+model Task {
+  id         String   @id
+  title      String
+  column     String   // todo | doing | done
+  assigneeId String?  @map("assignee_id")
+  dueAt      DateTime? @map("due_at")
+  notes      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([column])
+  @@index([assigneeId])
+  @@map("tasks")
+}
+
+model CalendarEvent {
+  id        String   @id
+  title     String
+  dateFrom  DateTime @map("date_from")
+  dateTo    DateTime? @map("date_to")
+  allDay    Boolean  @default(false) @map("all_day")
+  color     String?
+  notes     String?
+
+  @@index([dateFrom])
+  @@map("calendar_events")
+}
+
+// =========================================================
+// META
+// =========================================================
+
+model Notification {
+  id        String    @id
+  userId    String?   @map("user_id")
+  branchId  String?   @map("branch_id")
+  datetime  DateTime  @default(now())
+  type      String    // info | warn | error | tn_order | tn_product | conflict
+  title     String
+  message   String
+  data      Json?
+  readAt    DateTime? @map("read_at")
+
+  user   User?   @relation(fields: [userId], references: [id])
+  branch Branch? @relation(fields: [branchId], references: [id])
+
+  @@index([userId])
+  @@index([branchId])
+  @@index([readAt])
+  @@index([datetime])
+  @@map("notifications")
+}
+
+model AuditLog {
+  id          String   @id
+  datetime    DateTime @default(now())
+  userId      String?  @map("user_id")
+  action      String
+  entity      String
+  entityId    String?  @map("entity_id")
+  before      Json?
+  after       Json?
+  description String?
+  hash        String
+  prevHash    String?  @map("prev_hash")
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([datetime])
+  @@index([userId])
+  @@index([entity])
+  @@map("audit_log")
+}
+
+model Counter {
+  name  String @id
+  value Int    @default(0)
+
+  @@map("counters")
+}
+
+// =========================================================
+// INTEGRATION: TIENDA NUBE
+// =========================================================
+
+model Integration {
+  id            String   @id @default(cuid())
+  provider      String   @unique // "tiendanube"
+  tnStoreId     String?  @map("tn_store_id") // id de la tienda (user_id en TN)
+  accessTokenEnc String  @map("access_token_enc") // encriptado con ENCRYPTION_KEY
+  scope         String?
+  webhookSecret String?  @map("webhook_secret")
+  connectedAt   DateTime @default(now()) @map("connected_at")
+  lastSyncAt    DateTime? @map("last_sync_at")
+  stockMode     String   @default("sum") @map("stock_mode") // sum | lomas | banfield
+  active        Boolean  @default(true)
+
+  @@map("integrations")
+}
+
+model ProductTnMapping {
+  id          String   @id @default(cuid())
+  productId   String   @unique @map("product_id")
+  tnProductId String   @unique @map("tn_product_id")
+  lastPushAt  DateTime? @map("last_push_at")
+  lastPullAt  DateTime? @map("last_pull_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("product_tn_mapping")
+}
+
+model VariantTnMapping {
+  id            String   @id @default(cuid())
+  variantId     String   @unique @map("variant_id")
+  tnProductId   String   @map("tn_product_id")
+  tnVariantId   String   @unique @map("tn_variant_id")
+  lastPushAt    DateTime? @map("last_push_at")
+  lastPullAt    DateTime? @map("last_pull_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  variant Variant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([tnProductId])
+  @@map("variant_tn_mapping")
+}
+
+// \u00d3rdenes de TN ya pagadas, esperando asignaci\u00f3n de sucursal
+model TnOrderPending {
+  id         String   @id @default(cuid())
+  tnOrderId  String   @unique @map("tn_order_id")
+  number     String?
+  customerName String  @map("customer_name")
+  customerEmail String? @map("customer_email")
+  customerPhone String? @map("customer_phone")
+  items      Json     // [{ tnProductId, tnVariantId, qty, unitPrice, productName, variantName }]
+  total      Float
+  currency   String   @default("ARS")
+  paymentStatus String @map("payment_status")
+  rawPayload Json     @map("raw_payload")
+  status     String   @default("pending") // pending | assigned | cancelled | error
+  assignedBranchId String? @map("assigned_branch_id")
+  assignedSaleId   String? @map("assigned_sale_id")
+  receivedAt DateTime @default(now()) @map("received_at")
+  assignedAt DateTime? @map("assigned_at")
+
+  @@index([status])
+  @@index([receivedAt])
+  @@map("tn_orders_pending")
+}
+
+// Productos nuevos que llegaron de TN y est\u00e1n pendientes de aprobaci\u00f3n
+model TnProductPending {
+  id          String   @id @default(cuid())
+  tnProductId String   @unique @map("tn_product_id")
+  payload     Json
+  status      String   @default("pending") // pending | approved | rejected
+  receivedAt  DateTime @default(now()) @map("received_at")
+  reviewedAt  DateTime? @map("reviewed_at")
+
+  @@index([status])
+  @@map("tn_products_pending")
+}
+
+// Log de cada operaci\u00f3n hacia TN
+model TnSyncLog {
+  id         String   @id @default(cuid())
+  datetime   DateTime @default(now())
+  operation  String   // push_product | push_stock | push_image | fulfill_order | etc.
+  entity     String   // product | variant | stock | order | image
+  entityId   String?  @map("entity_id")
+  tnEntityId String?  @map("tn_entity_id")
+  status     String   // success | error | retry
+  attempt    Int      @default(1)
+  error      String?
+  payload    Json?
+  response   Json?
+
+  @@index([datetime])
+  @@index([entity])
+  @@index([status])
+  @@map("tn_sync_log")
+}
+
+// Cola de operaciones hacia TN (para retry autom\u00e1tico)
+model SyncQueue {
+  id         String   @id @default(cuid())
+  operation  String
+  payload    Json
+  status     String   @default("queued") // queued | running | done | failed
+  attempts   Int      @default(0)
+  lastError  String?  @map("last_error")
+  nextRunAt  DateTime @default(now()) @map("next_run_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  doneAt     DateTime? @map("done_at")
+
+  @@index([status])
+  @@index([nextRunAt])
+  @@map("sync_queue")
+}
+
+// Conflictos al sincronizar ventas offline
+model SyncConflict {
+  id           String   @id @default(cuid())
+  type         String   // offline_sale_stock | offline_sale_duplicate | tn_order_nomapping
+  payload      Json
+  status       String   @default("open") // open | resolved | dismissed
+  resolution   String?  // accept | cancel | adjust
+  resolvedById String?  @map("resolved_by_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+  resolvedAt   DateTime? @map("resolved_at")
+
+  @@index([status])
+  @@map("sync_conflicts")
+}

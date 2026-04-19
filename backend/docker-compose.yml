@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ingenium-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ingenium
+      POSTGRES_PASSWORD: ingenium
+      POSTGRES_DB: ingenium
+    ports:
+      - "5432:5432"
+    volumes:
+      - ingenium_pg_data:/var/lib/postgresql/data
+
+volumes:
+  ingenium_pg_data:
