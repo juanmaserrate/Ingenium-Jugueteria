@@ -3,6 +3,7 @@ import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../db.js';
 import { UnauthorizedError, ValidationError } from '../utils/errors.js';
+import { runSeed } from '../scripts/seed.js';
 
 const loginPinSchema = z.object({
   branchId: z.string(),
@@ -62,6 +63,17 @@ export async function authRoutes(app: FastifyInstance) {
       select: { id: true, name: true, lastname: true, role: true },
       orderBy: { name: 'asc' },
     });
+  });
+
+  // Bootstrap idempotente protegido por BOOTSTRAP_TOKEN.
+  // Crea sucursales + admin si no existen. Seguro correrlo N veces.
+  app.post('/auth/bootstrap', async (request, reply) => {
+    const expected = process.env.BOOTSTRAP_TOKEN;
+    if (!expected) return reply.status(503).send({ error: 'BOOTSTRAP_TOKEN not configured' });
+    const header = request.headers['x-bootstrap-token'];
+    if (header !== expected) throw new UnauthorizedError('Invalid bootstrap token');
+    const result = await runSeed();
+    return { ok: true, ...result };
   });
 }
 

@@ -1,7 +1,10 @@
 // HTTP client para llamar al backend Ingenium.
 // Maneja JWT, errores tipados y fallback offline para operaciones cr\u00edticas.
 
-const DEFAULT_BASE = localStorage.getItem('ingenium_api_base') || 'http://localhost:3000';
+const RAILWAY_BASE = 'https://ingenium-jugueteria-production.up.railway.app';
+const LOCAL_BASE = 'http://localhost:3000';
+const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(location.hostname);
+const DEFAULT_BASE = localStorage.getItem('ingenium_api_base') || (isLocal ? LOCAL_BASE : RAILWAY_BASE);
 
 export function getApiBase() {
   return DEFAULT_BASE;
