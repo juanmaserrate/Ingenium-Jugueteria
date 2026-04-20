@@ -4,7 +4,7 @@ import { verifyHmac } from '../utils/crypto.js';
 import { dispatchWebhook } from '../tiendanube/webhooks.js';
 
 export async function webhooksRoutes(app: FastifyInstance) {
-  app.post('/webhooks/tiendanube', async (req, reply) => {
+  const handler = async (req: any, reply: any) => {
     const integration = await prisma.integration.findUnique({ where: { provider: 'tiendanube' } });
     if (!integration || !integration.active || !integration.webhookSecret) {
       return reply.status(503).send({ error: 'Integration not active' });
@@ -32,5 +32,12 @@ export async function webhooksRoutes(app: FastifyInstance) {
       app.log.error({ err: err.message, event, body }, 'webhook dispatch failed');
       return reply.status(500).send({ error: err.message });
     }
-  });
+  };
+
+  // Main webhook endpoint (generic event dispatcher)
+  app.post('/webhooks/tiendanube', handler);
+  // GDPR-specific aliases required by TN Partners App
+  app.post('/webhooks/tiendanube/store-redact', handler);
+  app.post('/webhooks/tiendanube/customers-redact', handler);
+  app.post('/webhooks/tiendanube/customers-data-request', handler);
 }
