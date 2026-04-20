@@ -361,6 +361,10 @@ async function openProductForm(p, container) {
         <input type="checkbox" name="published_meli" ${p?.published_meli ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
         <span class="text-sm font-bold">Publicar en MercadoLibre</span>
       </label>
+      <label class="col-span-2 flex items-center gap-2 py-2">
+        <input type="checkbox" name="published_tn" ${p?.published_tn ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+        <span class="text-sm font-bold">Publicar en Tienda Nube</span>
+      </label>
     </form>
   `;
   openModal({
@@ -382,9 +386,33 @@ async function openProductForm(p, container) {
       el.querySelector('[data-act="save"]').addEventListener('click', async () => {
         const d = Object.fromEntries(new FormData(form).entries());
         d.published_meli = form.elements.published_meli.checked;
+        d.published_tn = form.elements.published_tn.checked;
         if (!d.name?.trim()) { toast('Nombre requerido', 'error'); return; }
         const saved = await P.save({ ...(p || {}), ...d });
         toast(p ? 'Actualizado' : 'Creado', 'success');
+        // Si se marcó "Publicar en TN", empujar al backend para que dispare push_product_create
+        if (d.published_tn) {
+          try {
+            const { api, ApiError } = await import('../core/api.js');
+            const body = {
+              id: saved.id,
+              code: saved.code,
+              name: saved.name,
+              cost: Number(saved.cost) || 0,
+              marginPct: Number(saved.margin_pct) || 0,
+              price: Number(saved.price) || 0,
+              publishedTn: true,
+            };
+            // PUT si ya existía, POST si es nuevo
+            const method = p ? 'PUT' : 'POST';
+            const path = p ? `/api/products/${encodeURIComponent(saved.id)}` : '/api/products';
+            await api(path, { method, body });
+            toast('Publicado en Tienda Nube', 'success');
+          } catch (e) {
+            console.warn('push a TN falló', e);
+            toast('Guardado local — falta sincronizar con Tienda Nube', 'warn');
+          }
+        }
         close(saved);
         renderProducts(container);
       });

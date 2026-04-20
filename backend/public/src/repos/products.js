@@ -22,6 +22,7 @@ export async function save(data) {
     supplier_id: data.supplier_id || null,
     subcategory_id: data.subcategory_id || null,
     published_meli: !!data.published_meli,
+    published_tn: !!data.published_tn,
     variants_count: Number(data.variants_count) || 0,
     created_at: before?.created_at || now,
     updated_at: now,
