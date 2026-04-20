@@ -69,22 +69,14 @@ async function main() {
 
   // Frontend estático: repo root contiene index.html, app.html, src/, assets/.
   // Sube un nivel si corre desde backend/, o usa cwd si el build copió el frontend al mismo nivel.
-  const { existsSync, readdirSync } = await import('node:fs');
+  const { existsSync } = await import('node:fs');
   const candidates = [
+    path.resolve(process.cwd(), 'public'),
+    path.resolve(process.cwd(), '..', 'public'),
     path.resolve(process.cwd(), '..'),
     process.cwd(),
-    '/app',
-    '/app/..',
-    path.resolve(process.cwd(), '../..'),
   ];
-  const candidateChecks = candidates.map((p) => ({
-    path: p,
-    hasIndex: existsSync(path.join(p, 'index.html')),
-    exists: existsSync(p),
-    sample: existsSync(p) ? readdirSync(p).slice(0, 12) : null,
-  }));
-  app.log.info({ cwd: process.cwd(), candidates: candidateChecks }, 'Frontend root resolution');
-  const frontendRoot = candidateChecks.find((c) => c.hasIndex)?.path;
+  const frontendRoot = candidates.find((p) => existsSync(path.join(p, 'index.html')));
   if (frontendRoot) {
     app.log.info({ frontendRoot }, 'Serving static frontend');
     await app.register(staticPlugin, {
@@ -99,13 +91,8 @@ async function main() {
       },
     });
   } else {
-    app.log.warn('No frontend root found — static files will NOT be served');
+    app.log.warn({ cwd: process.cwd(), candidates }, 'No frontend root found — static files will NOT be served');
   }
-
-  app.get('/__debug/fs', async () => ({
-    cwd: process.cwd(),
-    candidates: candidateChecks,
-  }));
 
   // Global error handler
   app.setErrorHandler((error, _request, reply) => {

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html class="light" lang="es-AR">
+<head>
+  <meta charset="utf-8" />
+  <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; connect-src 'self' blob: https://cdn.jsdelivr.net; object-src 'none'; base-uri 'self'" />
+  <title>Ingenium | Ingresar</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%23d82f1e'/%3E%3Ctext x='50' y='66' font-family='sans-serif' font-size='60' font-weight='900' text-anchor='middle' fill='white'%3EI%3C/text%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin />
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script src="./src/config/theme.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+  <link href="./assets/css/custom.css" rel="stylesheet" />
+</head>
+<body class="bg-background text-secondary min-h-screen flex items-center justify-center">
+  <div class="w-full max-w-lg mx-auto px-6">
+    <!-- Logo -->
+    <div class="text-center mb-10">
+      <div class="inline-flex items-center justify-center w-20 h-20 bg-[#d82f1e] rounded-full mb-4">
+        <span class="material-symbols-outlined text-white text-4xl">toys</span>
+      </div>
+      <h1 class="text-4xl font-black tracking-tighter text-[#d82f1e]">Ingenium</h1>
+      <p class="text-[0.75rem] font-bold text-[#7d6c5c] uppercase tracking-[0.3em] mt-1">Sistema de Ventas</p>
+    </div>
+
+    <!-- Login card -->
+    <div class="ing-card">
+      <h2 class="text-xl font-black text-[#241a0d] mb-1">Bienvenido</h2>
+      <p class="text-sm text-[#7d6c5c] mb-6">Seleccioná sucursal y usuario para continuar</p>
+
+      <form id="login-form" class="space-y-5">
+        <div>
+          <label for="branch-buttons" class="text-[0.625rem] font-black text-[#7d6c5c] uppercase tracking-[0.2em] block mb-2">Sucursal</label>
+          <div id="branch-buttons" role="radiogroup" aria-label="Sucursal" class="grid grid-cols-2 gap-3">
+            <div class="col-span-2 text-center py-4 text-[#7d6c5c] text-sm">Cargando...</div>
+          </div>
+        </div>
+
+        <div>
+          <label for="user-buttons" class="text-[0.625rem] font-black text-[#7d6c5c] uppercase tracking-[0.2em] block mb-2">Usuario</label>
+          <div id="user-buttons" role="radiogroup" aria-label="Usuario" class="space-y-2">
+            <div class="text-center py-4 text-[#7d6c5c] text-sm">Seleccioná una sucursal primero</div>
+          </div>
+        </div>
+
+        <div id="pin-section" class="hidden">
+          <label for="pin-input" class="text-[0.625rem] font-black text-[#7d6c5c] uppercase tracking-[0.2em] block mb-2">PIN</label>
+          <input id="pin-input" type="password" inputmode="numeric" maxlength="6" autocomplete="off"
+                 aria-describedby="login-error"
+                 class="ing-input text-center text-2xl tracking-[0.5em] font-black"
+                 placeholder="••••" />
+          <p id="login-error" role="alert" class="text-xs text-red-600 mt-2 hidden"></p>
+        </div>
+
+        <button id="login-btn" type="submit" class="ing-btn-primary w-full text-lg hidden">
+          <span class="material-symbols-outlined align-middle mr-2">login</span>
+          Ingresar
+        </button>
+      </form>
+
+      <div class="mt-8 pt-6 border-t border-[#fff1e6] flex justify-between items-center">
+        <p class="text-xs text-[#7d6c5c]">Primera vez? Se crea la estructura inicial.</p>
+        <button id="reset-btn" class="text-xs text-[#d82f1e] font-bold hover:underline">Reiniciar sistema</button>
+      </div>
+    </div>
+
+    <p class="text-center text-xs text-[#7d6c5c] mt-6">
+      PINs iniciales: Lomas <span class="font-bold">1111</span> · Banfield <span class="font-bold">2222</span> <span class="opacity-60">(cambialos desde Configuración)</span>
+    </p>
+  </div>
+
+  <script type="module">
+    import * as Auth from './src/core/auth.js';
+    import { runSeed, isSeedNeeded, resetAllData } from './src/core/seed.js';
+    import { log } from './src/core/audit.js';
+    import { toast } from './src/core/notifications.js';
+
+    const state = { branches: [], users: [], branchId: null, userId: null };
+
+    // A-2: iconos decorativos → aria-hidden
+    const markIcons = (root) => root.querySelectorAll?.('.material-symbols-outlined:not([aria-hidden])').forEach(n => n.setAttribute('aria-hidden', 'true'));
+    markIcons(document);
+    new MutationObserver(m => m.forEach(x => x.addedNodes.forEach(n => n.nodeType === 1 && markIcons(n)))).observe(document.body, { childList: true, subtree: true });
+
+    async function init() {
+      if (await isSeedNeeded()) {
+        await runSeed();
+      }
+      state.branches = await Auth.listBranches();
+      renderBranches();
+      if (new URLSearchParams(location.search).get('expired') === '1') {
+        toast('Sesión expirada por inactividad. Ingresá de nuevo.', 'warning');
+      }
+    }
+
+    function renderBranches() {
+      const c = document.getElementById('branch-buttons');
+      c.innerHTML = state.branches.map(b => `
+        <button type="button" data-branch="${b.id}" class="branch-btn p-5 rounded-2xl border-2 transition-all text-left
+          ${state.branchId === b.id ? 'border-[#d82f1e] bg-[#fff1e6]' : 'border-[#e3ceba] hover:border-[#d82f1e]/50'}">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-symbols-outlined text-[#d82f1e]">storefront</span>
+            <span class="font-black text-lg text-[#241a0d]">${b.name}</span>
+          </div>
+          <div class="text-xs text-[#7d6c5c]">${b.address || ''}</div>
+        </button>
+      `).join('');
+      c.querySelectorAll('.branch-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          state.branchId = btn.dataset.branch;
+          state.userId = null;
+          state.users = await Auth.listUsersForBranch(state.branchId);
+          renderBranches();
+          renderUsers();
+        });
+      });
+    }
+
+    function renderUsers() {
+      const c = document.getElementById('user-buttons');
+      if (!state.branchId) {
+        c.innerHTML = '<div class="text-center py-4 text-[#7d6c5c] text-sm">Seleccioná una sucursal primero</div>';
+        return;
+      }
+      c.innerHTML = state.users.map(u => `
+        <button type="button" data-user="${u.id}" class="user-btn w-full p-4 rounded-2xl border-2 transition-all flex items-center gap-3 text-left
+          ${state.userId === u.id ? 'border-[#d82f1e] bg-[#fff1e6]' : 'border-[#e3ceba] hover:border-[#d82f1e]/50'}">
+          <div class="w-10 h-10 rounded-full bg-[#fff1e6] flex items-center justify-center">
+            <span class="material-symbols-outlined text-[#d82f1e]">person</span>
+          </div>
+          <div>
+            <div class="font-bold text-[#241a0d]">${u.name} ${u.lastname || ''}</div>
+            <div class="text-xs text-[#7d6c5c] uppercase tracking-wider font-bold">${({admin:'Admin', cashier:'Cajero', manager:'Encargado', seller:'Vendedor'})[u.role] || u.role}</div>
+          </div>
+        </button>
+      `).join('');
+      c.querySelectorAll('.user-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.userId = btn.dataset.user;
+          renderUsers();
+          document.getElementById('pin-section').classList.remove('hidden');
+          document.getElementById('login-btn').classList.remove('hidden');
+          setTimeout(() => document.getElementById('pin-input').focus(), 50);
+        });
+      });
+    }
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const pin = document.getElementById('pin-input').value;
+      const err = document.getElementById('login-error');
+      err.classList.add('hidden');
+      if (!state.branchId || !state.userId) { err.textContent = 'Elegí sucursal y usuario'; err.classList.remove('hidden'); return; }
+      if (!pin) { err.textContent = 'Ingresá el PIN'; err.classList.remove('hidden'); return; }
+      try {
+        const s = await Auth.login(state.branchId, state.userId, pin);
+        await log({ action: 'login', entity: 'session', entity_id: s.user_id, description: `Login ${s.user_name} en ${s.branch_name}` });
+        location.href = './app.html';
+      } catch (ex) {
+        err.textContent = ex.message || 'Error de autenticación';
+        err.classList.remove('hidden');
+      }
+    });
+
+    document.getElementById('reset-btn').addEventListener('click', async () => {
+      if (!confirm('Esto borra TODOS los datos locales (ventas, stock, movimientos, etc). ¿Seguro?')) return;
+      await resetAllData();
+      await runSeed({ force: true });
+      toast('Sistema reiniciado', 'success');
+      setTimeout(() => location.reload(), 600);
+    });
+
+    init().catch(err => { console.error(err); alert('Error inicializando: ' + err.message); });
+  </script>
+</body>
+</html>

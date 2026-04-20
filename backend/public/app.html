@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html class="light" lang="es-AR">
+<head>
+  <meta charset="utf-8" />
+  <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+  <!-- S-6: CSP permite CDNs y data: (usamos un data-uri como favicon). 'unsafe-inline' requerido por Tailwind CDN y estilos inline generados. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https: http://localhost:*; connect-src 'self' blob: https://cdn.jsdelivr.net http://localhost:* http://127.0.0.1:* ws://localhost:* https://api.tiendanube.com; object-src 'none'; base-uri 'self'" />
+  <title>Ingenium | Sistema</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='48' fill='%23d82f1e'/%3E%3Ctext x='50' y='66' font-family='sans-serif' font-size='60' font-weight='900' text-anchor='middle' fill='white'%3EI%3C/text%3E%3C/svg%3E" />
+  <!-- P-5: preconnect a CDNs de terceros para reducir LCP -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin />
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script src="./src/config/theme.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+  <link href="./assets/css/custom.css" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body class="bg-background text-secondary min-h-screen">
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="h-screen w-64 fixed left-0 top-0 overflow-hidden bg-[#fff8f4] flex flex-col py-6 z-40 shadow-[40px_0_40px_rgba(36,26,13,0.06)] rounded-r-[3rem]">
+    <div class="p-6 text-center text-[#7d6c5c] text-sm">Cargando...</div>
+  </aside>
+
+  <!-- Main -->
+  <main class="ml-64 min-h-screen flex flex-col">
+    <!-- Topbar -->
+    <header id="topbar" class="sticky top-0 w-full flex justify-between items-center px-10 py-4 bg-white/70 backdrop-blur-xl z-30 border-b border-[#fff1e6]"></header>
+
+    <!-- Router outlet -->
+    <div id="router-outlet" class="flex-1 p-6 lg:p-10"></div>
+  </main>
+
+  <script type="module">
+    import * as Auth from './src/core/auth.js';
+    import { mountSidebar } from './src/components/sidebar.js';
+    import { mountTopbar } from './src/components/topbar.js';
+    import { registerRoute, setRouterContainer, startRouter } from './src/core/router.js';
+    import { toast } from './src/core/notifications.js';
+
+    // Auth guard
+    const session = Auth.currentSession();
+    if (!session) { location.href = './index.html'; }
+
+    // A-2: marcar iconos decorativos como aria-hidden automáticamente.
+    const markIcons = (root) => {
+      const nodes = root.querySelectorAll?.('.material-symbols-outlined:not([aria-hidden])');
+      nodes?.forEach(n => n.setAttribute('aria-hidden', 'true'));
+    };
+    markIcons(document);
+    new MutationObserver(muts => {
+      for (const m of muts) for (const n of m.addedNodes) {
+        if (n.nodeType === 1) markIcons(n);
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+
+    // Idle watcher: logout automático por inactividad (S-2)
+    Auth.touchActivity();
+    ['click', 'keydown', 'mousemove', 'touchstart', 'scroll'].forEach(ev => {
+      document.addEventListener(ev, Auth.touchActivity, { passive: true });
+    });
+    let warnedIdle = false;
+    setInterval(() => {
+      const ms = Auth.millisUntilExpiry();
+      if (ms <= 0) { Auth.logout('idle'); return; }
+      if (ms <= Auth.IDLE_WARN_MS && !warnedIdle) {
+        warnedIdle = true;
+        toast(`Tu sesión va a expirar en ${Math.ceil(ms / 60000)} min por inactividad`, 'warning');
+      } else if (ms > Auth.IDLE_WARN_MS) {
+        warnedIdle = false;
+      }
+    }, 15000);
+
+    // Registrar rutas (lazy import de cada módulo)
+    registerRoute('/dashboard',    () => import('./src/modules/dashboard.js'));
+    registerRoute('/pos',          () => import('./src/modules/pos.js'));
+    registerRoute('/returns',      () => import('./src/modules/returns.js'));
+    registerRoute('/cash',         () => import('./src/modules/cash.js'));
+    registerRoute('/inventory',    () => import('./src/modules/inventory.js'));
+    registerRoute('/crm',          () => import('./src/modules/crm.js'));
+    registerRoute('/balance',      () => import('./src/modules/balance.js'));
+    registerRoute('/profits',      () => import('./src/modules/profits.js'));
+    registerRoute('/contribution', () => import('./src/modules/contribution.js'));
+    registerRoute('/checks',       () => import('./src/modules/checks.js'));
+    registerRoute('/employees',    () => import('./src/modules/employees.js'));
+    registerRoute('/tasks',        () => import('./src/modules/tasks.js'));
+    registerRoute('/calendar',     () => import('./src/modules/calendar.js'));
+    registerRoute('/reports',      () => import('./src/modules/reports.js'));
+    registerRoute('/history',      () => import('./src/modules/history.js'));
+    registerRoute('/settings',     () => import('./src/modules/settings.js'));
+    // Tienda Nube
+    registerRoute('/integraciones',        () => import('./src/modules/integraciones.js'));
+    registerRoute('/ventas-web',           () => import('./src/modules/ventas-web.js'));
+    registerRoute('/productos-pendientes', () => import('./src/modules/productos-pendientes.js'));
+    registerRoute('/conflictos',           () => import('./src/modules/conflictos.js'));
+
+    // Arrancar cola de sync local para modo offline
+    import('./src/core/sync-queue.js');
+
+    // Registrar Service Worker (cache de assets)
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(() => null);
+    }
+
+    // Montar shell
+    mountSidebar(document.getElementById('sidebar'), {
+      onLogout: () => {
+        Auth.logout();
+      }
+    });
+    await mountTopbar(document.getElementById('topbar'));
+
+    setRouterContainer(document.getElementById('router-outlet'));
+    startRouter('/dashboard');
+
+    // Welcome toast
+    toast(`Hola ${session.user_name} · ${session.branch_name}`, 'success');
+  </script>
+</body>
+</html>
