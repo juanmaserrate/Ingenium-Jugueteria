@@ -3,6 +3,7 @@
 
 import { get, getAll, put } from './db.js';
 import { verifyPin, derivePin } from './crypto.js';
+import { getApiBase, setToken } from './api.js';
 
 const SESSION_KEY = 'ingenium_session';
 const LAST_ACTIVITY_KEY = 'ingenium_last_activity';
@@ -71,12 +72,33 @@ export async function login(branchId, userId, pin) {
   };
   sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
   touchActivity();
+
+  // Pedir JWT al backend para poder llamar rutas autenticadas (Ventas Web, TN, etc.).
+  // Silencioso: si el backend no conoce al usuario, el login local igual es válido
+  // y los módulos offline siguen funcionando.
+  try {
+    const res = await fetch(`${getApiBase()}/auth/login-pin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branchId, userId, pin: String(pin) }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.token) setToken(data.token);
+    } else {
+      setToken(null);
+    }
+  } catch {
+    setToken(null);
+  }
+
   return session;
 }
 
 export function logout(reason = 'manual') {
   sessionStorage.removeItem(SESSION_KEY);
   sessionStorage.removeItem(LAST_ACTIVITY_KEY);
+  setToken(null);
   if (reason === 'idle') {
     location.href = './index.html?expired=1';
   } else {
