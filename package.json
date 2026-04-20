@@ -1,0 +1,13 @@
+{
+  "name": "ingenium-root",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Ingenium POS monorepo root (frontend + backend served together)",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "cd backend && npm install --no-audit --no-fund && npm run build",
+    "start": "cd backend && npm start"
+  }
+}

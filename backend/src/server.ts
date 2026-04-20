@@ -66,6 +66,21 @@ async function main() {
     });
   }
 
+  // Frontend estático: repo root contiene index.html, app.html, src/, assets/.
+  // El backend corre desde /app/backend, así que subimos un nivel.
+  const frontendRoot = path.resolve(process.cwd(), '..');
+  await app.register(staticPlugin, {
+    root: frontendRoot,
+    prefix: '/',
+    decorateReply: false,
+    index: ['index.html'],
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
+    },
+  });
+
   // Global error handler
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof AppError) {

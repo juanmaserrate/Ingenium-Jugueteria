@@ -1,10 +1,15 @@
 // HTTP client para llamar al backend Ingenium.
 // Maneja JWT, errores tipados y fallback offline para operaciones cr\u00edticas.
 
-const RAILWAY_BASE = 'https://ingenium-jugueteria-production.up.railway.app';
+// Frontend + backend viven en el mismo origin (Railway sirve ambos).
+// En dev local apuntamos al Fastify local por si corren separados (file:// o 5500).
 const LOCAL_BASE = 'http://localhost:3000';
-const isLocal = ['localhost', '127.0.0.1', '0.0.0.0'].includes(location.hostname);
-const DEFAULT_BASE = localStorage.getItem('ingenium_api_base') || (isLocal ? LOCAL_BASE : RAILWAY_BASE);
+const isFileOrEmpty = !location.origin || location.origin === 'null';
+const isLocalHost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(location.hostname);
+const SAME_ORIGIN = !isFileOrEmpty ? location.origin : '';
+const DEFAULT_BASE =
+  localStorage.getItem('ingenium_api_base') ||
+  (isLocalHost || isFileOrEmpty ? LOCAL_BASE : SAME_ORIGIN);
 
 export function getApiBase() {
   return DEFAULT_BASE;
