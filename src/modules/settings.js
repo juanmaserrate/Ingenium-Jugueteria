@@ -1,4 +1,4 @@
-// Configuración — empresa, sucursales, usuarios, métodos de pago, reset demo.
+// Configuración — empresa, sucursales, usuarios, métodos de pago, reinicio de sistema.
 
 import { get, getAll, put, del, newId } from '../core/db.js';
 import { resetAllData, runSeed } from '../core/seed.js';
@@ -382,17 +382,17 @@ async function renderDanger(container) {
       <h3 class="font-black text-lg mb-3 text-red-600">Zona peligrosa</h3>
       <p class="text-sm text-[#7d6c5c] mb-4">Estas acciones son destructivas y no se pueden deshacer.</p>
       <div class="flex gap-3 flex-wrap">
-        <button id="reset-btn" class="px-4 py-2 rounded-full bg-red-50 text-red-600 font-bold text-sm hover:bg-red-100">Resetear datos demo</button>
+        <button id="reset-btn" class="px-4 py-2 rounded-full bg-red-50 text-red-600 font-bold text-sm hover:bg-red-100">Reiniciar sistema</button>
         <button id="logout-btn" class="ing-btn-secondary">Cerrar sesión</button>
       </div>
     </div>
   `;
   container.querySelector('#reset-btn').addEventListener('click', async () => {
-    const ok = await confirmModal({ title: 'Resetear datos', message: 'Esto borra TODOS los datos (ventas, stock, caja, audit). ¿Confirmás?', confirmLabel: 'Sí, borrar', danger: true });
+    const ok = await confirmModal({ title: 'Reiniciar sistema', message: 'Esto borra TODOS los datos (ventas, productos, stock, clientes, caja, audit) y vuelve al estado inicial. ¿Confirmás?', confirmLabel: 'Sí, reiniciar', danger: true });
     if (!ok) return;
     await resetAllData();
     await runSeed({ force: true });
-    toast('Datos demo restaurados', 'success');
+    toast('Sistema reiniciado', 'success');
     setTimeout(() => location.reload(), 600);
   });
   container.querySelector('#logout-btn').addEventListener('click', () => logout());

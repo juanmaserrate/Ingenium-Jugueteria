@@ -63,13 +63,13 @@
       </form>
 
       <div class="mt-8 pt-6 border-t border-[#fff1e6] flex justify-between items-center">
-        <p class="text-xs text-[#7d6c5c]">Primera vez? Se cargarán datos demo automáticamente.</p>
-        <button id="reset-btn" class="text-xs text-[#d82f1e] font-bold hover:underline">Reset demo</button>
+        <p class="text-xs text-[#7d6c5c]">Primera vez? Se crea la estructura inicial.</p>
+        <button id="reset-btn" class="text-xs text-[#d82f1e] font-bold hover:underline">Reiniciar sistema</button>
       </div>
     </div>
 
     <p class="text-center text-xs text-[#7d6c5c] mt-6">
-      Demo PINs: admin <span class="font-bold">1234</span> · Lomas <span class="font-bold">1111</span> · Banfield <span class="font-bold">2222</span>
+      PINs iniciales: Lomas <span class="font-bold">1111</span> · Banfield <span class="font-bold">2222</span> <span class="opacity-60">(cambialos desde Configuración)</span>
     </p>
   </div>
 
@@ -170,7 +170,7 @@
       if (!confirm('Esto borra TODOS los datos locales (ventas, stock, movimientos, etc). ¿Seguro?')) return;
       await resetAllData();
       await runSeed({ force: true });
-      toast('Datos demo restaurados', 'success');
+      toast('Sistema reiniciado', 'success');
       setTimeout(() => location.reload(), 600);
     });
 
