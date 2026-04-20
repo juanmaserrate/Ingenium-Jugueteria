@@ -11,6 +11,7 @@ backend/dist/
 .env.*.local
 backend/.env
 backend/.env.local
+.secrets/
 
 # Storage de imágenes (dev local)
 backend/storage/images/

@@ -20,6 +20,7 @@ import { syncRoutes } from './routes/sync.js';
 import { imagesRoutes } from './routes/images.js';
 import { AppError } from './utils/errors.js';
 import { startSyncWorker } from './sync/worker.js';
+import { runSeed } from './scripts/seed.js';
 
 async function main() {
   const app = Fastify({
@@ -67,19 +68,26 @@ async function main() {
   }
 
   // Frontend estático: repo root contiene index.html, app.html, src/, assets/.
-  // El backend corre desde /app/backend, así que subimos un nivel.
-  const frontendRoot = path.resolve(process.cwd(), '..');
-  await app.register(staticPlugin, {
-    root: frontendRoot,
-    prefix: '/',
-    decorateReply: false,
-    index: ['index.html'],
-    setHeaders: (res, filePath) => {
-      if (filePath.endsWith('.html')) {
-        res.setHeader('Cache-Control', 'no-cache');
-      }
-    },
-  });
+  // Sube un nivel si corre desde backend/, o usa cwd si el build copió el frontend al mismo nivel.
+  const { existsSync } = await import('node:fs');
+  const candidates = [
+    path.resolve(process.cwd(), '..'),
+    process.cwd(),
+  ];
+  const frontendRoot = candidates.find((p) => existsSync(path.join(p, 'index.html')));
+  if (frontendRoot) {
+    await app.register(staticPlugin, {
+      root: frontendRoot,
+      prefix: '/',
+      decorateReply: false,
+      index: ['index.html'],
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      },
+    });
+  }
 
   // Global error handler
   app.setErrorHandler((error, _request, reply) => {
@@ -114,6 +122,14 @@ async function main() {
   await app.register(syncRoutes, { prefix: '/api' });
   // Webhooks SIN prefix /api porque TN los consulta en URL p\u00fablica
   await app.register(webhooksRoutes);
+
+  // Idempotent seed on startup: ensures branches + default admin exist
+  try {
+    const seedResult = await runSeed();
+    app.log.info({ seed: seedResult }, 'Startup seed complete');
+  } catch (err) {
+    app.log.error({ err }, 'Startup seed failed — continuing anyway');
+  }
 
   await app.listen({ port: env.PORT, host: env.HOST });
   app.log.info(`Ingenium backend listening on ${env.HOST}:${env.PORT}`);
