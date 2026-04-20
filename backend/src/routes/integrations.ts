@@ -48,8 +48,10 @@ export async function integrationsRoutes(app: FastifyInstance) {
         webhookSecret,
       });
       await registerWebhooks(env.PUBLIC_BASE_URL);
-      // Redirect de vuelta al frontend (hash route)
-      return reply.redirect(`${env.CORS_ORIGINS.split(',')[0] || '/'}/app.html#/integraciones?connected=1`);
+      // Redirect de vuelta al frontend (hash route). Prefiere PUBLIC_BASE_URL
+      // (dominio público del deploy) sobre CORS_ORIGINS para no terminar en localhost.
+      const base = env.PUBLIC_BASE_URL || env.CORS_ORIGINS.split(',')[0] || '';
+      return reply.redirect(`${base}/app.html#/integraciones?connected=1`);
     } catch (err: any) {
       app.log.error(err);
       return reply.status(500).send({ error: 'OAuth failed', details: err.message });
