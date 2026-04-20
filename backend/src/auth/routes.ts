@@ -160,8 +160,11 @@ export async function authRoutes(app: FastifyInstance) {
   });
 }
 
-async function pbkdf2(pin: string, salt: string, iterations: number): Promise<string> {
+async function pbkdf2(pin: string, saltHex: string, iterations: number): Promise<string> {
   const { pbkdf2: pbk } = await import('node:crypto');
+  // El salt viene en hex y se usa decodificado (bytes crudos) para matchear
+  // con el frontend (crypto.subtle.deriveBits + hexToBuffer).
+  const salt = Buffer.from(saltHex, 'hex');
   return new Promise((resolve, reject) => {
     pbk(pin, salt, iterations, 32, 'sha256', (err, key) => {
       if (err) reject(err);

@@ -29,10 +29,12 @@ const FRONTEND_USERS = [
 ];
 
 function hashPin(pin: string) {
-  const salt = randomBytes(16).toString('hex');
+  const saltBuf = randomBytes(16);
+  const saltHex = saltBuf.toString('hex');
   const iters = 120_000;
-  const hash = pbkdf2Sync(pin, salt, iters, 32, 'sha256').toString('hex');
-  return { pinSalt: salt, pinIters: iters, pinHash: hash };
+  // salt se pasa como bytes (no como hex string) para matchear el frontend.
+  const hash = pbkdf2Sync(pin, saltBuf, iters, 32, 'sha256').toString('hex');
+  return { pinSalt: saltHex, pinIters: iters, pinHash: hash };
 }
 
 export async function runSeed() {
@@ -63,27 +65,54 @@ export async function runSeed() {
         active: true,
       },
     });
+  } else {
+    // Rehash con algoritmo compatible con el frontend (salt-as-bytes).
+    // Lo hacemos sólo si el hash actual no valida con el algoritmo nuevo
+    // para no tocar admins cuyo PIN haya sido cambiado manualmente.
+    const saltBuf = Buffer.from(existingAdmin.pinSalt, 'hex');
+    const expected = pbkdf2Sync(DEFAULT_ADMIN.pin, saltBuf, existingAdmin.pinIters, 32, 'sha256').toString('hex');
+    if (expected !== existingAdmin.pinHash) {
+      const pin = hashPin(DEFAULT_ADMIN.pin);
+      await prisma.user.update({
+        where: { id: DEFAULT_ADMIN.id },
+        data: { pinSalt: pin.pinSalt, pinHash: pin.pinHash, pinIters: pin.pinIters },
+      });
+    }
   }
 
   const frontendUsersCreated: string[] = [];
+  const frontendUsersRehashed: string[] = [];
   for (const u of FRONTEND_USERS) {
     const existing = await prisma.user.findUnique({ where: { id: u.id } });
-    if (existing) continue;
-    const pin = hashPin(u.pin);
-    await prisma.user.create({
-      data: {
-        id: u.id,
-        branchId: u.branchId,
-        name: u.name,
-        lastname: u.lastname,
-        role: u.role,
-        pinSalt: pin.pinSalt,
-        pinHash: pin.pinHash,
-        pinIters: pin.pinIters,
-        active: true,
-      },
-    });
-    frontendUsersCreated.push(u.id);
+    if (!existing) {
+      const pin = hashPin(u.pin);
+      await prisma.user.create({
+        data: {
+          id: u.id,
+          branchId: u.branchId,
+          name: u.name,
+          lastname: u.lastname,
+          role: u.role,
+          pinSalt: pin.pinSalt,
+          pinHash: pin.pinHash,
+          pinIters: pin.pinIters,
+          active: true,
+        },
+      });
+      frontendUsersCreated.push(u.id);
+      continue;
+    }
+    // Rehash si el PIN por defecto ya no valida con el algoritmo nuevo.
+    const saltBuf = Buffer.from(existing.pinSalt, 'hex');
+    const expected = pbkdf2Sync(u.pin, saltBuf, existing.pinIters, 32, 'sha256').toString('hex');
+    if (expected !== existing.pinHash) {
+      const pin = hashPin(u.pin);
+      await prisma.user.update({
+        where: { id: u.id },
+        data: { pinSalt: pin.pinSalt, pinHash: pin.pinHash, pinIters: pin.pinIters },
+      });
+      frontendUsersRehashed.push(u.id);
+    }
   }
 
   return {
@@ -93,6 +122,7 @@ export async function runSeed() {
     adminPin: !existingAdmin ? DEFAULT_ADMIN.pin : '(ya existia)',
     adminPassword: !existingAdmin ? DEFAULT_ADMIN.password : '(ya existia)',
     frontendUsersCreated,
+    frontendUsersRehashed,
   };
 }
 
