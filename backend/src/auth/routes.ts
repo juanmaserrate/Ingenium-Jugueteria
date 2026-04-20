@@ -16,6 +16,42 @@ const loginPasswordSchema = z.object({
   password: z.string().min(6),
 });
 
+// Espeja el user del frontend (IndexedDB) al backend (Postgres).
+// Acepta snake_case (formato del frontend) o camelCase.
+const userSyncSchema = z
+  .object({
+    id: z.string().min(1),
+    branch_id: z.string().optional(),
+    branchId: z.string().optional(),
+    name: z.string(),
+    lastname: z.string().optional().nullable(),
+    role: z.string(),
+    email: z.string().email().optional().nullable(),
+    pin_salt: z.string().optional(),
+    pinSalt: z.string().optional(),
+    pin_hash: z.string().optional(),
+    pinHash: z.string().optional(),
+    pin_iters: z.number().int().optional(),
+    pinIters: z.number().int().optional(),
+    active: z.boolean().optional(),
+  })
+  .transform((u) => ({
+    id: u.id,
+    branchId: u.branchId ?? u.branch_id!,
+    name: u.name,
+    lastname: u.lastname ?? null,
+    role: u.role,
+    email: u.email ?? null,
+    pinSalt: u.pinSalt ?? u.pin_salt,
+    pinHash: u.pinHash ?? u.pin_hash,
+    pinIters: u.pinIters ?? u.pin_iters,
+    active: u.active ?? true,
+  }))
+  .refine((u) => !!u.branchId, { message: 'branchId required' })
+  .refine((u) => !!u.pinSalt && !!u.pinHash && !!u.pinIters, {
+    message: 'pinSalt/pinHash/pinIters required (usar derivePin en el frontend)',
+  });
+
 export async function authRoutes(app: FastifyInstance) {
   // Login con PIN (mismo flujo que el frontend actual)
   app.post('/auth/login-pin', async (request) => {
@@ -63,6 +99,53 @@ export async function authRoutes(app: FastifyInstance) {
       select: { id: true, name: true, lastname: true, role: true },
       orderBy: { name: 'asc' },
     });
+  });
+
+  // Sync de usuario desde el frontend: crea/actualiza en Postgres para que el
+  // login por PIN siga funcionando contra el backend cuando el admin edita
+  // usuarios o PINs desde Configuración.
+  app.post('/auth/users/sync', { preHandler: [app.authenticate] }, async (request) => {
+    if (request.user.role !== 'admin') throw new UnauthorizedError('Solo admin');
+    const u = userSyncSchema.parse(request.body);
+    const branch = await prisma.branch.findUnique({ where: { id: u.branchId } });
+    if (!branch) throw new ValidationError(`Sucursal ${u.branchId} no existe`);
+    const saved = await prisma.user.upsert({
+      where: { id: u.id },
+      create: {
+        id: u.id,
+        branchId: u.branchId,
+        name: u.name,
+        lastname: u.lastname,
+        role: u.role,
+        email: u.email,
+        pinSalt: u.pinSalt!,
+        pinHash: u.pinHash!,
+        pinIters: u.pinIters!,
+        active: u.active,
+      },
+      update: {
+        branchId: u.branchId,
+        name: u.name,
+        lastname: u.lastname,
+        role: u.role,
+        email: u.email,
+        pinSalt: u.pinSalt!,
+        pinHash: u.pinHash!,
+        pinIters: u.pinIters!,
+        active: u.active,
+      },
+      select: { id: true, branchId: true, name: true, role: true, active: true },
+    });
+    return { ok: true, user: saved };
+  });
+
+  app.post('/auth/users/:id/deactivate', { preHandler: [app.authenticate] }, async (request) => {
+    if (request.user.role !== 'admin') throw new UnauthorizedError('Solo admin');
+    const { id } = request.params as { id: string };
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) return { ok: true, skipped: 'not_found' };
+    await prisma.user.update({ where: { id }, data: { active: false } });
+    return { ok: true };
   });
 
   // Bootstrap idempotente protegido por BOOTSTRAP_TOKEN.

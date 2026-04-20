@@ -7,6 +7,7 @@ import { toast } from '../core/notifications.js';
 import { logout } from '../core/auth.js';
 import * as Audit from '../core/audit.js';
 import { derivePin } from '../core/crypto.js';
+import { api, ApiError } from '../core/api.js';
 import { exportBackup, importBackup, markBackupNow, checkBackupReminder } from '../core/backup.js';
 import { verifyChain } from '../core/audit.js';
 
@@ -165,7 +166,10 @@ async function renderUsers(container) {
   container.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     const ok = await confirmModal({ title: 'Borrar', message: '¿Eliminar usuario?', danger: true, confirmLabel: 'Borrar' });
     if (!ok) return;
-    await del('users', b.dataset.del);
+    const userId = b.dataset.del;
+    await del('users', userId);
+    try { await api(`/auth/users/${encodeURIComponent(userId)}/deactivate`, { method: 'POST' }); }
+    catch (e) { if (!(e instanceof ApiError) || e.status !== 0) console.warn('backend deactivate falló', e); }
     toast('Eliminado', 'success'); renderUsers(container);
   }));
 }
@@ -210,7 +214,29 @@ async function editUser(container, existing, branches) {
           delete u.pin; // por si venía legacy
         }
         await put('users', u);
-        toast('Guardado', 'success'); close(true);
+        // Sync al backend para mantener login-pin operativo. Offline es tolerable:
+        // al reconectar, reabrir y guardar el usuario vuelve a empujarlo.
+        let msg = 'Guardado', kind = 'success';
+        try {
+          await api('/auth/users/sync', {
+            method: 'POST',
+            body: {
+              id: u.id,
+              branch_id: u.branch_id,
+              name: u.name,
+              lastname: u.lastname || '',
+              role: u.role,
+              pin_salt: u.pin_salt,
+              pin_hash: u.pin_hash,
+              pin_iters: u.pin_iters,
+              active: u.active !== false,
+            },
+          });
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 0) { msg = 'Guardado local (offline)'; kind = 'info'; }
+          else { console.warn('backend sync falló', e); msg = 'Guardado local — sync backend falló'; kind = 'warn'; }
+        }
+        toast(msg, kind); close(true);
       });
     },
   });
