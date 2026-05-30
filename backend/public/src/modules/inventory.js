@@ -335,12 +335,18 @@ async function openProductForm(p, container) {
         <span>Mantener Categoría / Marca / Proveedor / Subcategoría</span>
       </label>
     </div>`}
-    <form id="prod-form" class="grid grid-cols-2 gap-4">
-      <label class="col-span-2"><span class="text-xs font-black text-[#7d6c5c] uppercase">Nombre *</span>
+    <form id="prod-form" class="grid grid-cols-3 gap-4">
+      <label class="col-span-3"><span class="text-xs font-black text-[#7d6c5c] uppercase">Nombre *</span>
         <input name="name" class="ing-input mt-1" required value="${p?.name || ''}" />
       </label>
-      <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Código</span>
-        <input name="code" class="ing-input mt-1" value="${p?.code || ''}" />
+      <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Costo *</span>
+        <input name="cost" type="number" step="0.01" class="ing-input mt-1" required value="${p?.cost || 0}" />
+      </label>
+      <label><span class="text-xs font-black text-[#7d6c5c] uppercase">% Margen</span>
+        <input name="margin_pct" type="number" step="0.01" class="ing-input mt-1" value="${p?.margin_pct || 0}" />
+      </label>
+      <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Precio</span>
+        <input name="price" type="number" step="0.01" class="ing-input mt-1" value="${p?.price || 0}" />
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Categoría</span>
         <select name="category_id" class="ing-input mt-1">
@@ -366,16 +372,10 @@ async function openProductForm(p, container) {
           ${subs.map(s => `<option value="${s.id}" ${p?.subcategory_id===s.id?'selected':''}>${s.name}</option>`).join('')}
         </select>
       </label>
-      <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Costo *</span>
-        <input name="cost" type="number" step="0.01" class="ing-input mt-1" required value="${p?.cost || 0}" />
+      <label class="col-span-2"><span class="text-xs font-black text-[#7d6c5c] uppercase">Código</span>
+        <input name="code" class="ing-input mt-1" value="${p?.code || ''}" />
       </label>
-      <label><span class="text-xs font-black text-[#7d6c5c] uppercase">% Margen</span>
-        <input name="margin_pct" type="number" step="0.01" class="ing-input mt-1" value="${p?.margin_pct || 0}" />
-      </label>
-      <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Precio</span>
-        <input name="price" type="number" step="0.01" class="ing-input mt-1" value="${p?.price || 0}" />
-      </label>
-      <div class="col-span-2 grid grid-cols-2 gap-4 p-3 bg-[#fff1e6] rounded-xl border border-[#e3ceba]">
+      <div class="col-span-3 grid grid-cols-2 gap-4 p-3 bg-[#fff1e6] rounded-xl border border-[#e3ceba]">
         <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Stock ${lomas?.name || 'Lomas'}</span>
           <input name="stock_lomas" type="number" min="0" step="1" class="ing-input mt-1" value="${stockLomas}" />
         </label>
@@ -383,11 +383,11 @@ async function openProductForm(p, container) {
           <input name="stock_banfield" type="number" min="0" step="1" class="ing-input mt-1" value="${stockBanf}" />
         </label>
       </div>
-      <label class="col-span-2 flex items-center gap-2 py-2">
+      <label class="col-span-3 flex items-center gap-2 py-2">
         <input type="checkbox" name="published_meli" ${p?.published_meli ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
         <span class="text-sm font-bold">Publicar en MercadoLibre</span>
       </label>
-      <label class="col-span-2 flex items-center gap-2 py-2">
+      <label class="col-span-3 flex items-center gap-2 py-2">
         <input type="checkbox" name="published_tn" ${p?.published_tn ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
         <span class="text-sm font-bold">Publicar en Tienda Nube</span>
       </label>
@@ -409,7 +409,8 @@ async function openProductForm(p, container) {
     title: isEdit ? 'Editar producto' : 'Nuevo producto',
     bodyHTML: body,
     footerHTML: `<div id="footer-single" class="flex gap-3">${footerSingle}</div>${isEdit ? '' : `<div id="footer-batch" class="hidden gap-3">${footerBatch}</div>`}`,
-    size: 'lg',
+    size: 'xl',
+    minimizable: true,
     onOpen: (el, close) => {
       const form = el.querySelector('#prod-form');
       // Live recompute de precio cuando cambia costo o %
