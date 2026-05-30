@@ -14,6 +14,11 @@ import { exportSimple } from '../core/xlsx.js';
 import { next as nextCounter } from '../repos/counters.js';
 import { printHTML } from '../core/pdf.js';
 
+// Escapa caracteres reservados para incrustar contenido en value="..." de un input.
+function escapeAttr(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 const state = {
   tab: 'products',
   selected: new Set(),
@@ -389,10 +394,71 @@ async function openProductForm(p, container) {
           <span class="text-sm font-bold">Publicar en MercadoLibre</span>
         </label>
         <label class="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" name="published_tn" ${p?.published_tn ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+          <input type="checkbox" name="published_tn" id="chk-published-tn" ${p?.published_tn ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
           <span class="text-sm font-bold">Publicar en Tienda Nube</span>
           <img src="assets/img/tiendanube.png" alt="Tienda Nube" class="h-6 w-6 object-contain" />
         </label>
+      </div>
+
+      <!-- Sección Tienda Nube: se muestra al tildar "Publicar en Tienda Nube" -->
+      <div id="tn-section" class="${p?.published_tn ? '' : 'hidden'} col-span-3 mt-2 p-4 rounded-2xl bg-[#fff8f0] border border-[#e3ceba] space-y-3">
+        <div class="flex items-center gap-2 mb-1">
+          <img src="assets/img/tiendanube.png" alt="" class="h-5 w-5 object-contain" />
+          <h4 class="font-black text-[#241a0d]">Datos para Tienda Nube</h4>
+        </div>
+
+        <label class="block">
+          <span class="text-xs font-black text-[#7d6c5c] uppercase">Descripción</span>
+          <textarea name="description" rows="3" class="ing-input mt-1" placeholder="Descripción del producto (acepta HTML básico)">${escapeAttr(p?.description || '')}</textarea>
+        </label>
+
+        <div class="grid grid-cols-4 gap-3">
+          <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Precio promo $</span>
+            <input name="promotional_price" type="number" step="0.01" min="0" class="ing-input mt-1" value="${p?.promotional_price ?? ''}" placeholder="opcional" />
+          </label>
+          <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Peso (kg)</span>
+            <input name="weight" type="number" step="0.001" min="0" class="ing-input mt-1" value="${p?.weight ?? ''}" placeholder="0.5" />
+          </label>
+          <label><span class="text-xs font-black text-[#7d6c5c] uppercase">URL slug</span>
+            <input name="handle" type="text" class="ing-input mt-1" value="${escapeAttr(p?.handle || '')}" placeholder="auto desde nombre" />
+          </label>
+          <label><span class="text-xs font-black text-[#7d6c5c] uppercase">URL video</span>
+            <input name="video_url" type="url" class="ing-input mt-1" value="${escapeAttr(p?.video_url || '')}" placeholder="youtu.be/..." />
+          </label>
+        </div>
+
+        <div class="grid grid-cols-3 gap-3">
+          <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Ancho (cm)</span>
+            <input name="width" type="number" step="0.1" min="0" class="ing-input mt-1" value="${p?.width ?? ''}" />
+          </label>
+          <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Alto (cm)</span>
+            <input name="height" type="number" step="0.1" min="0" class="ing-input mt-1" value="${p?.height ?? ''}" />
+          </label>
+          <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Profundidad (cm)</span>
+            <input name="depth" type="number" step="0.1" min="0" class="ing-input mt-1" value="${p?.depth ?? ''}" />
+          </label>
+        </div>
+
+        <label class="block">
+          <span class="text-xs font-black text-[#7d6c5c] uppercase">SEO Título</span>
+          <input name="seo_title" type="text" class="ing-input mt-1" value="${escapeAttr(p?.seo_title || '')}" placeholder="Título para buscadores (opcional)" />
+        </label>
+        <label class="block">
+          <span class="text-xs font-black text-[#7d6c5c] uppercase">SEO Descripción</span>
+          <textarea name="seo_description" rows="2" class="ing-input mt-1" placeholder="Meta description (opcional, ~155 chars)">${escapeAttr(p?.seo_description || '')}</textarea>
+        </label>
+
+        <div>
+          <span class="text-xs font-black text-[#7d6c5c] uppercase block mb-1">Categorías en Tienda Nube</span>
+          <div id="tn-cats-box" class="border border-[#e3ceba] rounded-xl p-2 bg-white max-h-40 overflow-auto text-sm">
+            <div class="text-[#7d6c5c] italic">Cargando categorías de Tienda Nube...</div>
+          </div>
+        </div>
+
+        <div>
+          <span class="text-xs font-black text-[#7d6c5c] uppercase block mb-1">Imágenes</span>
+          <div id="tn-images-box" class="text-sm text-[#7d6c5c] italic">El uploader de imágenes se habilitará en el próximo paso. Por ahora se publica sin imágenes (las podés agregar editando el producto luego).</div>
+        </div>
       </div>
     </form>
     ${isEdit ? '' : `
@@ -423,6 +489,50 @@ async function openProductForm(p, container) {
       costIn.addEventListener('input', recalcPrice);
       pctIn.addEventListener('input', recalcPrice);
       priceIn.addEventListener('input', recalcPct);
+
+      // Toggle de la sección TN según el checkbox "Publicar en Tienda Nube".
+      const tnSection = el.querySelector('#tn-section');
+      const tnChk = el.querySelector('#chk-published-tn');
+      const refreshTnSection = () => {
+        if (!tnSection || !tnChk) return;
+        tnSection.classList.toggle('hidden', !tnChk.checked);
+      };
+      tnChk?.addEventListener('change', refreshTnSection);
+
+      // Carga lazy de categorías de Tienda Nube (sólo si la sección está visible o se va a mostrar).
+      let tnCategoriesLoaded = false;
+      const selectedTnCats = new Set((p?.tn_category_ids || []).map(Number));
+      const loadTnCategories = async () => {
+        if (tnCategoriesLoaded) return;
+        tnCategoriesLoaded = true;
+        const box = el.querySelector('#tn-cats-box');
+        if (!box) return;
+        try {
+          const { api } = await import('../core/api.js');
+          const resp = await api('/api/tiendanube/categories');
+          if (!resp?.connected) {
+            box.innerHTML = '<div class="text-[#7d6c5c] italic">Conectá Tienda Nube en Integraciones para listar categorías.</div>';
+            return;
+          }
+          const list = resp.categories || [];
+          if (list.length === 0) {
+            box.innerHTML = '<div class="text-[#7d6c5c] italic">Tu tienda no tiene categorías cargadas en Tienda Nube todavía.</div>';
+            return;
+          }
+          box.innerHTML = list.map((c) => `
+            <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-[#fff1e6] rounded px-1">
+              <input type="checkbox" data-tn-cat="${c.id}" ${selectedTnCats.has(c.id) ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+              <span style="padding-left:${(c.level || 0) * 14}px">${escapeAttr(c.name)}</span>
+            </label>
+          `).join('');
+        } catch (e) {
+          console.warn('No se pudieron cargar categorías TN', e);
+          box.innerHTML = '<div class="text-red-700 italic">No se pudieron cargar categorías (¿backend offline?).</div>';
+        }
+      };
+      // Si arrancamos con TN tildado, cargamos ya. Si no, cargamos cuando se tilde por primera vez.
+      if (tnChk?.checked) loadTnCategories();
+      tnChk?.addEventListener('change', () => { if (tnChk.checked) loadTnCategories(); });
 
       // Estado del lote
       const batch = [];
@@ -470,6 +580,11 @@ async function openProductForm(p, container) {
         const qtyLomas = Math.max(0, Number(d.stock_lomas) || 0);
         const qtyBanf  = Math.max(0, Number(d.stock_banfield) || 0);
         delete d.stock_lomas; delete d.stock_banfield;
+        // Categorías TN seleccionadas (sólo importan si va a TN)
+        const tnCatIds = Array.from(el.querySelectorAll('#tn-cats-box input[data-tn-cat]:checked'))
+          .map((cb) => Number(cb.dataset.tnCat))
+          .filter((n) => !Number.isNaN(n));
+        d.tn_category_ids = tnCatIds;
         return { d, qtyLomas, qtyBanf };
       };
 
@@ -493,6 +608,18 @@ async function openProductForm(p, container) {
               marginPct: Number(saved.margin_pct) || 0,
               price: Number(saved.price) || 0,
               publishedTn: true,
+              // Campos extendidos para TN
+              description: saved.description ?? null,
+              promotionalPrice: saved.promotional_price ?? null,
+              weight: saved.weight ?? null,
+              width: saved.width ?? null,
+              height: saved.height ?? null,
+              depth: saved.depth ?? null,
+              seoTitle: saved.seo_title ?? null,
+              seoDescription: saved.seo_description ?? null,
+              handle: saved.handle ?? null,
+              videoUrl: saved.video_url ?? null,
+              tnCategoryIds: saved.tn_category_ids ?? [],
             };
             const method = isEdit ? 'PUT' : 'POST';
             const path = isEdit ? `/api/products/${encodeURIComponent(saved.id)}` : '/api/products';
@@ -528,6 +655,12 @@ async function openProductForm(p, container) {
         form.elements.stock_banfield.value = 0;
         // En lote, dejamos sticky los checkboxes de publicación: si querés publicar
         // todo el lote a TN/MELI tildás una vez y queda. Desactivá manualmente para excepciones.
+        // Limpiamos los campos específicos del producto que NO son categorización.
+        const clearIfPresent = (name) => { const e = form.elements[name]; if (e) e.value = ''; };
+        ['description', 'promotional_price', 'weight', 'width', 'height', 'depth',
+         'seo_title', 'seo_description', 'handle', 'video_url'].forEach(clearIfPresent);
+        // Categorías TN: por defecto se mantienen entre productos del lote para que armar
+        // un lote homogéneo sea rápido. (Si querés desmarcar, hacelo manualmente).
         if (!keepFields) {
           form.elements.category_id.value = '';
           form.elements.brand_id.value = '';
