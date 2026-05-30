@@ -579,13 +579,17 @@ async function openProductForm(p, container) {
           }
 
           // Armamos el árbol agrupando por parent. Cada lista de hijos se ordena por nombre.
+          // sortKey: trim + saca símbolos iniciales (+, –, *) así "+18" se ordena por "18".
+          // Comparación con locale es-AR y numeric:true para que "3 a 5 años" < "12 a 17 años".
+          const sortKey = (n) => String(n || '').trim().replace(/^[^\p{L}\p{N}]+/u, '').toLowerCase();
+          const cmp = (a, b) => sortKey(a.name).localeCompare(sortKey(b.name), 'es', { numeric: true, sensitivity: 'base' });
           const byParent = new Map();
           for (const c of list) {
             const k = c.parent ?? null;
             if (!byParent.has(k)) byParent.set(k, []);
             byParent.get(k).push(c);
           }
-          for (const arr of byParent.values()) arr.sort((a, b) => a.name.localeCompare(b.name));
+          for (const arr of byParent.values()) arr.sort(cmp);
 
           // Render recursivo. Cada nodo tiene un chevron si tiene hijos.
           const renderNode = (c) => {
