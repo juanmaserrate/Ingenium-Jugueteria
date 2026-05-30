@@ -19,6 +19,41 @@ function escapeAttr(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Pregunta al usuario cómo borrar un producto. Si está publicado en TN ofrece
+// 3 opciones: cancelar / solo POS / POS + TN. Si no está en TN, confirm simple.
+// Devuelve 'cancel' | 'local' | 'both'.
+async function chooseDeleteScope(product) {
+  if (!product.published_tn) {
+    const ok = await confirmModal({
+      title: 'Eliminar producto',
+      message: `¿Eliminar "${product.name}"?`,
+      danger: true,
+      confirmLabel: 'Eliminar',
+    });
+    return ok ? 'local' : 'cancel';
+  }
+  // Modal de 3 opciones para productos publicados en TN.
+  const safeName = String(product.name || '').replace(/</g, '&lt;');
+  return openModal({
+    title: 'Eliminar producto',
+    bodyHTML: `
+      <p class="text-[#241a0d] mb-2">¿Cómo querés eliminar <b>"${safeName}"</b>?</p>
+      <p class="text-sm text-[#7d6c5c]">Está publicado en Tienda Nube. Podés borrarlo solo del POS (queda activo en tu tienda online) o también de Tienda Nube.</p>
+    `,
+    footerHTML: `
+      <button class="ing-btn-secondary" data-act="cancel">Cancelar</button>
+      <button class="ing-btn-secondary" data-act="local">Solo del POS</button>
+      <button class="ing-btn-primary !bg-red-600 hover:!bg-red-700" data-act="both">Borrar también de Tienda Nube</button>
+    `,
+    size: 'md',
+    onOpen: (el, close) => {
+      el.querySelector('[data-act="cancel"]').addEventListener('click', () => close('cancel'));
+      el.querySelector('[data-act="local"]').addEventListener('click', () => close('local'));
+      el.querySelector('[data-act="both"]').addEventListener('click', () => close('both'));
+    },
+  }).then((v) => v || 'cancel');
+}
+
 const state = {
   tab: 'products',
   selected: new Set(),
@@ -248,11 +283,22 @@ async function renderProducts(container) {
   }));
   container.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     const p = list.find(x => x.id === b.dataset.del);
-    const ok = await confirmModal({ title: 'Eliminar producto', message: `¿Eliminar "${p.name}"?`, danger: true, confirmLabel: 'Eliminar' });
-    if (!ok) return;
-    await P.remove(p.id);
-    toast('Producto eliminado', 'success');
-    renderProducts(container);
+    if (!p) return;
+    const choice = await chooseDeleteScope(p);
+    if (choice === 'cancel') return;
+    try {
+      if (choice === 'both') {
+        const { api } = await import('../core/api.js');
+        // Backend delete: enqueue push_product_delete en TN + borra producto local del POS server.
+        await api(`/api/products/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
+      }
+      await P.remove(p.id);
+      toast(choice === 'both' ? 'Eliminado del POS y Tienda Nube' : 'Eliminado del POS', 'success');
+      renderProducts(container);
+    } catch (e) {
+      console.warn('delete falló', e);
+      toast('No se pudo eliminar', 'error');
+    }
   }));
 
   // Edición inline
