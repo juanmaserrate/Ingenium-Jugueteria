@@ -170,12 +170,18 @@ export const syncHandlers = {
       throw new Error('Product tnMapping not ready yet — retrying');
     }
     if (image.tnImageId) return { skipped: 'already uploaded', tnImageId: image.tnImageId };
-    // Preferimos enviar URL p\u00fablica; fallback attachment base64 si es local sin internet p\u00fablico
+    // TN exige position >= 1 (la nuestra arranca en 0). Sumamos 1 al pushar.
+    const tnPos = (image.position ?? 0) + 1;
+    // El filename es requerido cuando se manda attachment. Lo derivamos del storageKey.
+    const filename = path.basename(image.storageKey);
+    // Preferimos enviar URL p\u00fablica; fallback attachment base64 si la URL no es alcanzable
+    // desde TN o si TN rechaza el src.
     let resp: any;
     try {
       resp = await tn.uploadImage(product.tnMapping.tnProductId, {
         src: image.url,
-        position: image.position,
+        filename,
+        position: tnPos,
       });
     } catch {
       // Fallback: leer archivo y mandar base64
@@ -184,7 +190,8 @@ export const syncHandlers = {
         const buf = await fs.readFile(full);
         resp = await tn.uploadImage(product.tnMapping.tnProductId, {
           attachment: buf.toString('base64'),
-          position: image.position,
+          filename,
+          position: tnPos,
         });
       } else {
         throw new Error('Cannot upload image to TN');
