@@ -496,8 +496,14 @@ async function openProductForm(p, container) {
 
         <div>
           <span class="text-xs font-black text-[#7d6c5c] uppercase block mb-1">Categorías en Tienda Nube</span>
-          <div id="tn-cats-box" class="border border-[#e3ceba] rounded-xl p-2 bg-white max-h-40 overflow-auto text-sm">
-            <div class="text-[#7d6c5c] italic">Cargando categorías de Tienda Nube...</div>
+          <div class="border border-[#e3ceba] rounded-xl bg-white overflow-hidden">
+            <div class="flex items-center gap-2 px-2 border-b border-[#e3ceba]">
+              <span class="material-symbols-outlined text-base text-[#7d6c5c]">search</span>
+              <input id="tn-cats-search" type="search" placeholder="Buscar categoría..." class="flex-1 py-2 text-sm bg-transparent focus:outline-none" />
+            </div>
+            <div id="tn-cats-box" class="max-h-48 overflow-auto p-1 text-sm">
+              <div class="text-[#7d6c5c] italic p-2">Cargando categorías de Tienda Nube...</div>
+            </div>
           </div>
         </div>
 
@@ -563,23 +569,108 @@ async function openProductForm(p, container) {
           const { api } = await import('../core/api.js');
           const resp = await api('/api/tiendanube/categories');
           if (!resp?.connected) {
-            box.innerHTML = '<div class="text-[#7d6c5c] italic">Conectá Tienda Nube en Integraciones para listar categorías.</div>';
+            box.innerHTML = '<div class="text-[#7d6c5c] italic p-2">Conectá Tienda Nube en Integraciones para listar categorías.</div>';
             return;
           }
           const list = resp.categories || [];
           if (list.length === 0) {
-            box.innerHTML = '<div class="text-[#7d6c5c] italic">Tu tienda no tiene categorías cargadas en Tienda Nube todavía.</div>';
+            box.innerHTML = '<div class="text-[#7d6c5c] italic p-2">Tu tienda no tiene categorías cargadas en Tienda Nube todavía.</div>';
             return;
           }
-          box.innerHTML = list.map((c) => `
-            <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-[#fff1e6] rounded px-1">
-              <input type="checkbox" data-tn-cat="${c.id}" ${selectedTnCats.has(c.id) ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
-              <span style="padding-left:${(c.level || 0) * 14}px">${escapeAttr(c.name)}</span>
-            </label>
-          `).join('');
+
+          // Armamos el árbol agrupando por parent. Cada lista de hijos se ordena por nombre.
+          const byParent = new Map();
+          for (const c of list) {
+            const k = c.parent ?? null;
+            if (!byParent.has(k)) byParent.set(k, []);
+            byParent.get(k).push(c);
+          }
+          for (const arr of byParent.values()) arr.sort((a, b) => a.name.localeCompare(b.name));
+
+          // Render recursivo. Cada nodo tiene un chevron si tiene hijos.
+          const renderNode = (c) => {
+            const kids = byParent.get(c.id) || [];
+            const hasKids = kids.length > 0;
+            const nameLower = c.name.toLowerCase().replace(/"/g, '&quot;');
+            return `
+              <div class="cat-node" data-cat-name="${nameLower}">
+                <div class="flex items-center gap-1 py-0.5 px-1 hover:bg-[#fff1e6] rounded">
+                  ${hasKids
+                    ? `<button type="button" class="chev w-5 h-5 inline-flex items-center justify-center text-[#7d6c5c] hover:text-[#d82f1e] font-bold" aria-expanded="false" title="Expandir">▸</button>`
+                    : `<span class="w-5 inline-block"></span>`}
+                  <label class="flex items-center gap-2 cursor-pointer flex-1">
+                    <input type="checkbox" data-tn-cat="${c.id}" ${selectedTnCats.has(c.id) ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+                    <span>${escapeAttr(c.name)}</span>
+                  </label>
+                </div>
+                ${hasKids ? `<div class="cat-children hidden ml-3 border-l border-[#e3ceba] pl-2">${kids.map(renderNode).join('')}</div>` : ''}
+              </div>
+            `;
+          };
+          const roots = byParent.get(null) || [];
+          box.innerHTML = roots.map(renderNode).join('');
+
+          // Toggle de chevrones (expandir/colapsar hijos).
+          const toggleChev = (chev, force) => {
+            const node = chev.closest('.cat-node');
+            const children = node?.querySelector(':scope > .cat-children');
+            if (!children) return;
+            const willCollapse = force === undefined ? !children.classList.contains('hidden') : !force;
+            children.classList.toggle('hidden', willCollapse);
+            chev.setAttribute('aria-expanded', String(!willCollapse));
+            chev.textContent = willCollapse ? '▸' : '▾';
+            chev.title = willCollapse ? 'Expandir' : 'Colapsar';
+          };
+          box.querySelectorAll('.chev').forEach((chev) => {
+            chev.addEventListener('click', (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              toggleChev(chev);
+            });
+          });
+
+          // Buscador: muestra nodos cuyo nombre matchea Y todos sus ancestros (para que se vean colgando).
+          // Vacío → restaura colapsado por defecto.
+          const searchInput = el.querySelector('#tn-cats-search');
+          const applyFilter = (q) => {
+            const allNodes = box.querySelectorAll('.cat-node');
+            const allChevs = box.querySelectorAll('.chev');
+            if (!q) {
+              allNodes.forEach((n) => n.classList.remove('hidden'));
+              box.querySelectorAll('.cat-children').forEach((c) => c.classList.add('hidden'));
+              allChevs.forEach((chev) => {
+                chev.setAttribute('aria-expanded', 'false');
+                chev.textContent = '▸';
+                chev.title = 'Expandir';
+              });
+              return;
+            }
+            const matches = new Set();
+            allNodes.forEach((n) => {
+              const name = n.dataset.catName || '';
+              if (name.includes(q)) {
+                matches.add(n);
+                // Marcamos ancestros para que el match sea visible en su jerarquía.
+                let p = n.parentElement;
+                while (p && p !== box) {
+                  if (p.classList.contains('cat-node')) matches.add(p);
+                  p = p.parentElement;
+                }
+              }
+            });
+            allNodes.forEach((n) => n.classList.toggle('hidden', !matches.has(n)));
+            // Expandimos todo para mostrar resultados profundos.
+            box.querySelectorAll('.cat-children').forEach((c) => c.classList.remove('hidden'));
+            allChevs.forEach((chev) => {
+              chev.setAttribute('aria-expanded', 'true');
+              chev.textContent = '▾';
+              chev.title = 'Colapsar';
+            });
+          };
+          searchInput?.addEventListener('input', () => applyFilter(searchInput.value.trim().toLowerCase()));
         } catch (e) {
           console.warn('No se pudieron cargar categorías TN', e);
-          box.innerHTML = '<div class="text-red-700 italic">No se pudieron cargar categorías (¿backend offline?).</div>';
+          box.innerHTML = '<div class="text-red-700 italic p-2">No se pudieron cargar categorías (¿backend offline?).</div>';
         }
       };
       // Si arrancamos con TN tildado, cargamos ya. Si no, cargamos cuando se tilde por primera vez.
