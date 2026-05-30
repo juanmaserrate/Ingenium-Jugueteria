@@ -457,7 +457,13 @@ async function openProductForm(p, container) {
 
         <div>
           <span class="text-xs font-black text-[#7d6c5c] uppercase block mb-1">Imágenes</span>
-          <div id="tn-images-box" class="text-sm text-[#7d6c5c] italic">El uploader de imágenes se habilitará en el próximo paso. Por ahora se publica sin imágenes (las podés agregar editando el producto luego).</div>
+          <div id="tn-images-thumbs" class="flex gap-2 flex-wrap mb-2"></div>
+          <label class="inline-flex items-center gap-2 cursor-pointer px-3 py-2 bg-white border border-[#e3ceba] rounded-xl hover:bg-[#fff1e6]">
+            <input type="file" multiple accept="image/png,image/jpeg,image/webp" id="tn-image-input" class="hidden" />
+            <span class="material-symbols-outlined text-base">add_photo_alternate</span>
+            <span class="text-sm font-bold">Subir imágenes</span>
+          </label>
+          <p class="text-xs text-[#7d6c5c] mt-1">PNG/JPG/WebP. Se publican en Tienda Nube junto al producto.</p>
         </div>
       </div>
     </form>
@@ -533,6 +539,99 @@ async function openProductForm(p, container) {
       // Si arrancamos con TN tildado, cargamos ya. Si no, cargamos cuando se tilde por primera vez.
       if (tnChk?.checked) loadTnCategories();
       tnChk?.addEventListener('change', () => { if (tnChk.checked) loadTnCategories(); });
+
+      // ----- Imágenes -----
+      // Estado: `savedImages` ya viven en backend ({id, url, position}). `pendingFiles`
+      // son File objects pickeados localmente que se subirán DESPUÉS de crear el producto en backend.
+      const savedImages = []; // {id, url}
+      const pendingFiles = []; // File
+      const objectUrls = new Map(); // File -> object URL (para revocar al cerrar)
+
+      const renderImageThumbs = () => {
+        const thumbs = el.querySelector('#tn-images-thumbs');
+        if (!thumbs) return;
+        const items = [
+          ...savedImages.map((img) => ({ kind: 'saved', id: img.id, url: img.url })),
+          ...pendingFiles.map((f) => {
+            let u = objectUrls.get(f);
+            if (!u) { u = URL.createObjectURL(f); objectUrls.set(f, u); }
+            return { kind: 'pending', file: f, url: u };
+          }),
+        ];
+        if (items.length === 0) {
+          thumbs.innerHTML = '';
+          return;
+        }
+        thumbs.innerHTML = items.map((it, idx) => `
+          <div class="relative w-20 h-20 rounded-lg overflow-hidden border border-[#e3ceba] bg-[#fff1e6]" data-img-idx="${idx}">
+            <img src="${it.url}" alt="" class="w-full h-full object-cover" />
+            ${it.kind === 'pending' ? '<span class="absolute bottom-0 left-0 right-0 text-[10px] text-center bg-black/50 text-white py-0.5">pendiente</span>' : ''}
+            <button type="button" data-img-del="${idx}" class="absolute top-0 right-0 w-5 h-5 bg-red-600 text-white rounded-full text-xs leading-none hover:bg-red-700" title="Eliminar">×</button>
+          </div>
+        `).join('');
+        thumbs.querySelectorAll('[data-img-del]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const i = Number(btn.dataset.imgDel);
+            const it = items[i];
+            if (!it) return;
+            if (it.kind === 'saved') {
+              try {
+                const { api } = await import('../core/api.js');
+                await api(`/api/images/${encodeURIComponent(it.id)}`, { method: 'DELETE' });
+                const idx2 = savedImages.findIndex((x) => x.id === it.id);
+                if (idx2 >= 0) savedImages.splice(idx2, 1);
+              } catch (e) {
+                console.warn('No se pudo borrar imagen', e);
+                toast('No se pudo borrar la imagen', 'error');
+                return;
+              }
+            } else {
+              const idx2 = pendingFiles.indexOf(it.file);
+              if (idx2 >= 0) pendingFiles.splice(idx2, 1);
+              const u = objectUrls.get(it.file);
+              if (u) { URL.revokeObjectURL(u); objectUrls.delete(it.file); }
+            }
+            renderImageThumbs();
+          });
+        });
+      };
+
+      // Si estamos editando un producto que ya existe en backend, traemos sus imágenes.
+      const loadExistingImages = async () => {
+        if (!isEdit) return;
+        try {
+          const { api } = await import('../core/api.js');
+          const prod = await api(`/api/products/${encodeURIComponent(p.id)}`);
+          for (const img of (prod?.images || [])) savedImages.push({ id: img.id, url: img.url });
+          renderImageThumbs();
+        } catch {
+          // El producto puede no existir en backend todavía (nunca se publicó). Sin imágenes y listo.
+        }
+      };
+      loadExistingImages();
+
+      // File picker → si es edición e existe el producto en backend, subimos inmediatamente.
+      // Si no, queueamos en pendingFiles para subir después del POST de creación.
+      const imgInput = el.querySelector('#tn-image-input');
+      imgInput?.addEventListener('change', async (ev) => {
+        const files = Array.from(ev.target.files || []);
+        ev.target.value = ''; // permite re-seleccionar el mismo archivo
+        for (const f of files) {
+          if (isEdit) {
+            try {
+              const { uploadFile } = await import('../core/api.js');
+              const img = await uploadFile(`/api/products/${encodeURIComponent(p.id)}/images`, f);
+              if (img?.id) savedImages.push({ id: img.id, url: img.url });
+            } catch (e) {
+              console.warn('Upload de imagen falló', e);
+              toast(`No se pudo subir "${f.name}"`, 'error');
+            }
+          } else {
+            pendingFiles.push(f);
+          }
+        }
+        renderImageThumbs();
+      });
 
       // Estado del lote
       const batch = [];
@@ -637,6 +736,22 @@ async function openProductForm(p, container) {
                 await api('/api/stock/set', { method: 'POST', body: { variantId, branchId: 'br_banfield', qty: qtyBanf,  reason: 'Ajuste desde inventario' } });
               }
             }
+            // Drenar imágenes pendientes (sólo aplica si estamos creando producto nuevo en
+            // backend: en edición las imágenes ya se subieron al momento de pickearlas).
+            if (pendingFiles.length > 0) {
+              const { uploadFile } = await import('../core/api.js');
+              for (const f of pendingFiles) {
+                try {
+                  const img = await uploadFile(`/api/products/${encodeURIComponent(saved.id)}/images`, f);
+                  if (img?.id) savedImages.push({ id: img.id, url: img.url });
+                } catch (err) {
+                  console.warn('Upload imagen falló', err);
+                  toast(`No se pudo subir "${f.name}"`, 'warn');
+                }
+              }
+              pendingFiles.length = 0;
+              renderImageThumbs();
+            }
           } catch (e) {
             console.warn('push a TN falló', e);
             toast(`"${saved.name}" guardado local — sync TN pendiente`, 'warn');
@@ -659,6 +774,12 @@ async function openProductForm(p, container) {
         const clearIfPresent = (name) => { const e = form.elements[name]; if (e) e.value = ''; };
         ['description', 'promotional_price', 'weight', 'width', 'height', 'depth',
          'seo_title', 'seo_description', 'handle', 'video_url'].forEach(clearIfPresent);
+        // Limpiamos imágenes (las del producto anterior ya están subidas a backend con su ID).
+        savedImages.length = 0;
+        for (const u of objectUrls.values()) URL.revokeObjectURL(u);
+        objectUrls.clear();
+        pendingFiles.length = 0;
+        renderImageThumbs();
         // Categorías TN: por defecto se mantienen entre productos del lote para que armar
         // un lote homogéneo sea rápido. (Si querés desmarcar, hacelo manualmente).
         if (!keepFields) {

@@ -73,6 +73,31 @@ export async function api(path, opts = {}) {
   return payload;
 }
 
+// Subida de archivos vía multipart/form-data. Útil para endpoints que usan @fastify/multipart.
+export async function uploadFile(path, file, { fieldName = 'file' } = {}) {
+  const base = getApiBase();
+  const token = getToken();
+  const fd = new FormData();
+  fd.append(fieldName, file, file.name);
+  let res;
+  try {
+    res = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: fd, // el browser setea Content-Type con boundary
+    });
+  } catch (err) {
+    const e = new ApiError(0, { error: 'offline', code: 'OFFLINE' });
+    e.networkError = err;
+    throw e;
+  }
+  if (res.status === 204) return null;
+  const contentType = res.headers.get('content-type') || '';
+  const payload = contentType.includes('application/json') ? await res.json() : await res.text();
+  if (!res.ok) throw new ApiError(res.status, payload);
+  return payload;
+}
+
 export async function isOnline() {
   if (!navigator.onLine) return false;
   try {
