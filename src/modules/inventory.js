@@ -381,10 +381,17 @@ async function openProductForm(p, container) {
         <button type="button" data-mode="single" class="mode-btn px-4 py-2 text-sm font-bold rounded-xl bg-white text-[#d82f1e] shadow-sm">Un producto</button>
         <button type="button" data-mode="batch"  class="mode-btn px-4 py-2 text-sm font-bold rounded-xl text-[#7d6c5c]">Varios (lote)</button>
       </div>
-      <label id="keep-fields-label" class="hidden items-center gap-2 cursor-pointer text-sm font-bold text-[#241a0d] bg-[#fff8f0] border border-[#e3ceba] rounded-2xl px-3 py-2">
-        <input type="checkbox" id="keep-fields" checked class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
-        <span>Mantener Categoría / Marca / Proveedor / Subcategoría</span>
-      </label>
+      <div id="keep-fields-wrapper" class="hidden flex-col gap-1">
+        <label id="keep-fields-label" class="flex items-center gap-2 cursor-pointer text-sm font-bold text-[#241a0d] bg-[#fff8f0] border border-[#e3ceba] rounded-2xl px-3 py-2">
+          <input type="checkbox" id="keep-fields" checked class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+          <span>Mantener Categoría / Marca / Proveedor / Subcategoría</span>
+        </label>
+        <label id="keep-tn-cats-label" class="flex items-center gap-2 cursor-pointer text-sm font-bold text-[#241a0d] bg-[#fff8f0] border border-[#e3ceba] rounded-2xl px-3 py-2">
+          <input type="checkbox" id="keep-tn-cats" checked class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+          <img src="assets/img/tiendanube.png" alt="" class="h-4 w-4 object-contain" />
+          <span>Mantener categorías de Tienda Nube</span>
+        </label>
+      </div>
     </div>`}
     <form id="prod-form" class="grid grid-cols-3 gap-3">
       <label class="col-span-3"><span class="text-xs font-black text-[#7d6c5c] uppercase">Nombre *</span>
@@ -718,7 +725,7 @@ async function openProductForm(p, container) {
         const single = el.querySelector('#footer-single');
         const bMode  = el.querySelector('#footer-batch');
         const panel  = el.querySelector('#batch-panel');
-        const keepLbl = el.querySelector('#keep-fields-label');
+        const keepWrap = el.querySelector('#keep-fields-wrapper');
         el.querySelectorAll('.mode-btn').forEach(b => {
           const active = b.dataset.mode === m;
           b.classList.toggle('bg-white', active);
@@ -731,14 +738,14 @@ async function openProductForm(p, container) {
           bMode.classList.remove('hidden');
           bMode.classList.add('flex');
           panel.classList.remove('hidden');
-          if (keepLbl) { keepLbl.classList.remove('hidden'); keepLbl.classList.add('flex'); }
+          if (keepWrap) { keepWrap.classList.remove('hidden'); keepWrap.classList.add('flex'); }
         } else {
           single.classList.remove('hidden');
           single.classList.add('flex');
           bMode.classList.add('hidden');
           bMode.classList.remove('flex');
           panel.classList.add('hidden');
-          if (keepLbl) { keepLbl.classList.add('hidden'); keepLbl.classList.remove('flex'); }
+          if (keepWrap) { keepWrap.classList.add('hidden'); keepWrap.classList.remove('flex'); }
         }
       };
       if (!isEdit) {
@@ -854,8 +861,12 @@ async function openProductForm(p, container) {
         objectUrls.clear();
         pendingFiles.length = 0;
         renderImageThumbs();
-        // Categorías TN: por defecto se mantienen entre productos del lote para que armar
-        // un lote homogéneo sea rápido. (Si querés desmarcar, hacelo manualmente).
+        // Categorías TN: el checkbox "Mantener categorías de Tienda Nube" controla
+        // si las dejamos tildadas para el siguiente o las destildamos todas.
+        const keepTnCats = el.querySelector('#keep-tn-cats')?.checked ?? true;
+        if (!keepTnCats) {
+          el.querySelectorAll('#tn-cats-box input[data-tn-cat]:checked').forEach((cb) => { cb.checked = false; });
+        }
         if (!keepFields) {
           form.elements.category_id.value = '';
           form.elements.brand_id.value = '';
