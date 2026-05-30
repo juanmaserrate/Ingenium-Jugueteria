@@ -315,7 +315,13 @@ async function editInline(td, list, container) {
 }
 
 async function openProductForm(p, container) {
-  const [cats, brs, sps, subs] = await Promise.all([Categories.list(), Brands.list(), Suppliers.list(), Subcategories.list()]);
+  const [cats, brs, sps, subs, branches] = await Promise.all([
+    Categories.list(), Brands.list(), Suppliers.list(), Subcategories.list(), getAll('branches'),
+  ]);
+  const lomas = branches.find(b => b.id === 'br_lomas');
+  const banf  = branches.find(b => b.id === 'br_banfield');
+  const stockLomas = p ? (await P.getStock(p.id, 'br_lomas')).qty : 0;
+  const stockBanf  = p ? (await P.getStock(p.id, 'br_banfield')).qty : 0;
   const body = `
     <form id="prod-form" class="grid grid-cols-2 gap-4">
       <label class="col-span-2"><span class="text-xs font-black text-[#7d6c5c] uppercase">Nombre *</span>
@@ -357,6 +363,14 @@ async function openProductForm(p, container) {
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Precio</span>
         <input name="price" type="number" step="0.01" class="ing-input mt-1" value="${p?.price || 0}" />
       </label>
+      <div class="col-span-2 grid grid-cols-2 gap-4 p-3 bg-[#fff1e6] rounded-xl border border-[#e3ceba]">
+        <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Stock ${lomas?.name || 'Lomas'}</span>
+          <input name="stock_lomas" type="number" min="0" step="1" class="ing-input mt-1" value="${stockLomas}" />
+        </label>
+        <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Stock ${banf?.name || 'Banfield'}</span>
+          <input name="stock_banfield" type="number" min="0" step="1" class="ing-input mt-1" value="${stockBanf}" />
+        </label>
+      </div>
       <label class="col-span-2 flex items-center gap-2 py-2">
         <input type="checkbox" name="published_meli" ${p?.published_meli ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
         <span class="text-sm font-bold">Publicar en MercadoLibre</span>
@@ -388,13 +402,24 @@ async function openProductForm(p, container) {
         d.published_meli = form.elements.published_meli.checked;
         d.published_tn = form.elements.published_tn.checked;
         if (!d.name?.trim()) { toast('Nombre requerido', 'error'); return; }
+        const qtyLomas = Math.max(0, Number(d.stock_lomas) || 0);
+        const qtyBanf  = Math.max(0, Number(d.stock_banfield) || 0);
+        delete d.stock_lomas; delete d.stock_banfield;
         const saved = await P.save({ ...(p || {}), ...d });
+        const prevLomas = p ? stockLomas : 0;
+        const prevBanf  = p ? stockBanf  : 0;
+        if (qtyLomas !== prevLomas) {
+          await P.adjustStock(saved.id, 'br_lomas', qtyLomas - prevLomas, p ? 'Ajuste manual desde edición' : 'Stock inicial');
+        }
+        if (qtyBanf !== prevBanf) {
+          await P.adjustStock(saved.id, 'br_banfield', qtyBanf - prevBanf, p ? 'Ajuste manual desde edición' : 'Stock inicial');
+        }
         toast(p ? 'Actualizado' : 'Creado', 'success');
         // Si se marcó "Publicar en TN", empujar al backend para que dispare push_product_create
         if (d.published_tn) {
           try {
-            const { api, ApiError } = await import('../core/api.js');
-            const body = {
+            const { api } = await import('../core/api.js');
+            const baseBody = {
               id: saved.id,
               code: saved.code,
               name: saved.name,
@@ -403,10 +428,28 @@ async function openProductForm(p, container) {
               price: Number(saved.price) || 0,
               publishedTn: true,
             };
-            // PUT si ya existía, POST si es nuevo
             const method = p ? 'PUT' : 'POST';
             const path = p ? `/api/products/${encodeURIComponent(saved.id)}` : '/api/products';
-            await api(path, { method, body });
+            // Para POST incluimos la variante default con stock inicial → el backend lo crea
+            // y el worker después push_stock lo sube a TN.
+            const body = method === 'POST'
+              ? { ...baseBody, variants: [{
+                  isDefault: true,
+                  stocks: [
+                    { branchId: 'br_lomas',    qty: qtyLomas },
+                    { branchId: 'br_banfield', qty: qtyBanf  },
+                  ],
+                }] }
+              : baseBody;
+            const resp = await api(path, { method, body });
+            // En PUT el backend no toca stock: sincronizamos por separado.
+            if (method === 'PUT') {
+              const variantId = resp?.variants?.[0]?.id;
+              if (variantId) {
+                await api('/api/stock/set', { method: 'POST', body: { variantId, branchId: 'br_lomas',    qty: qtyLomas, reason: 'Ajuste desde inventario' } });
+                await api('/api/stock/set', { method: 'POST', body: { variantId, branchId: 'br_banfield', qty: qtyBanf,  reason: 'Ajuste desde inventario' } });
+              }
+            }
             toast('Publicado en Tienda Nube', 'success');
           } catch (e) {
             console.warn('push a TN falló', e);
