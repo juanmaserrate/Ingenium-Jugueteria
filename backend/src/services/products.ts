@@ -12,6 +12,17 @@ export type ProductInput = {
   cost?: number;
   marginPct?: number;
   price?: number;
+  // Campos extendidos para TN
+  promotionalPrice?: number | null;
+  weight?: number | null;
+  width?: number | null;
+  height?: number | null;
+  depth?: number | null;
+  seoTitle?: string | null;
+  seoDescription?: string | null;
+  handle?: string | null;
+  videoUrl?: string | null;
+  tnCategoryIds?: Array<number | string>;
   categoryId?: string | null;
   subcategoryId?: string | null;
   brandId?: string | null;
@@ -64,6 +75,16 @@ export async function createProduct(data: ProductInput, userId?: string) {
         cost: data.cost ?? 0,
         marginPct: data.marginPct ?? 0,
         price: data.price ?? 0,
+        promotionalPrice: data.promotionalPrice ?? null,
+        weight: data.weight ?? null,
+        width: data.width ?? null,
+        height: data.height ?? null,
+        depth: data.depth ?? null,
+        seoTitle: data.seoTitle ?? null,
+        seoDescription: data.seoDescription ?? null,
+        handle: data.handle ?? null,
+        videoUrl: data.videoUrl ?? null,
+        tnCategoryIds: (data.tnCategoryIds ?? []) as any,
         categoryId: data.categoryId ?? null,
         subcategoryId: data.subcategoryId ?? null,
         brandId: data.brandId ?? null,
@@ -128,6 +149,16 @@ export async function updateProduct(id: string, data: Partial<ProductInput>, use
       cost: data.cost ?? undefined,
       marginPct: data.marginPct ?? undefined,
       price: data.price ?? undefined,
+      promotionalPrice: data.promotionalPrice ?? undefined,
+      weight: data.weight ?? undefined,
+      width: data.width ?? undefined,
+      height: data.height ?? undefined,
+      depth: data.depth ?? undefined,
+      seoTitle: data.seoTitle ?? undefined,
+      seoDescription: data.seoDescription ?? undefined,
+      handle: data.handle ?? undefined,
+      videoUrl: data.videoUrl ?? undefined,
+      tnCategoryIds: data.tnCategoryIds !== undefined ? (data.tnCategoryIds as any) : undefined,
       categoryId: data.categoryId ?? undefined,
       subcategoryId: data.subcategoryId ?? undefined,
       brandId: data.brandId ?? undefined,

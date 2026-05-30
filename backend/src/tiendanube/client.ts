@@ -46,6 +46,11 @@ export class TnClient {
     return this.http.delete(`/products/${tnProductId}/variants/${tnVariantId}`).then((r) => r.data);
   }
 
+  // --- Categories ---
+  listCategories(params: Record<string, any> = {}) {
+    return this.http.get('/categories', { params }).then((r) => r.data);
+  }
+
   // --- Images ---
   uploadImage(tnProductId: string | number, data: { src?: string; attachment?: string; position?: number }) {
     return this.http.post(`/products/${tnProductId}/images`, data).then((r) => r.data);

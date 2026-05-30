@@ -120,10 +120,21 @@ model Product {
   id            String   @id
   code          String   @unique // SKU (producto padre)
   name          String
-  description   String?
+  description   String?  // soporta HTML básico, se manda a TN
   cost          Float    @default(0)
   marginPct     Float    @default(0) @map("margin_pct")
   price         Float    @default(0)
+  // Campos extendidos para Tienda Nube
+  promotionalPrice Float? @map("promotional_price")
+  weight        Float?   // en kg
+  width         Float?   // en cm
+  height        Float?   // en cm
+  depth         Float?   // en cm
+  seoTitle      String?  @map("seo_title")
+  seoDescription String? @map("seo_description")
+  handle        String?  // slug url custom (si null, se genera del name)
+  videoUrl      String?  @map("video_url") // youtube/vimeo embed, se inyecta en description al pushear
+  tnCategoryIds Json     @default("[]") @map("tn_category_ids") // [123, 456] ids de TN
   categoryId    String?  @map("category_id")
   subcategoryId String?  @map("subcategory_id")
   brandId       String?  @map("brand_id")

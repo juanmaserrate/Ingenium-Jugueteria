@@ -12,6 +12,7 @@ import {
 import { randomId } from '../utils/crypto.js';
 import { confirmSale } from '../services/sales.js';
 import { enqueueSync } from '../sync/queue.js';
+import { getTnClient } from '../tiendanube/client.js';
 
 export async function integrationsRoutes(app: FastifyInstance) {
   // Status p\u00fablico (sin auth) para el ping del frontend
@@ -76,6 +77,36 @@ export async function integrationsRoutes(app: FastifyInstance) {
         data: { stockMode: body.stockMode ?? undefined },
       });
       return updated;
+    });
+
+    // Listado plano de categorías de la tienda TN (para el select del modal de producto).
+    // TN devuelve árbol; lo aplanamos con indentación visual por nivel.
+    r.get('/tiendanube/categories', async () => {
+      const tn = await getTnClient();
+      if (!tn) return { connected: false, categories: [] as Array<{ id: number; name: string; level: number }> };
+      // Paginado simple: pedimos hasta 200 (suficiente para la mayoría de tiendas).
+      const raw = await tn.listCategories({ per_page: 200 }) as any[];
+      const flat: Array<{ id: number; name: string; level: number; parent: number | null }> = raw.map((c) => ({
+        id: Number(c.id),
+        name: (c.name?.es ?? c.name?.en ?? String(c.id)) as string,
+        level: 0,
+        parent: c.parent != null ? Number(c.parent) : null,
+      }));
+      // Calcular niveles a partir del parent. Hacemos pases hasta que estabilice.
+      const byId = new Map(flat.map((c) => [c.id, c]));
+      let changed = true;
+      let safety = 10;
+      while (changed && safety-- > 0) {
+        changed = false;
+        for (const c of flat) {
+          if (c.parent != null) {
+            const p = byId.get(c.parent);
+            if (p && p.level + 1 !== c.level) { c.level = p.level + 1; changed = true; }
+          }
+        }
+      }
+      flat.sort((a, b) => a.name.localeCompare(b.name));
+      return { connected: true, categories: flat };
     });
 
     // --- TN Orders Pending ---
