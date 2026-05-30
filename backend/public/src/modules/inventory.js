@@ -391,6 +391,7 @@ async function openProductForm(p, container) {
         <label class="flex items-center gap-2 cursor-pointer">
           <input type="checkbox" name="published_tn" ${p?.published_tn ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
           <span class="text-sm font-bold">Publicar en Tienda Nube</span>
+          <img src="assets/img/tiendanube.png" alt="Tienda Nube" class="h-6 w-6 object-contain" />
         </label>
       </div>
     </form>
