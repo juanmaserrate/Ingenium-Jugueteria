@@ -325,7 +325,7 @@ async function openProductForm(p, container) {
   const isEdit = !!p;
   const body = `
     ${isEdit ? '' : `
-    <div class="flex items-center justify-between gap-4 mb-4 flex-wrap">
+    <div class="flex items-center justify-between gap-4 mb-3 flex-wrap">
       <div class="flex gap-1 p-1 bg-[#fff1e6] rounded-2xl w-fit" id="mode-toggle">
         <button type="button" data-mode="single" class="mode-btn px-4 py-2 text-sm font-bold rounded-xl bg-white text-[#d82f1e] shadow-sm">Un producto</button>
         <button type="button" data-mode="batch"  class="mode-btn px-4 py-2 text-sm font-bold rounded-xl text-[#7d6c5c]">Varios (lote)</button>
@@ -335,7 +335,7 @@ async function openProductForm(p, container) {
         <span>Mantener Categoría / Marca / Proveedor / Subcategoría</span>
       </label>
     </div>`}
-    <form id="prod-form" class="grid grid-cols-3 gap-4">
+    <form id="prod-form" class="grid grid-cols-3 gap-3">
       <label class="col-span-3"><span class="text-xs font-black text-[#7d6c5c] uppercase">Nombre *</span>
         <input name="name" class="ing-input mt-1" required value="${p?.name || ''}" />
       </label>
@@ -375,7 +375,7 @@ async function openProductForm(p, container) {
       <label class="col-span-2"><span class="text-xs font-black text-[#7d6c5c] uppercase">Código</span>
         <input name="code" class="ing-input mt-1" value="${p?.code || ''}" />
       </label>
-      <div class="col-span-3 grid grid-cols-2 gap-4 p-3 bg-[#fff1e6] rounded-xl border border-[#e3ceba]">
+      <div class="col-span-3 grid grid-cols-2 gap-3 p-2 bg-[#fff1e6] rounded-xl border border-[#e3ceba]">
         <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Stock ${lomas?.name || 'Lomas'}</span>
           <input name="stock_lomas" type="number" min="0" step="1" class="ing-input mt-1" value="${stockLomas}" />
         </label>
@@ -383,14 +383,16 @@ async function openProductForm(p, container) {
           <input name="stock_banfield" type="number" min="0" step="1" class="ing-input mt-1" value="${stockBanf}" />
         </label>
       </div>
-      <label class="col-span-3 flex items-center gap-2 py-2">
-        <input type="checkbox" name="published_meli" ${p?.published_meli ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
-        <span class="text-sm font-bold">Publicar en MercadoLibre</span>
-      </label>
-      <label class="col-span-3 flex items-center gap-2 py-2">
-        <input type="checkbox" name="published_tn" ${p?.published_tn ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
-        <span class="text-sm font-bold">Publicar en Tienda Nube</span>
-      </label>
+      <div class="col-span-3 flex gap-6 items-center">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" name="published_meli" ${p?.published_meli ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+          <span class="text-sm font-bold">Publicar en MercadoLibre</span>
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" name="published_tn" ${p?.published_tn ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+          <span class="text-sm font-bold">Publicar en Tienda Nube</span>
+        </label>
+      </div>
     </form>
     ${isEdit ? '' : `
     <div id="batch-panel" class="hidden mt-4 p-3 rounded-2xl bg-[#fff8f0] border border-[#e3ceba]">

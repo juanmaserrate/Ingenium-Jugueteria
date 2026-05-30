@@ -61,7 +61,7 @@ button:focus-visible, a:focus-visible, [role="button"]:focus-visible, [role="rad
 }
 .modal-content {
   background: #fff; border-radius: 2rem;
-  padding: 2rem; max-width: 90vw; max-height: 90vh; overflow: auto;
+  padding: 1.25rem 1.75rem; max-width: 95vw; max-height: 95vh; overflow: auto;
   box-shadow: 0 20px 50px rgba(36,26,13,.2);
   animation: modalIn .2s ease-out;
 }
