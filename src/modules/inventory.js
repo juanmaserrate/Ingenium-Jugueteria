@@ -322,7 +322,13 @@ async function openProductForm(p, container) {
   const banf  = branches.find(b => b.id === 'br_banfield');
   const stockLomas = p ? (await P.getStock(p.id, 'br_lomas')).qty : 0;
   const stockBanf  = p ? (await P.getStock(p.id, 'br_banfield')).qty : 0;
+  const isEdit = !!p;
   const body = `
+    ${isEdit ? '' : `
+    <div class="flex gap-1 p-1 bg-[#fff1e6] rounded-2xl w-fit mb-4" id="mode-toggle">
+      <button type="button" data-mode="single" class="mode-btn px-4 py-2 text-sm font-bold rounded-xl bg-white text-[#d82f1e] shadow-sm">Un producto</button>
+      <button type="button" data-mode="batch"  class="mode-btn px-4 py-2 text-sm font-bold rounded-xl text-[#7d6c5c]">Varios (lote)</button>
+    </div>`}
     <form id="prod-form" class="grid grid-cols-2 gap-4">
       <label class="col-span-2"><span class="text-xs font-black text-[#7d6c5c] uppercase">Nombre *</span>
         <input name="name" class="ing-input mt-1" required value="${p?.name || ''}" />
@@ -380,11 +386,29 @@ async function openProductForm(p, container) {
         <span class="text-sm font-bold">Publicar en Tienda Nube</span>
       </label>
     </form>
+    ${isEdit ? '' : `
+    <div id="batch-panel" class="hidden mt-4 p-3 rounded-2xl bg-[#fff8f0] border border-[#e3ceba] space-y-3">
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" id="keep-fields" checked class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+        <span class="text-sm font-bold">Mantener Categoría, Marca, Proveedor y Subcategoría para el siguiente</span>
+      </label>
+      <div>
+        <div class="text-xs font-black uppercase text-[#7d6c5c] mb-2">Productos en este lote (<span id="batch-count">0</span>)</div>
+        <div id="batch-list" class="text-sm text-[#7d6c5c] italic">Sin productos cargados aún</div>
+      </div>
+    </div>`}
   `;
+  const footerSingle = `
+    <button class="ing-btn-secondary" data-act="cancel">Cancelar</button>
+    <button class="ing-btn-primary" data-act="save">${isEdit ? 'Guardar' : 'Guardar'}</button>`;
+  const footerBatch = `
+    <button class="ing-btn-secondary" data-act="cancel-batch">Cancelar</button>
+    <button class="ing-btn-secondary" data-act="save-and-continue">Agregar y seguir</button>
+    <button class="ing-btn-primary" data-act="finish-batch">Terminar lote</button>`;
   openModal({
-    title: p ? 'Editar producto' : 'Nuevo producto',
+    title: isEdit ? 'Editar producto' : 'Nuevo producto',
     bodyHTML: body,
-    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="save">Guardar</button>`,
+    footerHTML: `<div id="footer-single" class="flex gap-3">${footerSingle}</div>${isEdit ? '' : `<div id="footer-batch" class="hidden gap-3">${footerBatch}</div>`}`,
     size: 'lg',
     onOpen: (el, close) => {
       const form = el.querySelector('#prod-form');
@@ -396,53 +420,82 @@ async function openProductForm(p, container) {
       pctIn.addEventListener('input', recalcPrice);
       priceIn.addEventListener('input', recalcPct);
 
-      el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
-      el.querySelector('[data-act="save"]').addEventListener('click', async () => {
+      // Estado del lote
+      const batch = [];
+
+      // Toggle de modo (sólo en alta)
+      let mode = 'single';
+      const setMode = (m) => {
+        mode = m;
+        if (isEdit) return;
+        const single = el.querySelector('#footer-single');
+        const bMode  = el.querySelector('#footer-batch');
+        const panel  = el.querySelector('#batch-panel');
+        el.querySelectorAll('.mode-btn').forEach(b => {
+          const active = b.dataset.mode === m;
+          b.classList.toggle('bg-white', active);
+          b.classList.toggle('text-[#d82f1e]', active);
+          b.classList.toggle('shadow-sm', active);
+          b.classList.toggle('text-[#7d6c5c]', !active);
+        });
+        if (m === 'batch') {
+          single.classList.add('hidden');
+          bMode.classList.remove('hidden');
+          bMode.classList.add('flex');
+          panel.classList.remove('hidden');
+        } else {
+          single.classList.remove('hidden');
+          single.classList.add('flex');
+          bMode.classList.add('hidden');
+          bMode.classList.remove('flex');
+          panel.classList.add('hidden');
+        }
+      };
+      if (!isEdit) {
+        el.querySelectorAll('.mode-btn').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+      }
+
+      // Helpers
+      const readForm = () => {
         const d = Object.fromEntries(new FormData(form).entries());
         d.published_meli = form.elements.published_meli.checked;
         d.published_tn = form.elements.published_tn.checked;
-        if (!d.name?.trim()) { toast('Nombre requerido', 'error'); return; }
         const qtyLomas = Math.max(0, Number(d.stock_lomas) || 0);
         const qtyBanf  = Math.max(0, Number(d.stock_banfield) || 0);
         delete d.stock_lomas; delete d.stock_banfield;
+        return { d, qtyLomas, qtyBanf };
+      };
+
+      const persistOne = async ({ d, qtyLomas, qtyBanf }) => {
+        if (!d.name?.trim()) { toast('Nombre requerido', 'error'); return null; }
         const saved = await P.save({ ...(p || {}), ...d });
-        const prevLomas = p ? stockLomas : 0;
-        const prevBanf  = p ? stockBanf  : 0;
+        const prevLomas = isEdit ? stockLomas : 0;
+        const prevBanf  = isEdit ? stockBanf  : 0;
         if (qtyLomas !== prevLomas) {
-          await P.adjustStock(saved.id, 'br_lomas', qtyLomas - prevLomas, p ? 'Ajuste manual desde edición' : 'Stock inicial');
+          await P.adjustStock(saved.id, 'br_lomas', qtyLomas - prevLomas, isEdit ? 'Ajuste manual desde edición' : 'Stock inicial');
         }
         if (qtyBanf !== prevBanf) {
-          await P.adjustStock(saved.id, 'br_banfield', qtyBanf - prevBanf, p ? 'Ajuste manual desde edición' : 'Stock inicial');
+          await P.adjustStock(saved.id, 'br_banfield', qtyBanf - prevBanf, isEdit ? 'Ajuste manual desde edición' : 'Stock inicial');
         }
-        toast(p ? 'Actualizado' : 'Creado', 'success');
-        // Si se marcó "Publicar en TN", empujar al backend para que dispare push_product_create
         if (d.published_tn) {
           try {
             const { api } = await import('../core/api.js');
             const baseBody = {
-              id: saved.id,
-              code: saved.code,
-              name: saved.name,
+              id: saved.id, code: saved.code, name: saved.name,
               cost: Number(saved.cost) || 0,
               marginPct: Number(saved.margin_pct) || 0,
               price: Number(saved.price) || 0,
               publishedTn: true,
             };
-            const method = p ? 'PUT' : 'POST';
-            const path = p ? `/api/products/${encodeURIComponent(saved.id)}` : '/api/products';
-            // Para POST incluimos la variante default con stock inicial → el backend lo crea
-            // y el worker después push_stock lo sube a TN.
-            const body = method === 'POST'
-              ? { ...baseBody, variants: [{
-                  isDefault: true,
-                  stocks: [
-                    { branchId: 'br_lomas',    qty: qtyLomas },
-                    { branchId: 'br_banfield', qty: qtyBanf  },
-                  ],
-                }] }
+            const method = isEdit ? 'PUT' : 'POST';
+            const path = isEdit ? `/api/products/${encodeURIComponent(saved.id)}` : '/api/products';
+            const apiBody = method === 'POST'
+              ? { ...baseBody, variants: [{ isDefault: true, stocks: [
+                  { branchId: 'br_lomas', qty: qtyLomas },
+                  { branchId: 'br_banfield', qty: qtyBanf },
+                ] }] }
               : baseBody;
-            const resp = await api(path, { method, body });
-            // En PUT el backend no toca stock: sincronizamos por separado.
+            const resp = await api(path, { method, body: apiBody });
             if (method === 'PUT') {
               const variantId = resp?.variants?.[0]?.id;
               if (variantId) {
@@ -450,15 +503,121 @@ async function openProductForm(p, container) {
                 await api('/api/stock/set', { method: 'POST', body: { variantId, branchId: 'br_banfield', qty: qtyBanf,  reason: 'Ajuste desde inventario' } });
               }
             }
-            toast('Publicado en Tienda Nube', 'success');
           } catch (e) {
             console.warn('push a TN falló', e);
-            toast('Guardado local — falta sincronizar con Tienda Nube', 'warn');
+            toast(`"${saved.name}" guardado local — sync TN pendiente`, 'warn');
           }
         }
+        return saved;
+      };
+
+      const resetForBatch = (keepFields) => {
+        form.elements.name.value = '';
+        form.elements.code.value = '';
+        form.elements.cost.value = 0;
+        form.elements.margin_pct.value = 0;
+        form.elements.price.value = 0;
+        form.elements.stock_lomas.value = 0;
+        form.elements.stock_banfield.value = 0;
+        form.elements.published_meli.checked = false;
+        form.elements.published_tn.checked = false;
+        if (!keepFields) {
+          form.elements.category_id.value = '';
+          form.elements.brand_id.value = '';
+          form.elements.supplier_id.value = '';
+          form.elements.subcategory_id.value = '';
+        }
+        setTimeout(() => form.elements.name.focus(), 30);
+      };
+
+      const renderBatchList = () => {
+        const listEl = el.querySelector('#batch-list');
+        const countEl = el.querySelector('#batch-count');
+        if (!listEl) return;
+        countEl.textContent = String(batch.length);
+        if (batch.length === 0) {
+          listEl.innerHTML = '<div class="text-[#7d6c5c] italic">Sin productos cargados aún</div>';
+          return;
+        }
+        listEl.innerHTML = `
+          <div class="max-h-40 overflow-auto rounded-xl border border-[#e3ceba] bg-white">
+            <table class="w-full text-xs">
+              <thead><tr class="bg-[#fff1e6] text-[#7d6c5c]">
+                <th class="text-left py-1.5 px-2">#</th>
+                <th class="text-left py-1.5 px-2">Nombre</th>
+                <th class="text-left py-1.5 px-2">Código</th>
+                <th class="text-right py-1.5 px-2">Precio</th>
+                <th class="text-center py-1.5 px-2">Lomas</th>
+                <th class="text-center py-1.5 px-2">Banf.</th>
+                <th class="text-center py-1.5 px-2">TN</th>
+              </tr></thead>
+              <tbody>
+                ${batch.map((b, i) => `
+                  <tr class="border-t border-[#fff1e6]">
+                    <td class="py-1.5 px-2">${i+1}</td>
+                    <td class="py-1.5 px-2 font-bold">${b.name}</td>
+                    <td class="py-1.5 px-2 font-mono">${b.code}</td>
+                    <td class="py-1.5 px-2 text-right">${money(b.price)}</td>
+                    <td class="py-1.5 px-2 text-center">${b.stockLomas}</td>
+                    <td class="py-1.5 px-2 text-center">${b.stockBanf}</td>
+                    <td class="py-1.5 px-2 text-center">${b.tn ? '<span class="text-[#d82f1e] font-black">✓</span>' : '-'}</td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>`;
+      };
+
+      // Acciones modo "single"
+      el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
+      el.querySelector('[data-act="save"]').addEventListener('click', async () => {
+        const payload = readForm();
+        const saved = await persistOne(payload);
+        if (!saved) return;
+        toast(isEdit ? 'Actualizado' : 'Creado', 'success');
         close(saved);
         renderProducts(container);
       });
+
+      // Acciones modo "batch"
+      if (!isEdit) {
+        el.querySelector('[data-act="cancel-batch"]').addEventListener('click', () => {
+          if (batch.length === 0) return close(null);
+          confirmModal({ title: 'Cancelar lote', message: `Ya cargaste ${batch.length} producto(s). ¿Salir sin más cambios? (los ya cargados se mantienen)`, confirmLabel: 'Salir' })
+            .then(ok => { if (ok) { close({ batch }); renderProducts(container); } });
+        });
+        el.querySelector('[data-act="save-and-continue"]').addEventListener('click', async () => {
+          const payload = readForm();
+          const saved = await persistOne(payload);
+          if (!saved) return;
+          batch.push({
+            id: saved.id, name: saved.name, code: saved.code, price: saved.price,
+            stockLomas: payload.qtyLomas, stockBanf: payload.qtyBanf,
+            tn: !!payload.d.published_tn,
+          });
+          toast(`Agregado al lote (${batch.length})`, 'success');
+          renderBatchList();
+          const keep = el.querySelector('#keep-fields')?.checked ?? true;
+          resetForBatch(keep);
+        });
+        el.querySelector('[data-act="finish-batch"]').addEventListener('click', async () => {
+          // Si el formulario tiene un nombre cargado, intentamos guardarlo también antes de cerrar.
+          if (form.elements.name.value.trim()) {
+            const payload = readForm();
+            const saved = await persistOne(payload);
+            if (saved) {
+              batch.push({
+                id: saved.id, name: saved.name, code: saved.code, price: saved.price,
+                stockLomas: payload.qtyLomas, stockBanf: payload.qtyBanf,
+                tn: !!payload.d.published_tn,
+              });
+            }
+          }
+          if (batch.length === 0) { toast('No agregaste ningún producto', 'warn'); return; }
+          toast(`Lote terminado: ${batch.length} producto(s) creado(s)`, 'success');
+          close({ batch });
+          renderProducts(container);
+        });
+      }
     },
   });
 }
