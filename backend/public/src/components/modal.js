@@ -1,6 +1,6 @@
 // Modal genérico. openModal({title, body, footer}) → devuelve promesa que resuelve al cerrar.
 
-export function openModal({ title = '', bodyHTML = '', footerHTML = '', onOpen = null, size = 'md', minimizable = false } = {}) {
+export function openModal({ title = '', bodyHTML = '', footerHTML = '', onOpen = null, size = 'md', minimizable = false, closeOnBackdrop = true } = {}) {
   return new Promise((resolve) => {
     const widths = { sm: 'max-w-md', md: 'max-w-2xl', lg: 'max-w-4xl', xl: 'max-w-6xl' };
     const backdrop = document.createElement('div');
@@ -31,7 +31,9 @@ export function openModal({ title = '', bodyHTML = '', footerHTML = '', onOpen =
       resolve(value);
     };
     backdrop.querySelector('.modal-close').addEventListener('click', () => close(null));
-    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(null); });
+    if (closeOnBackdrop) {
+      backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(null); });
+    }
     document.addEventListener('keydown', function esc(ev) {
       if (ev.key === 'Escape') { document.removeEventListener('keydown', esc); close(null); }
     });

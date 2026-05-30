@@ -545,6 +545,7 @@ async function openProductForm(p, container) {
     footerHTML: `<div id="footer-single" class="flex gap-3">${footerSingle}</div>${isEdit ? '' : `<div id="footer-batch" class="hidden gap-3">${footerBatch}</div>`}`,
     size: 'xl',
     minimizable: true,
+    closeOnBackdrop: false,
     onOpen: (el, close) => {
       const form = el.querySelector('#prod-form');
       // Live recompute de precio cuando cambia costo o %
