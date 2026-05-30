@@ -578,97 +578,30 @@ async function openProductForm(p, container) {
             return;
           }
 
-          // Armamos el árbol agrupando por parent. Cada lista de hijos se ordena por nombre.
+          // Lista plana ordenada alfabéticamente (natural, ignorando símbolos iniciales).
           // sortKey: trim + saca símbolos iniciales (+, –, *) así "+18" se ordena por "18".
           // Comparación con locale es-AR y numeric:true para que "3 a 5 años" < "12 a 17 años".
           const sortKey = (n) => String(n || '').trim().replace(/^[^\p{L}\p{N}]+/u, '').toLowerCase();
           const cmp = (a, b) => sortKey(a.name).localeCompare(sortKey(b.name), 'es', { numeric: true, sensitivity: 'base' });
-          const byParent = new Map();
-          for (const c of list) {
-            const k = c.parent ?? null;
-            if (!byParent.has(k)) byParent.set(k, []);
-            byParent.get(k).push(c);
-          }
-          for (const arr of byParent.values()) arr.sort(cmp);
+          const sorted = [...list].sort(cmp);
 
-          // Render recursivo. Cada nodo tiene un chevron si tiene hijos.
-          const renderNode = (c) => {
-            const kids = byParent.get(c.id) || [];
-            const hasKids = kids.length > 0;
+          box.innerHTML = sorted.map((c) => {
             const nameLower = c.name.toLowerCase().replace(/"/g, '&quot;');
             return `
-              <div class="cat-node" data-cat-name="${nameLower}">
-                <div class="flex items-center gap-1 py-0.5 px-1 hover:bg-[#fff1e6] rounded">
-                  ${hasKids
-                    ? `<button type="button" class="chev w-5 h-5 inline-flex items-center justify-center text-[#7d6c5c] hover:text-[#d82f1e] font-bold" aria-expanded="false" title="Expandir">▸</button>`
-                    : `<span class="w-5 inline-block"></span>`}
-                  <label class="flex items-center gap-2 cursor-pointer flex-1">
-                    <input type="checkbox" data-tn-cat="${c.id}" ${selectedTnCats.has(c.id) ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
-                    <span>${escapeAttr(c.name)}</span>
-                  </label>
-                </div>
-                ${hasKids ? `<div class="cat-children hidden ml-3 border-l border-[#e3ceba] pl-2">${kids.map(renderNode).join('')}</div>` : ''}
-              </div>
+              <label class="cat-row flex items-center gap-2 py-0.5 px-1 cursor-pointer hover:bg-[#fff1e6] rounded" data-cat-name="${nameLower}">
+                <input type="checkbox" data-tn-cat="${c.id}" ${selectedTnCats.has(c.id) ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+                <span style="padding-left:${(c.level || 0) * 14}px">${escapeAttr(c.name)}</span>
+              </label>
             `;
-          };
-          const roots = byParent.get(null) || [];
-          box.innerHTML = roots.map(renderNode).join('');
+          }).join('');
 
-          // Toggle de chevrones (expandir/colapsar hijos).
-          const toggleChev = (chev, force) => {
-            const node = chev.closest('.cat-node');
-            const children = node?.querySelector(':scope > .cat-children');
-            if (!children) return;
-            const willCollapse = force === undefined ? !children.classList.contains('hidden') : !force;
-            children.classList.toggle('hidden', willCollapse);
-            chev.setAttribute('aria-expanded', String(!willCollapse));
-            chev.textContent = willCollapse ? '▸' : '▾';
-            chev.title = willCollapse ? 'Expandir' : 'Colapsar';
-          };
-          box.querySelectorAll('.chev').forEach((chev) => {
-            chev.addEventListener('click', (e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              toggleChev(chev);
-            });
-          });
-
-          // Buscador: muestra nodos cuyo nombre matchea Y todos sus ancestros (para que se vean colgando).
-          // Vacío → restaura colapsado por defecto.
+          // Buscador: filtro simple por substring sobre el nombre.
           const searchInput = el.querySelector('#tn-cats-search');
           const applyFilter = (q) => {
-            const allNodes = box.querySelectorAll('.cat-node');
-            const allChevs = box.querySelectorAll('.chev');
-            if (!q) {
-              allNodes.forEach((n) => n.classList.remove('hidden'));
-              box.querySelectorAll('.cat-children').forEach((c) => c.classList.add('hidden'));
-              allChevs.forEach((chev) => {
-                chev.setAttribute('aria-expanded', 'false');
-                chev.textContent = '▸';
-                chev.title = 'Expandir';
-              });
-              return;
-            }
-            const matches = new Set();
-            allNodes.forEach((n) => {
-              const name = n.dataset.catName || '';
-              if (name.includes(q)) {
-                matches.add(n);
-                // Marcamos ancestros para que el match sea visible en su jerarquía.
-                let p = n.parentElement;
-                while (p && p !== box) {
-                  if (p.classList.contains('cat-node')) matches.add(p);
-                  p = p.parentElement;
-                }
-              }
-            });
-            allNodes.forEach((n) => n.classList.toggle('hidden', !matches.has(n)));
-            // Expandimos todo para mostrar resultados profundos.
-            box.querySelectorAll('.cat-children').forEach((c) => c.classList.remove('hidden'));
-            allChevs.forEach((chev) => {
-              chev.setAttribute('aria-expanded', 'true');
-              chev.textContent = '▾';
-              chev.title = 'Colapsar';
+            const rows = box.querySelectorAll('.cat-row');
+            rows.forEach((r) => {
+              const name = r.dataset.catName || '';
+              r.classList.toggle('hidden', q && !name.includes(q));
             });
           };
           searchInput?.addEventListener('input', () => applyFilter(searchInput.value.trim().toLowerCase()));

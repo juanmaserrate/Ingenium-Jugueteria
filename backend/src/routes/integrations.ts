@@ -86,12 +86,18 @@ export async function integrationsRoutes(app: FastifyInstance) {
       if (!tn) return { connected: false, categories: [] as Array<{ id: number; name: string; level: number }> };
       // Paginado simple: pedimos hasta 200 (suficiente para la mayoría de tiendas).
       const raw = await tn.listCategories({ per_page: 200 }) as any[];
-      const flat: Array<{ id: number; name: string; level: number; parent: number | null }> = raw.map((c) => ({
-        id: Number(c.id),
-        name: (c.name?.es ?? c.name?.en ?? String(c.id)) as string,
-        level: 0,
-        parent: c.parent != null ? Number(c.parent) : null,
-      }));
+      const flat: Array<{ id: number; name: string; level: number; parent: number | null }> = raw.map((c) => {
+        // TN devuelve parent: 0 para raíz (no null). Normalizamos a null para
+        // que el frontend pueda detectar "sin parent" con un solo check.
+        const rawParent = c.parent != null ? Number(c.parent) : null;
+        const parent = rawParent && rawParent > 0 ? rawParent : null;
+        return {
+          id: Number(c.id),
+          name: (c.name?.es ?? c.name?.en ?? String(c.id)) as string,
+          level: 0,
+          parent,
+        };
+      });
       // Calcular niveles a partir del parent. Hacemos pases hasta que estabilice.
       const byId = new Map(flat.map((c) => [c.id, c]));
       let changed = true;
