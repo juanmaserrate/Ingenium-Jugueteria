@@ -40,9 +40,14 @@ export const syncHandlers = {
         },
       });
     }
-    // Subir im\u00e1genes
+    // Subir im\u00e1genes via push_image_create (un solo path robusto: URL con fallback
+    // a base64 + idempotencia + reintentos autom\u00e1ticos). Antes este loop sub\u00eda
+    // inline con .catch silencioso y sin fallback, as\u00ed que si STORAGE_PUBLIC_URL no
+    // era accesible desde TN, las im\u00e1genes se perd\u00edan en silencio.
+    const { enqueueSync } = await import('../sync/queue.js');
     for (const img of product.images) {
-      await tn.uploadImage(tnProduct.id, { src: img.url, position: img.position }).catch(() => null);
+      if (img.tnImageId) continue; // ya subida, idempotente
+      await enqueueSync('push_image_create', { productId: product.id, imageId: img.id });
     }
     // Push stock inicial
     for (const v of product.variants) {
@@ -164,6 +169,7 @@ export const syncHandlers = {
     if (!product.tnMapping) {
       throw new Error('Product tnMapping not ready yet — retrying');
     }
+    if (image.tnImageId) return { skipped: 'already uploaded', tnImageId: image.tnImageId };
     // Preferimos enviar URL p\u00fablica; fallback attachment base64 si es local sin internet p\u00fablico
     let resp: any;
     try {
