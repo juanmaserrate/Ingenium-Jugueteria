@@ -74,28 +74,41 @@ export async function api(path, opts = {}) {
 }
 
 // Subida de archivos vía multipart/form-data. Útil para endpoints que usan @fastify/multipart.
-export async function uploadFile(path, file, { fieldName = 'file' } = {}) {
+// Retrías: 1 reintento automático ante errores de red o 5xx del servidor (con 800ms de pausa).
+// Esto cubre blips de red al subir imágenes en lote.
+export async function uploadFile(path, file, { fieldName = 'file', retries = 1 } = {}) {
   const base = getApiBase();
   const token = getToken();
-  const fd = new FormData();
-  fd.append(fieldName, file, file.name);
-  let res;
-  try {
-    res = await fetch(`${base}${path}`, {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-      body: fd, // el browser setea Content-Type con boundary
-    });
-  } catch (err) {
-    const e = new ApiError(0, { error: 'offline', code: 'OFFLINE' });
-    e.networkError = err;
-    throw e;
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    // FormData se reusa por cada intento porque el browser puede consumir el body.
+    const fd = new FormData();
+    fd.append(fieldName, file, file.name);
+    let res;
+    try {
+      res = await fetch(`${base}${path}`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd, // el browser setea Content-Type con boundary
+      });
+    } catch (err) {
+      lastErr = new ApiError(0, { error: 'offline', code: 'OFFLINE' });
+      lastErr.networkError = err;
+      if (attempt < retries) { await new Promise((r) => setTimeout(r, 800)); continue; }
+      throw lastErr;
+    }
+    if (res.status === 204) return null;
+    const contentType = res.headers.get('content-type') || '';
+    const payload = contentType.includes('application/json') ? await res.json() : await res.text();
+    if (!res.ok) {
+      lastErr = new ApiError(res.status, payload);
+      // Sólo reintentamos 5xx; 4xx no se va a arreglar reintentando.
+      if (res.status >= 500 && attempt < retries) { await new Promise((r) => setTimeout(r, 800)); continue; }
+      throw lastErr;
+    }
+    return payload;
   }
-  if (res.status === 204) return null;
-  const contentType = res.headers.get('content-type') || '';
-  const payload = contentType.includes('application/json') ? await res.json() : await res.text();
-  if (!res.ok) throw new ApiError(res.status, payload);
-  return payload;
+  throw lastErr;
 }
 
 export async function isOnline() {

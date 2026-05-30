@@ -155,7 +155,15 @@ export const syncHandlers = {
       include: { tnMapping: true },
     });
     const image = await prisma.productImage.findUnique({ where: { id: payload.imageId } });
-    if (!product?.tnMapping || !image) return { skipped: true };
+    // Diferenciamos casos: si el image/product fue borrado, skip definitivo.
+    // Si falta tnMapping → push_product_create todavía no corrió → THROW para que la queue
+    // reintente con backoff. Antes esto era un skip silencioso que perdía las imágenes
+    // subidas en paralelo a la creación del producto.
+    if (!image) return { skipped: 'image deleted' };
+    if (!product) return { skipped: 'product deleted' };
+    if (!product.tnMapping) {
+      throw new Error('Product tnMapping not ready yet — retrying');
+    }
     // Preferimos enviar URL p\u00fablica; fallback attachment base64 si es local sin internet p\u00fablico
     let resp: any;
     try {
