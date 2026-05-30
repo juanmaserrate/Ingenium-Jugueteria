@@ -325,9 +325,15 @@ async function openProductForm(p, container) {
   const isEdit = !!p;
   const body = `
     ${isEdit ? '' : `
-    <div class="flex gap-1 p-1 bg-[#fff1e6] rounded-2xl w-fit mb-4" id="mode-toggle">
-      <button type="button" data-mode="single" class="mode-btn px-4 py-2 text-sm font-bold rounded-xl bg-white text-[#d82f1e] shadow-sm">Un producto</button>
-      <button type="button" data-mode="batch"  class="mode-btn px-4 py-2 text-sm font-bold rounded-xl text-[#7d6c5c]">Varios (lote)</button>
+    <div class="flex items-center justify-between gap-4 mb-4 flex-wrap">
+      <div class="flex gap-1 p-1 bg-[#fff1e6] rounded-2xl w-fit" id="mode-toggle">
+        <button type="button" data-mode="single" class="mode-btn px-4 py-2 text-sm font-bold rounded-xl bg-white text-[#d82f1e] shadow-sm">Un producto</button>
+        <button type="button" data-mode="batch"  class="mode-btn px-4 py-2 text-sm font-bold rounded-xl text-[#7d6c5c]">Varios (lote)</button>
+      </div>
+      <label id="keep-fields-label" class="hidden items-center gap-2 cursor-pointer text-sm font-bold text-[#241a0d] bg-[#fff8f0] border border-[#e3ceba] rounded-2xl px-3 py-2">
+        <input type="checkbox" id="keep-fields" checked class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+        <span>Mantener Categoría / Marca / Proveedor / Subcategoría</span>
+      </label>
     </div>`}
     <form id="prod-form" class="grid grid-cols-2 gap-4">
       <label class="col-span-2"><span class="text-xs font-black text-[#7d6c5c] uppercase">Nombre *</span>
@@ -387,15 +393,9 @@ async function openProductForm(p, container) {
       </label>
     </form>
     ${isEdit ? '' : `
-    <div id="batch-panel" class="hidden mt-4 p-3 rounded-2xl bg-[#fff8f0] border border-[#e3ceba] space-y-3">
-      <label class="flex items-center gap-2 cursor-pointer">
-        <input type="checkbox" id="keep-fields" checked class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
-        <span class="text-sm font-bold">Mantener Categoría, Marca, Proveedor y Subcategoría para el siguiente</span>
-      </label>
-      <div>
-        <div class="text-xs font-black uppercase text-[#7d6c5c] mb-2">Productos en este lote (<span id="batch-count">0</span>)</div>
-        <div id="batch-list" class="text-sm text-[#7d6c5c] italic">Sin productos cargados aún</div>
-      </div>
+    <div id="batch-panel" class="hidden mt-4 p-3 rounded-2xl bg-[#fff8f0] border border-[#e3ceba]">
+      <div class="text-xs font-black uppercase text-[#7d6c5c] mb-2">Productos en este lote (<span id="batch-count">0</span>)</div>
+      <div id="batch-list" class="text-sm text-[#7d6c5c] italic">Sin productos cargados aún</div>
     </div>`}
   `;
   const footerSingle = `
@@ -431,6 +431,7 @@ async function openProductForm(p, container) {
         const single = el.querySelector('#footer-single');
         const bMode  = el.querySelector('#footer-batch');
         const panel  = el.querySelector('#batch-panel');
+        const keepLbl = el.querySelector('#keep-fields-label');
         el.querySelectorAll('.mode-btn').forEach(b => {
           const active = b.dataset.mode === m;
           b.classList.toggle('bg-white', active);
@@ -443,12 +444,14 @@ async function openProductForm(p, container) {
           bMode.classList.remove('hidden');
           bMode.classList.add('flex');
           panel.classList.remove('hidden');
+          if (keepLbl) { keepLbl.classList.remove('hidden'); keepLbl.classList.add('flex'); }
         } else {
           single.classList.remove('hidden');
           single.classList.add('flex');
           bMode.classList.add('hidden');
           bMode.classList.remove('flex');
           panel.classList.add('hidden');
+          if (keepLbl) { keepLbl.classList.add('hidden'); keepLbl.classList.remove('flex'); }
         }
       };
       if (!isEdit) {
@@ -519,8 +522,8 @@ async function openProductForm(p, container) {
         form.elements.price.value = 0;
         form.elements.stock_lomas.value = 0;
         form.elements.stock_banfield.value = 0;
-        form.elements.published_meli.checked = false;
-        form.elements.published_tn.checked = false;
+        // En lote, dejamos sticky los checkboxes de publicación: si querés publicar
+        // todo el lote a TN/MELI tildás una vez y queda. Desactivá manualmente para excepciones.
         if (!keepFields) {
           form.elements.category_id.value = '';
           form.elements.brand_id.value = '';
@@ -540,27 +543,23 @@ async function openProductForm(p, container) {
           return;
         }
         listEl.innerHTML = `
-          <div class="max-h-40 overflow-auto rounded-xl border border-[#e3ceba] bg-white">
-            <table class="w-full text-xs">
+          <div class="max-h-48 overflow-auto rounded-xl border border-[#e3ceba] bg-white">
+            <table class="w-full text-sm">
               <thead><tr class="bg-[#fff1e6] text-[#7d6c5c]">
-                <th class="text-left py-1.5 px-2">#</th>
-                <th class="text-left py-1.5 px-2">Nombre</th>
-                <th class="text-left py-1.5 px-2">Código</th>
-                <th class="text-right py-1.5 px-2">Precio</th>
-                <th class="text-center py-1.5 px-2">Lomas</th>
-                <th class="text-center py-1.5 px-2">Banf.</th>
-                <th class="text-center py-1.5 px-2">TN</th>
+                <th class="text-left py-2 px-3 w-8">#</th>
+                <th class="text-left py-2 px-3">Nombre</th>
+                <th class="text-right py-2 px-3">Costo</th>
+                <th class="text-right py-2 px-3">Precio</th>
+                <th class="text-center py-2 px-3">TN</th>
               </tr></thead>
               <tbody>
                 ${batch.map((b, i) => `
                   <tr class="border-t border-[#fff1e6]">
-                    <td class="py-1.5 px-2">${i+1}</td>
-                    <td class="py-1.5 px-2 font-bold">${b.name}</td>
-                    <td class="py-1.5 px-2 font-mono">${b.code}</td>
-                    <td class="py-1.5 px-2 text-right">${money(b.price)}</td>
-                    <td class="py-1.5 px-2 text-center">${b.stockLomas}</td>
-                    <td class="py-1.5 px-2 text-center">${b.stockBanf}</td>
-                    <td class="py-1.5 px-2 text-center">${b.tn ? '<span class="text-[#d82f1e] font-black">✓</span>' : '-'}</td>
+                    <td class="py-2 px-3 text-[#7d6c5c]">${i+1}</td>
+                    <td class="py-2 px-3 font-bold">${b.name}</td>
+                    <td class="py-2 px-3 text-right">${money(b.cost)}</td>
+                    <td class="py-2 px-3 text-right font-bold">${money(b.price)}</td>
+                    <td class="py-2 px-3 text-center">${b.tn ? '<span class="text-[#d82f1e] font-black">✓</span>' : '<span class="text-[#7d6c5c]">—</span>'}</td>
                   </tr>`).join('')}
               </tbody>
             </table>
@@ -590,7 +589,8 @@ async function openProductForm(p, container) {
           const saved = await persistOne(payload);
           if (!saved) return;
           batch.push({
-            id: saved.id, name: saved.name, code: saved.code, price: saved.price,
+            id: saved.id, name: saved.name, code: saved.code,
+            cost: saved.cost, price: saved.price,
             stockLomas: payload.qtyLomas, stockBanf: payload.qtyBanf,
             tn: !!payload.d.published_tn,
           });
