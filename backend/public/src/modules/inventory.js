@@ -771,6 +771,15 @@ async function openProductForm(p, container) {
 
       const persistOne = async ({ d, qtyLomas, qtyBanf }) => {
         if (!d.name?.trim()) { toast('Nombre requerido', 'error'); return null; }
+        // Validación específica para publicación en Tienda Nube: TN rechaza con
+        // 'cost must be greater than 0' / 'price must be greater than 0'. Detectamos
+        // acá para mostrar un error claro en lugar de un sync silencioso que falla.
+        if (d.published_tn) {
+          const costNum = Number(d.cost) || 0;
+          const priceNum = Number(d.price) || 0;
+          if (costNum <= 0) { toast('Para publicar en Tienda Nube el costo debe ser mayor a 0', 'error'); return null; }
+          if (priceNum <= 0) { toast('Para publicar en Tienda Nube el precio debe ser mayor a 0', 'error'); return null; }
+        }
         const saved = await P.save({ ...(p || {}), ...d });
         const prevLomas = isEdit ? stockLomas : 0;
         const prevBanf  = isEdit ? stockBanf  : 0;
