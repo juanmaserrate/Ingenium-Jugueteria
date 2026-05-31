@@ -52,7 +52,7 @@ export class TnClient {
   }
 
   // --- Images ---
-  uploadImage(tnProductId: string | number, data: { src?: string; attachment?: string; position?: number }) {
+  uploadImage(tnProductId: string | number, data: { src?: string; attachment?: string; filename?: string; position?: number }) {
     return this.http.post(`/products/${tnProductId}/images`, data).then((r) => r.data);
   }
   deleteImage(tnProductId: string | number, tnImageId: string | number) {
