@@ -93,7 +93,7 @@ export async function createPurchase(input: PurchaseHeaderInput, userId?: string
       number,
       branchId: input.branchId,
       supplierId,
-      invoiceType: input.invoiceType === 'X' ? 'X' : 'A',
+      invoiceType: ['A', 'B', 'X'].includes(input.invoiceType || '') ? input.invoiceType : 'A',
       invoiceNumber: input.invoiceNumber ?? null,
       marginPctDefault: input.marginPctDefault ?? 100,
       notes: input.notes ?? null,
@@ -150,7 +150,7 @@ export async function updatePurchase(
       where: { id },
       data: {
         supplierId: supplierId ?? undefined,
-        invoiceType: input.invoiceType ? (input.invoiceType === 'X' ? 'X' : 'A') : undefined,
+        invoiceType: input.invoiceType ? (['A', 'B', 'X'].includes(input.invoiceType) ? input.invoiceType : 'A') : undefined,
         invoiceNumber: input.invoiceNumber ?? undefined,
         marginPctDefault: input.marginPctDefault ?? undefined,
         notes: input.notes ?? undefined,

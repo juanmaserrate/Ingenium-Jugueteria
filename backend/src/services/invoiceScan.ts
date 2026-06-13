@@ -28,7 +28,7 @@ const TOOL = {
   input_schema: {
     type: 'object' as const,
     properties: {
-      invoiceType: { type: ['string', 'null'], enum: ['A', 'X', 'desconocido', null] },
+      invoiceType: { type: ['string', 'null'], enum: ['A', 'B', 'X', 'desconocido', null] },
       invoiceNumber: { type: ['string', 'null'] },
       supplierName: { type: ['string', 'null'] },
       lines: {

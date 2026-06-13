@@ -216,6 +216,7 @@ function renderEditor(el) {
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Tipo factura</span>
         <select id="h-invoice-type" class="ing-input mt-1" ${readonly ? 'disabled' : ''}>
           <option value="A" ${p.invoiceType === 'A' ? 'selected' : ''}>A</option>
+          <option value="B" ${p.invoiceType === 'B' ? 'selected' : ''}>B</option>
           <option value="X" ${p.invoiceType === 'X' ? 'selected' : ''}>X</option>
         </select>
       </label>
@@ -437,7 +438,7 @@ function wireEditorControls(el) {
       // Mergeamos: si ya había filas cargadas, agregamos las escaneadas al final.
       state.rows = [...state.rows, ...scanned];
       // Si la factura trae tipo/número y el header está vacío, los sugerimos.
-      if (res.invoiceType === 'A' || res.invoiceType === 'X') {
+      if (['A', 'B', 'X'].includes(res.invoiceType)) {
         const sel = el.querySelector('#h-invoice-type'); if (sel) sel.value = res.invoiceType;
       }
       if (res.invoiceNumber && el.querySelector('#h-invoice-number') && !el.querySelector('#h-invoice-number').value) {
