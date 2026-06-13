@@ -11,6 +11,8 @@ const lineSchema = z.object({
   costoUnitario: z.number().nullable().optional(),
   cantidad: z.number().nullable().optional(),
   barcode: z.string().nullable().optional(),
+  sku: z.string().nullable().optional(),
+  pvpSugerido: z.number().nullable().optional(),
   confianza: z.enum(['alta', 'media', 'baja']).optional(),
 });
 const extractSchema = z.object({
@@ -35,9 +37,11 @@ const TOOL = {
           type: 'object',
           properties: {
             nombre: { type: 'string' },
-            costoUnitario: { type: ['number', 'null'] },
+            costoUnitario: { type: ['number', 'null'], description: 'Costo NETO por unidad sin IVA: importe de la línea (con descuentos/bonificaciones aplicados) dividido la cantidad.' },
             cantidad: { type: ['number', 'null'] },
-            barcode: { type: ['string', 'null'] },
+            barcode: { type: ['string', 'null'], description: 'EAN/UPC/ISBN de 12-13 dígitos si está visible; si no, null.' },
+            sku: { type: ['string', 'null'], description: 'Código interno del proveedor (ej HAP-800913, [1101], 0002004) si lo hay.' },
+            pvpSugerido: { type: ['number', 'null'], description: 'Precio de venta al público sugerido si la factura lo trae (ej columna PVP), si no null.' },
             confianza: { type: 'string', enum: ['alta', 'media', 'baja'] },
           },
           required: ['nombre'],
@@ -48,21 +52,40 @@ const TOOL = {
   },
 };
 
-const SYSTEM = `Sos un asistente que extrae líneas de facturas de proveedores de una juguetería argentina.
+const SYSTEM = `Sos un asistente experto en facturas de proveedores de una juguetería/librería argentina.
 Devolvé SIEMPRE el resultado vía la herramienta extract_invoice.
-Reglas:
-- costoUnitario: el costo SIN IVA por unidad si está discriminado; si no, el que figure por unidad.
-- cantidad: entero (unidades compradas de esa línea).
-- barcode: solo si hay un EAN/UPC visible (12-13 dígitos); si no, null. NUNCA inventes códigos.
-- Si una línea es ilegible, incluila igual con confianza "baja" y los campos que puedas.
-- NO inventes precios ni nombres. Ignorá totales, subtotales, IVA y líneas que no sean productos.`;
+
+REGLA DE ORO DEL COSTO (la más importante):
+- costoUnitario = COSTO NETO por unidad SIN IVA, YA con descuentos y bonificaciones aplicados.
+- Calculalo como: (importe de la línea sin IVA, columna "Importe"/"Subtotal"/"Total" de la fila) ÷ cantidad.
+- NO uses ciegamente la columna "Precio unitario" / "Imp. Unit." / "Precio bruto": en muchos proveedores
+  esa columna es el precio de LISTA antes del descuento. Si hay "% Desc"/"Bonif.", el costo real es menor.
+- Ejemplos: si una fila dice "Precio unit. 29.999, -40%, Total 17.999,40" → costoUnitario = 17.999,40.
+  Si dice "Precio bruto 43.850, cantidad 2, Bruto 87.700" sin descuento → costoUnitario = 43.850.
+
+OTROS CAMPOS:
+- cantidad: entero, unidades compradas de esa línea.
+- barcode: SOLO si hay un EAN/UPC/ISBN de 12-13 dígitos en la fila (columnas "Código de Barras"/"ISBN").
+  Un ISBN de 13 dígitos (empieza 978/979) es un barcode válido. NUNCA inventes códigos.
+- sku: el código INTERNO del proveedor de esa fila (ej HAP-800913, [1101], 0002004, EDA-V1), si lo hay.
+- pvpSugerido: si la factura trae un precio de venta al público sugerido (columna "PVP"), ponelo; si no, null.
+  NO confundas el PVP con el costo: el PVP es mayor que el costo.
+
+QUÉ IGNORAR:
+- Líneas que NO son productos: envío/flete/correo, totales, subtotales, IVA, percepciones, bonificaciones globales.
+- Si la factura tiene páginas "Original" y "Duplicado"/"Triplicado" con las MISMAS líneas, devolvé cada
+  producto UNA sola vez (no dupliques).
+
+CALIDAD:
+- Si una línea es ilegible o dudás de un dato, incluila igual con confianza "baja" y los campos que puedas.
+- NO inventes precios ni nombres.`;
 
 export type ScanResult = {
   scanStatus: 'ok' | 'partial' | 'failed';
   invoiceType?: string | null;
   invoiceNumber?: string | null;
   supplierName?: string | null;
-  lines: Array<{ nombre: string; costoUnitario: number | null; cantidad: number | null; barcode: string | null; confianza: string }>;
+  lines: Array<{ nombre: string; costoUnitario: number | null; cantidad: number | null; barcode: string | null; sku: string | null; pvpSugerido: number | null; confianza: string }>;
 };
 
 /**
@@ -120,6 +143,8 @@ export async function scanInvoice(purchaseId: string, documentId: string): Promi
       costoUnitario: l.costoUnitario ?? null,
       cantidad: l.cantidad ?? null,
       barcode: l.barcode ?? null,
+      sku: l.sku ?? null,
+      pvpSugerido: l.pvpSugerido ?? null,
       confianza: l.confianza ?? 'media',
     }));
     const anyLow = lines.some((l) => l.confianza === 'baja' || l.costoUnitario == null || l.cantidad == null);

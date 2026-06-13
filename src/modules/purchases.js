@@ -416,7 +416,7 @@ function wireEditorControls(el) {
       // Auto-match por barcode/sku de las líneas extraídas
       let matches = [];
       try {
-        matches = await api('/api/purchases/match', { method: 'POST', body: { lines: res.lines.map((l) => ({ barcode: l.barcode, sku: null })) } });
+        matches = await api('/api/purchases/match', { method: 'POST', body: { lines: res.lines.map((l) => ({ barcode: l.barcode, sku: l.sku })) } });
       } catch { matches = []; }
       const m = Number(el.querySelector('#h-margin')?.value) || 100;
       const scanned = res.lines.map((l, i) => {
@@ -426,7 +426,7 @@ function wireEditorControls(el) {
           id: null, variantId: mt.variantId || null, productId: mt.productId || null,
           matchType: mt.matchType || 'new',
           rawName: l.nombre || mt.productName || 'Sin nombre',
-          barcode: l.barcode || '', sku: '',
+          barcode: l.barcode || '', sku: l.sku || '',
           qtyOrdered: l.cantidad || 1,
           unitCost,
           marginPct: m,
