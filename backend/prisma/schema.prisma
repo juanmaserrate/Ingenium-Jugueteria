@@ -31,6 +31,7 @@ model Branch {
   transfersIn  Transfer[]      @relation("TransferTo")
   transfersOut Transfer[]      @relation("TransferFrom")
   notifications Notification[]
+  purchases    Purchase[]
 
   @@map("branches")
 }
@@ -112,6 +113,7 @@ model Supplier {
 
   products Product[]
   checks   Check[]
+  purchases Purchase[]
 
   @@map("suppliers")
 }
@@ -180,6 +182,7 @@ model Variant {
   stocks     Stock[]
   tnMapping  VariantTnMapping?
   saleItems  SaleItem[]
+  purchaseItems PurchaseItem[]
 
   @@index([productId])
   @@map("variants")
@@ -724,4 +727,83 @@ model SyncConflict {
 
   @@index([status])
   @@map("sync_conflicts")
+}
+
+// =========================================================
+// COMPRAS
+// =========================================================
+
+model Purchase {
+  id               String    @id
+  number           Int                                          // nextYearlyCounter('purchase_'+branchId)
+  branchId         String    @map("branch_id")                  // sucursal "dueña" del documento
+  supplierId       String?   @map("supplier_id")                // heredado por todos los items
+  invoiceType      String    @default("A") @map("invoice_type") // "A" | "X"
+  invoiceNumber    String?   @map("invoice_number")
+  status           String    @default("draft")                  // draft | pending | received | cancelled
+  marginPctDefault Float     @default(100) @map("margin_pct_default")
+  itemsCount       Int       @default(0) @map("items_count")
+  totalCost        Float     @default(0) @map("total_cost")
+  notes            String?
+  scanStatus       String?   @map("scan_status")                // none | ok | partial | failed
+  userId           String?   @map("user_id")
+  receivedAt       DateTime? @map("received_at")                // ancla de atribución de ventas
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  branch    Branch             @relation(fields: [branchId], references: [id])
+  supplier  Supplier?          @relation(fields: [supplierId], references: [id])
+  items     PurchaseItem[]
+  documents PurchaseDocument[]
+
+  @@index([status])
+  @@index([branchId])
+  @@index([supplierId])
+  @@index([receivedAt])
+  @@map("purchases")
+}
+
+model PurchaseItem {
+  id               String    @id
+  purchaseId       String    @map("purchase_id")
+  variantId        String?   @map("variant_id")
+  productId        String?   @map("product_id")
+  matchType        String    @default("unmatched") @map("match_type") // matched_barcode | matched_sku | new | unmatched
+  rawName          String    @map("raw_name")
+  barcode          String?
+  sku              String?
+  qtyOrdered       Int       @map("qty_ordered")
+  unitCost         Float     @map("unit_cost")
+  marginPct        Float     @default(100) @map("margin_pct")
+  salePrice        Float     @map("sale_price")
+  qtyLomas         Int       @default(0) @map("qty_lomas")
+  qtyBanfield      Int       @default(0) @map("qty_banfield")
+  receivedAt       DateTime? @map("received_at")                  // copia de Purchase.receivedAt
+  tnConfig         Json?     @map("tn_config")
+  publishTn        Boolean   @default(false) @map("publish_tn")
+  createdProductId String?   @map("created_product_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  purchase Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  variant  Variant? @relation(fields: [variantId], references: [id])
+
+  @@index([purchaseId])
+  @@index([variantId])
+  @@index([barcode])
+  @@map("purchase_items")
+}
+
+model PurchaseDocument {
+  id          String   @id
+  purchaseId  String   @map("purchase_id")
+  storageKey  String   @map("storage_key")
+  url         String
+  contentType String   @map("content_type") // application/pdf | image/jpeg | image/png
+  filename    String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  purchase Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseId])
+  @@map("purchase_documents")
 }

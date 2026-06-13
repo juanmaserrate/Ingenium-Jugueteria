@@ -30,6 +30,10 @@ const schema = z.object({
 
   SYNC_WORKER_INTERVAL_MS: z.coerce.number().default(5000),
   SYNC_MAX_RETRIES: z.coerce.number().default(5),
+
+  // Escaneo de facturas con Claude (módulo de compras). Vacío → scan deshabilitado (503 controlado).
+  ANTHROPIC_API_KEY: z.string().default(''),
+  ANTHROPIC_MODEL: z.string().default('claude-sonnet-4-5'),
 });
 
 const parsed = schema.safeParse(process.env);
