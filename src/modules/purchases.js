@@ -240,6 +240,9 @@ function renderEditor(el) {
         <span class="material-symbols-outlined text-base">attach_file</span>
         <span class="text-sm font-bold">Adjuntar factura</span>
       </label>
+      <button id="btn-scan" class="ing-btn-secondary text-sm ${(p.documents || []).length ? '' : 'opacity-50 pointer-events-none'}">
+        <span class="material-symbols-outlined align-middle text-base">auto_awesome</span> Escanear con IA
+      </button>
       <span id="doc-status" class="text-xs text-[#7d6c5c]">${(p.documents || []).length} adjunto(s)</span>
       <div class="flex-1"></div>
       <button id="btn-apply-margin" class="ing-btn-secondary text-xs">Aplicar margen a todas</button>
@@ -385,10 +388,72 @@ function wireEditorControls(el) {
       await uploadFile(`/api/purchases/${encodeURIComponent(purchaseId)}/documents`, file);
       state.purchase = await api(`/api/purchases/${encodeURIComponent(purchaseId)}`);
       if (statusEl) statusEl.textContent = `${(state.purchase.documents || []).length} adjunto(s)`;
-      toast('Factura adjuntada', 'success');
+      const scanBtn = el.querySelector('#btn-scan');
+      scanBtn?.classList.remove('opacity-50', 'pointer-events-none');
+      toast('Factura adjuntada — podés escanearla con IA', 'success');
     } catch (err) {
       if (statusEl) statusEl.textContent = 'Error al adjuntar';
       toast(err.message, 'error');
+    }
+  });
+
+  // Escaneo de factura con IA: extrae líneas y las vuelca al preview (con auto-match).
+  const scanBtn = el.querySelector('#btn-scan');
+  scanBtn?.addEventListener('click', async () => {
+    const docs = state.purchase.documents || [];
+    if (!docs.length) { toast('Adjuntá una factura primero', 'warn'); return; }
+    const documentId = docs[docs.length - 1].id;
+    const statusEl = el.querySelector('#doc-status');
+    const prevTxt = statusEl?.textContent;
+    if (statusEl) statusEl.textContent = 'Escaneando con IA...';
+    scanBtn.classList.add('opacity-50', 'pointer-events-none');
+    try {
+      const res = await api(`/api/purchases/${encodeURIComponent(state.purchase.id)}/scan`, { method: 'POST', body: { documentId } });
+      if (res.scanStatus === 'failed' || !res.lines?.length) {
+        toast('No se pudieron extraer líneas. Cargá manual.', 'warn');
+        return;
+      }
+      // Auto-match por barcode/sku de las líneas extraídas
+      let matches = [];
+      try {
+        matches = await api('/api/purchases/match', { method: 'POST', body: { lines: res.lines.map((l) => ({ barcode: l.barcode, sku: null })) } });
+      } catch { matches = []; }
+      const m = Number(el.querySelector('#h-margin')?.value) || 100;
+      const scanned = res.lines.map((l, i) => {
+        const mt = matches[i] || {};
+        const unitCost = l.costoUnitario || 0;
+        return {
+          id: null, variantId: mt.variantId || null, productId: mt.productId || null,
+          matchType: mt.matchType || 'new',
+          rawName: l.nombre || mt.productName || 'Sin nombre',
+          barcode: l.barcode || '', sku: '',
+          qtyOrdered: l.cantidad || 1,
+          unitCost,
+          marginPct: m,
+          salePrice: round2(unitCost * (1 + m / 100)),
+          qtyLomas: 0, qtyBanfield: 0, tnConfig: null, publishTn: false,
+        };
+      });
+      // Mergeamos: si ya había filas cargadas, agregamos las escaneadas al final.
+      state.rows = [...state.rows, ...scanned];
+      // Si la factura trae tipo/número y el header está vacío, los sugerimos.
+      if (res.invoiceType === 'A' || res.invoiceType === 'X') {
+        const sel = el.querySelector('#h-invoice-type'); if (sel) sel.value = res.invoiceType;
+      }
+      if (res.invoiceNumber && el.querySelector('#h-invoice-number') && !el.querySelector('#h-invoice-number').value) {
+        el.querySelector('#h-invoice-number').value = res.invoiceNumber;
+      }
+      renderRows(el);
+      toast(`${scanned.length} línea(s) extraída(s)${res.scanStatus === 'partial' ? ' — revisá las dudosas' : ''}`, 'success');
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'SCAN_UNAVAILABLE') {
+        toast('Escaneo IA no configurado (falta API key). Cargá manual.', 'warn');
+      } else {
+        toast(err.message || 'Error al escanear', 'error');
+      }
+    } finally {
+      if (statusEl) statusEl.textContent = prevTxt || `${(state.purchase.documents || []).length} adjunto(s)`;
+      scanBtn.classList.remove('opacity-50', 'pointer-events-none');
     }
   });
 

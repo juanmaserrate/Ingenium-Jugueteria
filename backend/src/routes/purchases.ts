@@ -12,6 +12,7 @@ import {
   computeSuccess,
 } from '../services/purchases.js';
 import { savePurchaseDocument, savePurchaseStagingImage } from '../storage/documents.js';
+import { scanInvoice } from '../services/invoiceScan.js';
 
 const itemSchema = z.object({
   id: z.string().optional(),
@@ -90,6 +91,13 @@ export async function purchasesRoutes(app: FastifyInstance) {
   app.post('/purchases/:id/receive', async (req) => {
     const { id } = req.params as { id: string };
     return receivePurchase(id, req.user.userId);
+  });
+
+  // Escaneo de factura con IA (Claude). Devuelve líneas extraídas; no persiste.
+  app.post('/purchases/:id/scan', async (req) => {
+    const { id } = req.params as { id: string };
+    const { documentId } = z.object({ documentId: z.string() }).parse(req.body);
+    return scanInvoice(id, documentId);
   });
 
   // Auto-match de líneas contra variantes existentes (barcode/SKU). No persiste.
