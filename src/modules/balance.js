@@ -1,7 +1,7 @@
 // Saldo — totales facturados/devueltos del día/mes/año con filtros y export.
 
-import { getAll, get } from '../core/db.js';
-import { money, fmtDateTime, todayKey, monthKey, yearKey } from '../core/format.js';
+import { api } from '../core/api.js';
+import { money, fmtDateTime, todayKey } from '../core/format.js';
 import { activeBranchId } from '../core/auth.js';
 import { exportToXLSX } from '../core/xlsx.js';
 import { toast } from '../core/notifications.js';
@@ -10,67 +10,66 @@ import { loadFilter, saveFilter } from '../core/filter-state.js';
 const state = loadFilter('balance', {
   period: 'day',
   date: todayKey(),
-  filters: { method: '', category: '', brand: '', supplier: '', minAmount: 0, maxAmount: 0, seller: '' },
+  filters: { method: '', minAmount: 0, maxAmount: 0 },
 });
+let branches = [];
+let branchSel = activeBranchId() || '';
 
-export async function mount(el) { await render(el); }
+const AR = '-03:00';
+// Devuelve {from,to} ISO absolutos según el período seleccionado (en hora Argentina).
+function rangeISO() {
+  let fromD, toD;
+  if (state.period === 'day') {
+    fromD = new Date(`${state.date}T00:00:00.000${AR}`); toD = new Date(fromD.getTime() + 86400000);
+  } else if (state.period === 'month') {
+    const m = state.date.slice(0, 7); fromD = new Date(`${m}-01T00:00:00.000${AR}`);
+    const [y, mm] = m.split('-').map(Number); const ny = mm === 12 ? y + 1 : y, nm = mm === 12 ? 1 : mm + 1;
+    toD = new Date(`${ny}-${String(nm).padStart(2, '0')}-01T00:00:00.000${AR}`);
+  } else if (state.period === 'year') {
+    const y = state.date.slice(0, 4); fromD = new Date(`${y}-01-01T00:00:00.000${AR}`); toD = new Date(`${Number(y) + 1}-01-01T00:00:00.000${AR}`);
+  } else { // custom
+    fromD = new Date(`${state.customFrom || todayKey()}T00:00:00.000${AR}`);
+    toD = new Date(new Date(`${state.customTo || todayKey()}T00:00:00.000${AR}`).getTime() + 86400000);
+  }
+  return { from: fromD.toISOString(), to: toD.toISOString() };
+}
+
+export async function mount(el) {
+  try { branches = await api('/auth/branches'); } catch { branches = []; }
+  branchSel = activeBranchId() || '';
+  await render(el);
+}
 
 async function render(el) {
-  const branchId = activeBranchId();
-  const [sales, returns, products, categories, brands, suppliers, employees, methodsCfg] = await Promise.all([
-    getAll('sales'), getAll('returns'), getAll('products'), getAll('categories'),
-    getAll('brands'), getAll('suppliers'), getAll('employees'), get('config', 'payment_methods'),
-  ]);
-  const methods = methodsCfg?.value || [];
-  const productMap = Object.fromEntries(products.map(p => [p.id, p]));
-
   const f = state.filters;
-  const inPeriod = (iso) => {
-    if (state.period === 'day') return iso.startsWith(state.date);
-    if (state.period === 'month') return iso.slice(0, 7) === state.date.slice(0, 7);
-    if (state.period === 'year') return iso.slice(0, 4) === state.date.slice(0, 4);
-    if (state.period === 'custom') {
-      return iso.slice(0, 10) >= state.customFrom && iso.slice(0, 10) <= state.customTo;
-    }
-    return true;
-  };
+  const { from, to } = rangeISO();
+  let data;
+  try {
+    const qs = new URLSearchParams({ from, to });
+    if (branchSel) qs.set('branchId', branchSel);
+    data = await api(`/api/metrics/balance?${qs.toString()}`);
+  } catch {
+    el.innerHTML = `<div class="mb-6"><h1 class="text-3xl font-black text-[#241a0d]">Saldo</h1></div>
+      <div class="ing-card p-6 text-center"><span class="material-symbols-outlined text-4xl text-amber-500">cloud_off</span>
+      <p class="mt-2 font-bold">Sin conexión</p><p class="text-sm text-[#7d6c5c]">Los informes necesitan internet. El POS y la caja funcionan normalmente.</p></div>`;
+    return;
+  }
 
-  const matchSale = (s) => {
-    if (s.branch_id !== branchId) return false;
-    if (!inPeriod(s.datetime)) return false;
-    if (f.method && !s.payments?.some(p => p.method_id === f.method)) return false;
-    if (f.seller && s.seller_id !== f.seller) return false;
-    if (f.minAmount && s.total < f.minAmount) return false;
-    if (f.maxAmount && s.total > f.maxAmount) return false;
-    if (f.category || f.brand || f.supplier) {
-      const ok = (s.items || []).some(it => {
-        const p = productMap[it.product_id];
-        if (!p) return false;
-        if (f.category && p.category_id !== f.category) return false;
-        if (f.brand && p.brand_id !== f.brand) return false;
-        if (f.supplier && p.supplier_id !== f.supplier) return false;
-        return true;
-      });
-      if (!ok) return false;
-    }
-    return true;
-  };
+  // Filtros locales sobre la lista que devuelve el backend (medio de pago + monto)
+  let filteredSales = data.sales || [];
+  if (f.method) filteredSales = filteredSales.filter(s => (s.payments || []).some(p => p.methodName === f.method));
+  if (f.minAmount) filteredSales = filteredSales.filter(s => s.total >= f.minAmount);
+  if (f.maxAmount) filteredSales = filteredSales.filter(s => s.total <= f.maxAmount);
+  const filteredReturns = data.returns || [];
 
-  const filteredSales = sales.filter(matchSale);
-  const filteredReturns = returns.filter(r => r.branch_id === branchId && inPeriod(r.datetime));
-
-  const totalSales = filteredSales.reduce((s, x) => s + (x.total || 0), 0);
-  const totalReturns = filteredReturns.reduce((s, x) => s + (Math.max(0, -x.difference) || 0), 0); // lo que se devuelve a favor cliente
+  const usingLocalFilter = !!(f.method || f.minAmount || f.maxAmount);
+  const totalSales = usingLocalFilter ? filteredSales.reduce((s, x) => s + (x.total || 0), 0) : data.facturado;
+  const totalReturns = data.devuelto;
   const netBalance = totalSales - totalReturns;
   const ticketPromedio = filteredSales.length ? totalSales / filteredSales.length : 0;
-
-  // Breakdown por método
+  const methodNames = [...new Set((data.methods || []).map(m => m.methodName))];
   const byMethod = {};
-  for (const sale of filteredSales) {
-    for (const p of (sale.payments || [])) {
-      byMethod[p.method_id] = (byMethod[p.method_id] || 0) + (Number(p.amount) || 0);
-    }
-  }
+  for (const m of (data.methods || [])) byMethod[m.methodName] = m.amount;
 
   el.innerHTML = `
     <div class="mb-6 flex justify-between items-start gap-4">
@@ -78,9 +77,15 @@ async function render(el) {
         <h1 class="text-3xl font-black text-[#241a0d]">Saldo</h1>
         <p class="text-sm text-[#7d6c5c] mt-1">Ventas, devoluciones y totales por período</p>
       </div>
-      <button id="sb-export" class="ing-btn-secondary flex items-center gap-2">
-        <span class="material-symbols-outlined text-base">download</span> Exportar XLSX
-      </button>
+      <div class="flex gap-2 items-center">
+        <select id="sb-branch" class="ing-input">
+          <option value="">Total (todas)</option>
+          ${branches.map(b => `<option value="${b.id}" ${branchSel===b.id?'selected':''}>${b.name}</option>`).join('')}
+        </select>
+        <button id="sb-export" class="ing-btn-secondary flex items-center gap-2">
+          <span class="material-symbols-outlined text-base">download</span> XLSX
+        </button>
+      </div>
     </div>
 
     <div class="ing-card p-4 mb-4">
@@ -98,19 +103,7 @@ async function render(el) {
           <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Fecha</label><input id="sb-date" type="${state.period === 'year' ? 'number' : state.period === 'month' ? 'month' : 'date'}" value="${state.period === 'year' ? state.date.slice(0,4) : state.period === 'month' ? state.date.slice(0,7) : state.date}" class="ing-input mt-1" /></div>
         `}
         <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Medio</label>
-          <select id="f-method" class="ing-input mt-1"><option value="">Todos</option>${methods.map(m => `<option value="${m.id}" ${f.method===m.id?'selected':''}>${m.name}</option>`).join('')}</select>
-        </div>
-        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Categoría</label>
-          <select id="f-cat" class="ing-input mt-1"><option value="">Todas</option>${categories.map(c => `<option value="${c.id}" ${f.category===c.id?'selected':''}>${c.name}</option>`).join('')}</select>
-        </div>
-        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Marca</label>
-          <select id="f-brand" class="ing-input mt-1"><option value="">Todas</option>${brands.map(b => `<option value="${b.id}" ${f.brand===b.id?'selected':''}>${b.name}</option>`).join('')}</select>
-        </div>
-        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Proveedor</label>
-          <select id="f-sup" class="ing-input mt-1"><option value="">Todos</option>${suppliers.map(s => `<option value="${s.id}" ${f.supplier===s.id?'selected':''}>${s.name}</option>`).join('')}</select>
-        </div>
-        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Vendedor</label>
-          <select id="f-seller" class="ing-input mt-1"><option value="">Todos</option>${employees.map(e => `<option value="${e.id}" ${f.seller===e.id?'selected':''}>${e.name} ${e.lastname||''}</option>`).join('')}</select>
+          <select id="f-method" class="ing-input mt-1"><option value="">Todos</option>${methodNames.map(m => `<option value="${m}" ${f.method===m?'selected':''}>${m}</option>`).join('')}</select>
         </div>
         <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Monto desde</label><input id="f-min" type="number" value="${f.minAmount||0}" class="ing-input mt-1 w-28" /></div>
         <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Hasta</label><input id="f-max" type="number" value="${f.maxAmount||0}" class="ing-input mt-1 w-28" /></div>
@@ -144,14 +137,14 @@ async function render(el) {
         <table class="ing-table w-full">
           <thead><tr><th>#</th><th>Fecha</th><th>Cliente</th><th>Items</th><th class="text-right">Total</th><th>Medios</th></tr></thead>
           <tbody>
-            ${filteredSales.length ? filteredSales.sort((a,b) => b.datetime.localeCompare(a.datetime)).map(s => `
+            ${filteredSales.length ? filteredSales.map(s => `
               <tr>
                 <td class="font-mono font-bold">#${s.number}</td>
                 <td class="text-xs">${fmtDateTime(s.datetime)}</td>
-                <td class="text-sm">${s.customer_id ? 'Cliente' : 'Consumidor final'}</td>
-                <td class="text-center">${s.items?.length || 0}</td>
+                <td class="text-sm">${branchName(s.branchId)}</td>
+                <td class="text-center">—</td>
                 <td class="text-right font-bold text-[#d82f1e]">${money(s.total)}</td>
-                <td class="text-xs">${(s.payments || []).map(p => methods.find(m => m.id === p.method_id)?.name || p.method_id).join(', ')}</td>
+                <td class="text-xs">${(s.payments || []).map(p => p.methodName).join(', ')}</td>
               </tr>
             `).join('') : `<tr><td colspan="6" class="text-center py-8 text-[#7d6c5c]">Sin ventas en el período</td></tr>`}
           </tbody>
@@ -160,12 +153,11 @@ async function render(el) {
 
       <div class="ing-card p-4 h-fit">
         <h3 class="font-black mb-3">Por medio de pago</h3>
-        ${Object.keys(byMethod).length ? Object.entries(byMethod).sort((a,b) => b[1]-a[1]).map(([mId, amt]) => {
-          const m = methods.find(x => x.id === mId);
-          const pct = totalSales ? (amt / totalSales * 100) : 0;
+        ${Object.keys(byMethod).length ? Object.entries(byMethod).sort((a,b) => b[1]-a[1]).map(([name, amt]) => {
+          const pct = data.facturado ? (amt / data.facturado * 100) : 0;
           return `
             <div class="mb-3">
-              <div class="flex justify-between text-sm mb-1"><span class="font-bold">${m?.name || mId}</span><span>${money(amt)} <span class="text-[#7d6c5c]">(${pct.toFixed(1)}%)</span></span></div>
+              <div class="flex justify-between text-sm mb-1"><span class="font-bold">${name}</span><span>${money(amt)} <span class="text-[#7d6c5c]">(${pct.toFixed(1)}%)</span></span></div>
               <div class="h-2 bg-[#fff1e6] rounded-full overflow-hidden"><div class="h-full bg-[#d82f1e]" style="width:${pct}%"></div></div>
             </div>
           `;
@@ -175,6 +167,7 @@ async function render(el) {
   `;
 
   const R = () => { saveFilter('balance', state); render(el); };
+  el.querySelector('#sb-branch').addEventListener('change', ev => { branchSel = ev.target.value; render(el); });
   el.querySelectorAll('[data-period]').forEach(b => b.addEventListener('click', () => {
     state.period = b.dataset.period;
     if (state.period === 'custom' && !state.customFrom) { state.customFrom = todayKey(); state.customTo = todayKey(); }
@@ -186,23 +179,19 @@ async function render(el) {
   const to = el.querySelector('#sb-to'); if (to) to.addEventListener('change', ev => { state.customTo = ev.target.value; R(); });
 
   el.querySelector('#f-method').addEventListener('change', ev => { f.method = ev.target.value; R(); });
-  el.querySelector('#f-cat').addEventListener('change', ev => { f.category = ev.target.value; R(); });
-  el.querySelector('#f-brand').addEventListener('change', ev => { f.brand = ev.target.value; R(); });
-  el.querySelector('#f-sup').addEventListener('change', ev => { f.supplier = ev.target.value; R(); });
-  el.querySelector('#f-seller').addEventListener('change', ev => { f.seller = ev.target.value; R(); });
   el.querySelector('#f-min').addEventListener('change', ev => { f.minAmount = Number(ev.target.value) || 0; R(); });
   el.querySelector('#f-max').addEventListener('change', ev => { f.maxAmount = Number(ev.target.value) || 0; R(); });
 
   el.querySelector('#sb-export').addEventListener('click', () => {
     const salesRows = filteredSales.map(s => ({
-      Numero: s.number, Fecha: fmtDateTime(s.datetime), Items: s.items?.length || 0,
+      Numero: s.number, Fecha: fmtDateTime(s.datetime), Sucursal: branchName(s.branchId),
       Total: s.total,
-      Medios: (s.payments || []).map(p => `${methods.find(m => m.id === p.method_id)?.name || p.method_id}: ${p.amount}`).join(' · '),
+      Medios: (s.payments || []).map(p => `${p.methodName}: ${p.amount}`).join(' · '),
     }));
     const returnsRows = filteredReturns.map(r => ({
-      Numero: r.number, Fecha: fmtDateTime(r.datetime), Devuelto: r.returned_total, Llevado: r.taken_total, Diferencia: r.difference, Vale: r.credit_note_code || '',
+      Numero: r.number, Fecha: fmtDateTime(r.datetime), Devuelto: r.returnedTotal, Llevado: r.takenTotal, Diferencia: r.difference,
     }));
-    const mediosRows = Object.entries(byMethod).map(([mId, amt]) => ({ Medio: methods.find(x => x.id === mId)?.name || mId, Monto: amt }));
+    const mediosRows = Object.entries(byMethod).map(([name, amt]) => ({ Medio: name, Monto: amt }));
     exportToXLSX({
       filename: `saldo_${state.period}_${state.date}.xlsx`,
       sheets: [
@@ -213,4 +202,8 @@ async function render(el) {
     });
     toast('Exportado', 'success');
   });
+}
+
+function branchName(id) {
+  return branches.find(b => b.id === id)?.name || '—';
 }

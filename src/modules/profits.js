@@ -1,93 +1,44 @@
-// Ganancias — P&L mensual: ventas - devoluciones - gastos - cheques.
-// Snapshots mensuales + comparativo mes anterior.
+// Ganancias — P&L mensual desde el backend (consolidado o por sucursal).
+// ventas - COGS - gastos - cheques - devoluciones a cliente.
 
-import { getAll, put } from '../core/db.js';
+import { api } from '../core/api.js';
 import { money, monthKey } from '../core/format.js';
 import { activeBranchId } from '../core/auth.js';
 import { exportToXLSX } from '../core/xlsx.js';
 import { toast } from '../core/notifications.js';
-import * as Audit from '../core/audit.js';
 
-const state = {
-  month: monthKey(),
-};
+const state = { month: monthKey() };
+let branches = [];
+let branchSel = activeBranchId() || '';
 
-export async function mount(el) { await render(el); }
+export async function mount(el) {
+  try { branches = await api('/auth/branches'); } catch { branches = []; }
+  branchSel = activeBranchId() || '';
+  await render(el);
+}
 
-async function compute(month, branchId) {
-  const [sales, returns, expenses, products, checks] = await Promise.all([
-    getAll('sales'), getAll('returns'), getAll('expenses'), getAll('products'), getAll('checks'),
-  ]);
-  const inMonth = (d) => (d || '').slice(0, 7) === month;
-  const productMap = Object.fromEntries(products.map(p => [p.id, p]));
-
-  const monthSales = sales.filter(s => s.branch_id === branchId && inMonth(s.datetime));
-  const monthReturns = returns.filter(r => r.branch_id === branchId && inMonth(r.datetime));
-  const monthExp = expenses.filter(e => e.branch_id === branchId && inMonth(e.datetime));
-  const monthChecks = checks.filter(c => c.branch_id === branchId && c.due_date && inMonth(c.due_date));
-
-  const grossSales = monthSales.reduce((s, sl) => s + (sl.total || 0), 0);
-
-  // Lo facturado neto: ventas + delta de devoluciones (positivo suma, negativo resta)
-  const returnsInvoicedDelta = monthReturns.reduce((s, r) => {
-    const d = r.invoiced_delta != null ? r.invoiced_delta : r.difference;
-    return s + (Number(d) || 0);
-  }, 0);
-  const netInvoiced = grossSales + returnsInvoicedDelta;
-  // Monto que sale de la empresa por devoluciones puras o a favor del cliente
-  const returnedValue = monthReturns.reduce((s, r) => {
-    const d = r.invoiced_delta != null ? r.invoiced_delta : r.difference;
-    return s + Math.max(0, -(Number(d) || 0));
-  }, 0);
-
-  const cogs = monthSales.reduce((acc, sale) => {
-    return acc + (sale.items || []).reduce((a, it) => a + (Number(it.cost_snapshot) || 0) * (Number(it.qty) || 0), 0);
-  }, 0);
-
-  const grossProfit = grossSales - cogs;
-  const totalExpenses = monthExp.reduce((s, e) => s + (Number(e.amount) || 0), 0);
-  const totalChecks = monthChecks.reduce((s, c) => s + (Number(c.amount) || 0), 0);
-  const netProfit = grossProfit - totalExpenses - totalChecks - returnedValue;
-
-  const byCat = {};
-  for (const sale of monthSales) {
-    for (const it of (sale.items || [])) {
-      const p = productMap[it.product_id];
-      const catId = p?.category_id || '—';
-      const sub = Number(it.subtotal) || 0;
-      const cost = (Number(it.cost_snapshot) || 0) * (Number(it.qty) || 0);
-      if (!byCat[catId]) byCat[catId] = { sales: 0, cost: 0, qty: 0 };
-      byCat[catId].sales += sub;
-      byCat[catId].cost += cost;
-      byCat[catId].qty += Number(it.qty) || 0;
-    }
-  }
-
-  const byDay = {};
-  for (const s of monthSales) {
-    const d = s.datetime.slice(0, 10);
-    byDay[d] = (byDay[d] || 0) + (s.total || 0);
-  }
-
-  return { grossSales, netInvoiced, returnedValue, cogs, grossProfit, totalExpenses, totalChecks, netProfit, monthSales, monthReturns, monthExp, monthChecks, byCat, byDay };
+async function fetchPnl(month) {
+  const qs = new URLSearchParams({ month });
+  if (branchSel) qs.set('branchId', branchSel);
+  return api(`/api/metrics/profits?${qs.toString()}`);
 }
 
 async function render(el) {
-  const branchId = activeBranchId();
-  const pnl = await compute(state.month, branchId);
-
-  const prevDate = new Date(state.month + '-01'); prevDate.setMonth(prevDate.getMonth() - 1);
-  const prevMonth = monthKey(prevDate);
-  const prev = await compute(prevMonth, branchId);
-
-  const categories = await getAll('categories');
-  const catMap = Object.fromEntries(categories.map(c => [c.id, c.name]));
-
-  const delta = (cur, prv) => {
-    if (!prv) return null;
-    const d = ((cur - prv) / prv) * 100;
-    return isFinite(d) ? d : null;
-  };
+  let pnl, prev;
+  try {
+    pnl = await fetchPnl(state.month);
+    const prevDate = new Date(state.month + '-01T12:00:00-03:00'); prevDate.setMonth(prevDate.getMonth() - 1);
+    const prevMonth = monthKey(prevDate);
+    prev = await fetchPnl(prevMonth).catch(() => null);
+    el.dataset.prevMonth = prevMonth;
+  } catch {
+    el.innerHTML = `<div class="mb-6"><h1 class="text-3xl font-black text-[#241a0d]">Ganancias</h1></div>
+      <div class="ing-card p-6 text-center"><span class="material-symbols-outlined text-4xl text-amber-500">cloud_off</span>
+      <p class="mt-2 font-bold">Sin conexión</p><p class="text-sm text-[#7d6c5c]">Los informes necesitan internet. El POS y la caja funcionan normalmente.</p></div>`;
+    return;
+  }
+  const prevMonth = el.dataset.prevMonth;
+  const delta = (cur, prv) => { if (!prv) return null; const d = ((cur - prv) / prv) * 100; return isFinite(d) ? d : null; };
 
   el.innerHTML = `
     <div class="mb-6 flex justify-between items-start gap-4">
@@ -96,34 +47,35 @@ async function render(el) {
         <p class="text-sm text-[#7d6c5c] mt-1">P&amp;L mensual · Comparativo vs. mes anterior</p>
       </div>
       <div class="flex items-center gap-2">
+        <select id="pm-branch" class="ing-input">
+          <option value="">Total (todas)</option>
+          ${branches.map(b => `<option value="${b.id}" ${branchSel===b.id?'selected':''}>${b.name}</option>`).join('')}
+        </select>
         <input type="month" value="${state.month}" id="pm-month" class="ing-input" />
-        <button id="pm-snapshot" class="ing-btn-secondary flex items-center gap-2"><span class="material-symbols-outlined text-base">save</span> Guardar snapshot</button>
         <button id="pm-export" class="ing-btn-secondary flex items-center gap-2"><span class="material-symbols-outlined text-base">download</span> XLSX</button>
       </div>
     </div>
 
     <div class="grid grid-cols-4 gap-3 mb-5">
-      ${kpi('Ventas brutas', money(pnl.grossSales), delta(pnl.grossSales, prev.grossSales), 'point_of_sale')}
-      ${kpi('COGS', money(pnl.cogs), delta(pnl.cogs, prev.cogs), 'inventory_2', true)}
-      ${kpi('Ganancia bruta', money(pnl.grossProfit), delta(pnl.grossProfit, prev.grossProfit), 'trending_up')}
-      ${kpi('Ganancia neta', money(pnl.netProfit), delta(pnl.netProfit, prev.netProfit), 'savings')}
+      ${kpi('Ventas brutas', money(pnl.ventasBrutas), delta(pnl.ventasBrutas, prev?.ventasBrutas), 'point_of_sale')}
+      ${kpi('COGS', money(pnl.cogs), delta(pnl.cogs, prev?.cogs), 'inventory_2', true)}
+      ${kpi('Ganancia bruta', money(pnl.gananciaBruta), delta(pnl.gananciaBruta, prev?.gananciaBruta), 'trending_up')}
+      ${kpi('Ganancia neta', money(pnl.gananciaNeta), delta(pnl.gananciaNeta, prev?.gananciaNeta), 'savings')}
     </div>
 
     <div class="grid grid-cols-[1fr_360px] gap-5">
       <div class="ing-card p-5">
         <h3 class="font-black text-lg mb-4">Estado de resultados · ${state.month}</h3>
         <div class="space-y-2">
-          ${row('Ventas del mes', pnl.grossSales)}
-          ${row('Ajuste por devoluciones', pnl.netInvoiced - pnl.grossSales, false, 'text-[#7d6c5c]')}
-          ${rowBold('Facturado neto', pnl.netInvoiced)}
+          ${rowBold('Ventas del mes', pnl.ventasBrutas)}
           ${row('Costo de mercadería vendida', -pnl.cogs, false, 'text-red-600')}
-          ${rowBold('Ganancia bruta', pnl.grossProfit, 'text-green-700')}
+          ${rowBold('Ganancia bruta', pnl.gananciaBruta, 'text-green-700')}
           <div class="py-1"></div>
-          ${row('Gastos operativos', -pnl.totalExpenses, false, 'text-red-600')}
-          ${row('Devoluciones a clientes', -pnl.returnedValue, false, 'text-red-600')}
-          ${row('Cheques (vencen en el mes)', -pnl.totalChecks, false, 'text-red-600')}
+          ${row('Gastos operativos', -pnl.gastos, false, 'text-red-600')}
+          ${row('Devoluciones a clientes', -pnl.devueltoCliente, false, 'text-red-600')}
+          ${row('Cheques (vencen en el mes)', -pnl.cheques, false, 'text-red-600')}
           <div class="border-t border-[#fff1e6] pt-3">
-            ${rowBold('GANANCIA NETA', pnl.netProfit, pnl.netProfit >= 0 ? 'text-green-700' : 'text-red-600', 'text-xl')}
+            ${rowBold('GANANCIA NETA', pnl.gananciaNeta, pnl.gananciaNeta >= 0 ? 'text-green-700' : 'text-red-600', 'text-xl')}
           </div>
         </div>
       </div>
@@ -131,28 +83,26 @@ async function render(el) {
       <div class="space-y-4">
         <div class="ing-card p-4">
           <h3 class="font-black mb-3">Por categoría</h3>
-          ${Object.keys(pnl.byCat).length ? Object.entries(pnl.byCat).sort((a,b) => b[1].sales - a[1].sales).map(([cId, v]) => {
-            const margin = v.sales ? ((v.sales - v.cost) / v.sales) * 100 : 0;
-            const width = pnl.grossSales ? (v.sales / pnl.grossSales * 100) : 0;
+          ${(pnl.byCategory || []).length ? pnl.byCategory.map(v => {
+            const width = pnl.ventasBrutas ? (v.sales / pnl.ventasBrutas * 100) : 0;
             return `
               <div class="mb-3">
                 <div class="flex justify-between text-sm mb-1">
-                  <span class="font-bold">${catMap[cId] || cId}</span>
-                  <span class="text-xs">${money(v.sales)} · <span class="text-green-700">${margin.toFixed(1)}%</span></span>
+                  <span class="font-bold">${v.name}</span>
+                  <span class="text-xs">${money(v.sales)} · <span class="text-green-700">${(v.marginPct||0).toFixed(1)}%</span></span>
                 </div>
                 <div class="h-1.5 bg-[#fff1e6] rounded-full"><div class="h-full bg-[#d82f1e] rounded-full" style="width:${width}%"></div></div>
-              </div>
-            `;
+              </div>`;
           }).join('') : '<div class="text-sm text-[#7d6c5c]">Sin datos</div>'}
         </div>
 
         <div class="ing-card p-4">
           <h3 class="font-black mb-3">Comparación</h3>
           <div class="text-sm space-y-1">
-            <div class="flex justify-between"><span class="text-[#7d6c5c]">Mes actual</span><span class="font-bold">${money(pnl.netProfit)}</span></div>
-            <div class="flex justify-between"><span class="text-[#7d6c5c]">Mes anterior (${prevMonth})</span><span class="font-bold">${money(prev.netProfit)}</span></div>
+            <div class="flex justify-between"><span class="text-[#7d6c5c]">Mes actual</span><span class="font-bold">${money(pnl.gananciaNeta)}</span></div>
+            <div class="flex justify-between"><span class="text-[#7d6c5c]">Mes anterior (${prevMonth})</span><span class="font-bold">${money(prev?.gananciaNeta || 0)}</span></div>
             ${(function() {
-              const d = delta(pnl.netProfit, prev.netProfit);
+              const d = delta(pnl.gananciaNeta, prev?.gananciaNeta);
               return d === null ? '' : `<div class="flex justify-between pt-2 border-t border-[#fff1e6]"><span class="font-bold">Variación</span><span class="font-bold ${d >= 0 ? 'text-green-700' : 'text-red-600'}">${d >= 0 ? '+' : ''}${d.toFixed(1)}%</span></div>`;
             })()}
           </div>
@@ -161,9 +111,9 @@ async function render(el) {
     </div>
   `;
 
+  el.querySelector('#pm-branch').addEventListener('change', ev => { branchSel = ev.target.value; render(el); });
   el.querySelector('#pm-month').addEventListener('change', (ev) => { state.month = ev.target.value; render(el); });
-  el.querySelector('#pm-snapshot').addEventListener('click', async () => { await saveSnapshot(state.month, branchId, pnl); toast('Snapshot guardado', 'success'); });
-  el.querySelector('#pm-export').addEventListener('click', () => exportPnl(pnl, state.month, catMap));
+  el.querySelector('#pm-export').addEventListener('click', () => exportPnl(pnl, state.month));
 }
 
 function kpi(label, value, deltaPct, icon, inverse = false) {
@@ -189,40 +139,24 @@ function rowBold(label, amount, color = 'text-[#241a0d]', size = '') {
   return `<div class="flex justify-between font-bold ${color} ${size}"><span>${label}</span><span>${money(amount)}</span></div>`;
 }
 
-async function saveSnapshot(month, branchId, pnl) {
-  const id = `${month}_${branchId}`;
-  const rec = {
-    id, month, branch_id: branchId, snapshot_at: new Date().toISOString(),
-    gross_sales: pnl.grossSales, net_invoiced: pnl.netInvoiced,
-    cogs: pnl.cogs, gross_profit: pnl.grossProfit, expenses: pnl.totalExpenses,
-    checks: pnl.totalChecks, returns: pnl.returnedValue, net_profit: pnl.netProfit,
-  };
-  await put('monthly_pnl', rec);
-  await Audit.log({ action: 'snapshot', entity: 'ganancias', entity_id: id, after: rec, description: `Snapshot ${month}` });
-}
-
-function exportPnl(pnl, month, catMap) {
+function exportPnl(pnl, month) {
   const pnlRows = [
-    { Concepto: 'Ventas del mes', Monto: pnl.grossSales },
-    { Concepto: 'Ajuste devoluciones', Monto: pnl.netInvoiced - pnl.grossSales },
-    { Concepto: 'Facturado neto', Monto: pnl.netInvoiced },
+    { Concepto: 'Ventas del mes', Monto: pnl.ventasBrutas },
     { Concepto: 'COGS', Monto: -pnl.cogs },
-    { Concepto: 'Ganancia bruta', Monto: pnl.grossProfit },
-    { Concepto: 'Gastos', Monto: -pnl.totalExpenses },
-    { Concepto: 'Devoluciones', Monto: -pnl.returnedValue },
-    { Concepto: 'Cheques', Monto: -pnl.totalChecks },
-    { Concepto: 'GANANCIA NETA', Monto: pnl.netProfit },
+    { Concepto: 'Ganancia bruta', Monto: pnl.gananciaBruta },
+    { Concepto: 'Gastos', Monto: -pnl.gastos },
+    { Concepto: 'Devoluciones', Monto: -pnl.devueltoCliente },
+    { Concepto: 'Cheques', Monto: -pnl.cheques },
+    { Concepto: 'GANANCIA NETA', Monto: pnl.gananciaNeta },
   ];
-  const catRows = Object.entries(pnl.byCat).map(([c, v]) => ({
-    Categoria: catMap[c] || c, Ventas: v.sales, Costo: v.cost, Margen: v.sales - v.cost, Unidades: v.qty,
+  const catRows = (pnl.byCategory || []).map(v => ({
+    Categoria: v.name, Ventas: v.sales, Costo: v.cost, Margen: v.sales - v.cost, Unidades: v.qty,
   }));
-  const dayRows = Object.entries(pnl.byDay).sort((a,b) => a[0].localeCompare(b[0])).map(([d, total]) => ({ Fecha: d, Ventas: total }));
   exportToXLSX({
     filename: `ganancias_${month}.xlsx`,
     sheets: [
       { name: 'P&L', rows: pnlRows },
       { name: 'Por categoría', rows: catRows },
-      { name: 'Por día', rows: dayRows },
     ],
   });
   toast('Exportado', 'success');

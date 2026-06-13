@@ -1,7 +1,7 @@
 // Contribución Marginal — ranking por producto, categoría, marca, proveedor.
 // CM = Ventas - Costo (sin asignar gastos fijos).
 
-import { getAll } from '../core/db.js';
+import { api } from '../core/api.js';
 import { money, monthKey } from '../core/format.js';
 import { activeBranchId } from '../core/auth.js';
 import { exportToXLSX } from '../core/xlsx.js';
@@ -13,54 +13,29 @@ const state = loadFilter('contribution', {
   month: monthKey(),
   top: 50,
 });
+let branches = [];
+let branchSel = activeBranchId() || '';
 
-export async function mount(el) { await render(el); }
+export async function mount(el) {
+  try { branches = await api('/auth/branches'); } catch { branches = []; }
+  branchSel = activeBranchId() || '';
+  await render(el);
+}
 
 async function render(el) {
-  const branchId = activeBranchId();
-  const [sales, products, categories, brands, suppliers] = await Promise.all([
-    getAll('sales'), getAll('products'), getAll('categories'), getAll('brands'), getAll('suppliers'),
-  ]);
-  const inMonth = (d) => d.slice(0, 7) === state.month;
-  const monthSales = sales.filter(s => s.branch_id === branchId && inMonth(s.datetime));
-
-  const productMap = Object.fromEntries(products.map(p => [p.id, p]));
-  const catMap = Object.fromEntries(categories.map(c => [c.id, c.name]));
-  const brandMap = Object.fromEntries(brands.map(b => [b.id, b.name]));
-  const supMap = Object.fromEntries(suppliers.map(s => [s.id, s.name]));
-
-  // Agregar por producto
-  const agg = {};
-  for (const sale of monthSales) {
-    for (const it of (sale.items || [])) {
-      const p = productMap[it.product_id];
-      if (!p) continue;
-      const key = keyFor(state.view, p);
-      if (!agg[key]) agg[key] = { label: labelFor(state.view, p, catMap, brandMap, supMap), sales: 0, cost: 0, qty: 0, n: 0 };
-      const sub = Number(it.subtotal) || 0;
-      const cost = (Number(it.cost_snapshot) || 0) * (Number(it.qty) || 0);
-      agg[key].sales += sub;
-      agg[key].cost += cost;
-      agg[key].qty += Number(it.qty) || 0;
-      agg[key].n += 1;
-    }
+  let data;
+  try {
+    const qs = new URLSearchParams({ month: state.month, view: state.view, topN: String(state.top) });
+    if (branchSel) qs.set('branchId', branchSel);
+    data = await api(`/api/metrics/contribution?${qs.toString()}`);
+  } catch {
+    el.innerHTML = offlineBanner('Contribución');
+    return;
   }
-  const totalSales = Object.values(agg).reduce((s, v) => s + v.sales, 0);
-  const totalMargin = Object.values(agg).reduce((s, v) => s + (v.sales - v.cost), 0);
-
-  const rows = Object.entries(agg).map(([k, v]) => ({
-    key: k,
-    label: v.label,
-    sales: v.sales,
-    cost: v.cost,
-    cm: v.sales - v.cost,
-    cmPct: v.sales ? ((v.sales - v.cost) / v.sales) * 100 : 0,
-    shareOfSales: totalSales ? (v.sales / totalSales) * 100 : 0,
-    shareOfCM: totalMargin ? ((v.sales - v.cost) / totalMargin) * 100 : 0,
-    qty: v.qty,
-  })).sort((a, b) => b.cm - a.cm);
-
-  const topRows = rows.slice(0, state.top);
+  const totalSales = data.totalSales || 0;
+  const totalMargin = data.totalCM || 0;
+  const rows = (data.rows || []).map(r => ({ label: r.name, sales: r.sales, cost: r.cost, cm: r.cm, cmPct: r.cmPct, shareOfSales: r.shareOfSales, qty: r.qty }));
+  const topRows = rows;
 
   el.innerHTML = `
     <div class="mb-6 flex justify-between items-start gap-4">
@@ -69,6 +44,10 @@ async function render(el) {
         <p class="text-sm text-[#7d6c5c] mt-1">Ranking de aporte · Ventas − COGS</p>
       </div>
       <div class="flex items-center gap-2">
+        <select id="cm-branch" class="ing-input">
+          <option value="">Total (todas)</option>
+          ${branches.map(b => `<option value="${b.id}" ${branchSel===b.id?'selected':''}>${b.name}</option>`).join('')}
+        </select>
         <input type="month" value="${state.month}" id="cm-month" class="ing-input" />
         <select id="cm-top" class="ing-input">
           ${[20, 50, 100, 500].map(n => `<option value="${n}" ${n===state.top?'selected':''}>Top ${n}</option>`).join('')}
@@ -119,6 +98,7 @@ async function render(el) {
   `;
 
   el.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => { state.view = b.dataset.view; saveFilter('contribution', state); render(el); }));
+  el.querySelector('#cm-branch').addEventListener('change', (ev) => { branchSel = ev.target.value; render(el); });
   el.querySelector('#cm-month').addEventListener('change', (ev) => { state.month = ev.target.value; saveFilter('contribution', state); render(el); });
   el.querySelector('#cm-top').addEventListener('change', (ev) => { state.top = Number(ev.target.value) || 50; saveFilter('contribution', state); render(el); });
   el.querySelector('#cm-export').addEventListener('click', () => {
@@ -137,17 +117,12 @@ async function render(el) {
   });
 }
 
-function keyFor(view, p) {
-  if (view === 'product') return p.id;
-  if (view === 'category') return p.category_id || '—';
-  if (view === 'brand') return p.brand_id || '—';
-  if (view === 'supplier') return p.supplier_id || '—';
-  return '—';
-}
-function labelFor(view, p, catMap, brandMap, supMap) {
-  if (view === 'product') return p.name + ' ' + (p.code ? `(${p.code})` : '');
-  if (view === 'category') return catMap[p.category_id] || 'Sin categoría';
-  if (view === 'brand') return brandMap[p.brand_id] || 'Sin marca';
-  if (view === 'supplier') return supMap[p.supplier_id] || 'Sin proveedor';
-  return '—';
+function offlineBanner(titulo) {
+  return `
+    <div class="mb-6"><h1 class="text-3xl font-black text-[#241a0d]">${titulo}</h1></div>
+    <div class="ing-card p-6 text-center">
+      <span class="material-symbols-outlined text-4xl text-amber-500">cloud_off</span>
+      <p class="mt-2 font-bold text-[#241a0d]">Sin conexión</p>
+      <p class="text-sm text-[#7d6c5c]">Los informes necesitan internet. El POS y la caja funcionan normalmente.</p>
+    </div>`;
 }
