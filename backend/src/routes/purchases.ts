@@ -10,7 +10,7 @@ import {
   autoMatch,
   receivePurchase,
 } from '../services/purchases.js';
-import { savePurchaseDocument } from '../storage/documents.js';
+import { savePurchaseDocument, savePurchaseStagingImage } from '../storage/documents.js';
 
 const itemSchema = z.object({
   id: z.string().optional(),
@@ -111,5 +111,15 @@ export async function purchasesRoutes(app: FastifyInstance) {
     if (!file) throw new Error('No file uploaded');
     const buf = await file.toBuffer();
     return savePurchaseDocument(id, buf, file.mimetype ?? 'application/octet-stream', file.filename ?? 'documento');
+  });
+
+  // Imagen de producto en staging (para items que se publicarán en TN al recibir).
+  app.post('/purchases/:id/staging-image', async (req) => {
+    const { id } = req.params as { id: string };
+    await getPurchase(id);
+    const file = await (req as any).file();
+    if (!file) throw new Error('No file uploaded');
+    const buf = await file.toBuffer();
+    return savePurchaseStagingImage(id, buf, file.mimetype ?? 'image/jpeg', file.filename ?? 'imagen');
   });
 }

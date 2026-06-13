@@ -39,3 +39,22 @@ export async function savePurchaseDocument(
 export async function getPurchaseDocumentBuffer(storageKey: string): Promise<Buffer> {
   return driver.getBuffer(storageKey);
 }
+
+/**
+ * Guarda una imagen de producto en "staging" durante la carga de la compra
+ * (el producto todavía no existe; se crea al recibir). Devuelve url + key para
+ * referenciarla en PurchaseItem.tnConfig.images. NO crea registro ProductImage:
+ * eso ocurre en receivePurchase, una vez que el producto existe.
+ */
+export async function savePurchaseStagingImage(
+  purchaseId: string,
+  data: Buffer,
+  contentType: string,
+  filename: string,
+): Promise<{ url: string; storageKey: string }> {
+  const extFromName = filename.includes('.') ? filename.split('.').pop()!.toLowerCase() : '';
+  const ext = extFromName || (contentType.split('/')[1] ?? 'jpg');
+  const key = `purchases/${purchaseId}/staging/${randomId()}.${ext}`;
+  const { url } = await driver.save(key, data, contentType);
+  return { url, storageKey: key };
+}

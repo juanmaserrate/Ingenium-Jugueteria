@@ -7,6 +7,7 @@ import { api, ApiError, uploadFile } from '../core/api.js';
 import { money, round2 } from '../core/format.js';
 import { toast } from '../core/notifications.js';
 import { confirmModal } from '../components/modal.js';
+import { openTnProductModal } from '../components/tn-product-form.js';
 import { Suppliers } from '../repos/catalog.js';
 import { activeBranchId } from '../core/auth.js';
 
@@ -248,6 +249,7 @@ function renderEditor(el) {
           <th class="text-center">${escapeHtml(lomasName)}</th>
           <th class="text-center">${escapeHtml(banfName)}</th>
           <th class="text-center">Match</th>
+          <th class="text-center">TN</th>
           ${readonly ? '' : '<th></th>'}
         </tr></thead>
         <tbody id="items-body"></tbody>
@@ -385,6 +387,11 @@ function renderRows(el) {
       <td class="w-16 text-center">${inp('qtyLomas', r.qtyLomas, 'number')}</td>
       <td class="w-16 text-center">${inp('qtyBanfield', r.qtyBanfield, 'number')}</td>
       <td class="text-center">${matchBadge(r)}</td>
+      <td class="text-center">
+        <button data-tn="${i}" class="px-2 py-1 rounded-full text-xs font-bold ${r.publishTn ? 'bg-[#d82f1e] text-white' : 'bg-gray-100 text-[#7d6c5c]'}" ${readonly ? 'disabled' : ''} title="Publicar en Tienda Nube">
+          ${r.publishTn ? 'TN ✓' : 'TN'}
+        </button>
+      </td>
       ${readonly ? '' : `<td class="text-right"><button data-del="${i}" class="p-1 hover:bg-red-50 rounded-full"><span class="material-symbols-outlined text-base text-red-500">delete</span></button></td>`}
     </tr>
   `).join('');
@@ -418,7 +425,26 @@ function renderRows(el) {
     });
     const delBtn = tr.querySelector('[data-del]');
     delBtn?.addEventListener('click', () => { state.rows.splice(idx, 1); renderRows(el); });
+    const tnBtn = tr.querySelector('[data-tn]');
+    tnBtn?.addEventListener('click', () => openTnForRow(el, idx));
   });
+}
+
+// Abre el modal TN para una fila: requiere compra guardada (para subir imágenes a staging).
+async function openTnForRow(el, idx) {
+  const row = state.rows[idx];
+  if (!row) return;
+  const purchaseId = await ensurePurchaseSaved(el);
+  // El índice puede haberse mantenido; reusar la fila vigente.
+  const liveRow = state.rows[idx] || row;
+  const uploadImage = purchaseId
+    ? async (file) => uploadFile(`/api/purchases/${encodeURIComponent(purchaseId)}/staging-image`, file)
+    : null;
+  const cfg = await openTnProductModal({ initial: liveRow.tnConfig, uploadImage });
+  if (cfg === null) return; // cancelado
+  liveRow.tnConfig = cfg;
+  liveRow.publishTn = true; // al guardar datos TN, queda marcado para publicar
+  renderRows(el);
 }
 
 async function matchRow(el, idx) {

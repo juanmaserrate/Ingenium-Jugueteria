@@ -368,6 +368,17 @@ export async function receivePurchase(id: string, userId?: string) {
       );
       const variantId = created.variants[0]?.id ?? null;
       if (variantId) affectedVariantIds.add(variantId);
+      // Imágenes cargadas en staging durante la compra → ProductImage + push a TN.
+      const stagingImages: Array<{ url?: string; storageKey?: string }> = Array.isArray(tn.images) ? tn.images : [];
+      let pos = 0;
+      for (const img of stagingImages) {
+        if (!img?.url || !img?.storageKey) continue;
+        const imageId = randomId();
+        await prisma.productImage.create({
+          data: { id: imageId, productId: created.id, url: img.url, storageKey: img.storageKey, position: pos++ },
+        });
+        if (item.publishTn) await enqueueSync('push_image_create', { productId: created.id, imageId });
+      }
       await prisma.purchaseItem.update({
         where: { id: item.id },
         data: { receivedAt, createdProductId: created.id, variantId },
