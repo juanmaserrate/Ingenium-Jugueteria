@@ -2,17 +2,21 @@ import { pbkdf2Sync, randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../db.js';
 
+// El sistema usa SIEMPRE los ids con prefijo br_ (los que genera el seed del frontend).
 const BRANCHES = [
-  { id: 'lomas',       name: 'Lomas de Zamora', address: '' },
-  { id: 'banfield',    name: 'Banfield',        address: '' },
-  // Espejos con prefijo br_ para compatibilidad con el seed del frontend.
-  { id: 'br_lomas',    name: 'Lomas',           address: 'Lomas de Zamora' },
-  { id: 'br_banfield', name: 'Banfield',        address: 'Banfield' },
+  { id: 'br_lomas',    name: 'Lomas',    address: 'Lomas de Zamora' },
+  { id: 'br_banfield', name: 'Banfield', address: 'Banfield' },
+];
+
+// Sucursales legacy (sin prefijo) que un seed viejo creó duplicadas. Se limpian al arrancar.
+const LEGACY_BRANCHES = [
+  { id: 'lomas',    to: 'br_lomas' },
+  { id: 'banfield', to: 'br_banfield' },
 ];
 
 const DEFAULT_ADMIN = {
   id: 'admin',
-  branchId: 'lomas',
+  branchId: 'br_lomas',
   name: 'Admin',
   lastname: 'Ingenium',
   role: 'admin',
@@ -115,6 +119,8 @@ export async function runSeed() {
     }
   }
 
+  const legacyCleaned = await cleanupLegacyBranches();
+
   return {
     branches: BRANCHES.map((b) => b.id),
     adminCreated: !existingAdmin,
@@ -123,7 +129,40 @@ export async function runSeed() {
     adminPassword: !existingAdmin ? DEFAULT_ADMIN.password : '(ya existia)',
     frontendUsersCreated,
     frontendUsersRehashed,
+    legacyCleaned,
   };
+}
+
+/**
+ * Elimina las sucursales legacy duplicadas ('lomas'/'banfield') que un seed viejo
+ * creó junto a las br_*. Idempotente: reasigna lo que dependa de ellas a la br_
+ * correspondiente y luego borra. Si quedan dependencias raras (FK), no rompe el
+ * arranque — registra el error y deja la branch para revisión manual.
+ */
+async function cleanupLegacyBranches(): Promise<string[]> {
+  const cleaned: string[] = [];
+  for (const { id, to } of LEGACY_BRANCHES) {
+    const exists = await prisma.branch.findUnique({ where: { id } });
+    if (!exists) continue;
+    try {
+      // Reasignar referencias conocidas a la sucursal br_ correcta.
+      await prisma.user.updateMany({ where: { branchId: id }, data: { branchId: to } });
+      await prisma.sale.updateMany({ where: { branchId: id }, data: { branchId: to } });
+      await prisma.return.updateMany({ where: { branchId: id }, data: { branchId: to } });
+      await prisma.cashMovement.updateMany({ where: { branchId: id }, data: { branchId: to } });
+      await prisma.expense.updateMany({ where: { branchId: id }, data: { branchId: to } });
+      await prisma.purchase.updateMany({ where: { branchId: id }, data: { branchId: to } });
+      await prisma.employee.updateMany({ where: { branchId: id }, data: { branchId: to } });
+      await prisma.notification.updateMany({ where: { branchId: id }, data: { branchId: to } });
+      // Stock y transfers usan composite/relaciones más complejas: si hay, el delete fallará
+      // y lo dejamos para revisión (no debería haber: el front siempre usó br_*).
+      await prisma.branch.delete({ where: { id } });
+      cleaned.push(id);
+    } catch (err) {
+      console.warn(`No se pudo limpiar la sucursal legacy '${id}':`, (err as Error).message);
+    }
+  }
+  return cleaned;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
