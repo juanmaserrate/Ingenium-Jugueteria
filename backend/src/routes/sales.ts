@@ -15,6 +15,7 @@ const paymentSchema = z.object({
   methodId: z.string(),
   methodName: z.string(),
   amount: z.number(),
+  affectsCash: z.boolean().optional(),
 });
 
 const saleSchema = z.object({

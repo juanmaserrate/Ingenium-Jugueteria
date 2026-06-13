@@ -11,7 +11,14 @@ export type SalePaymentInput = {
   methodId: string;
   methodName: string;
   amount: number;
+  // ¿Este medio de pago impacta la caja (efectivo)? Lo decide la config del front.
+  affectsCash?: boolean;
 };
+
+// Fallback cuando el front no manda affectsCash: tratamos efectivo por id conocido.
+function isCashMethod(methodId: string) {
+  return ['cash', 'efectivo', 'efvo'].includes((methodId || '').toLowerCase());
+}
 
 export type SaleItemInput = {
   variantId: string;
@@ -176,20 +183,27 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
       });
     }
 
-    // Cash movement (only cash-like payments affect drawer; simplified: all go in)
-    await tx.cashMovement.create({
-      data: {
-        id: randomId(),
-        datetime,
-        branchId: input.branchId,
-        type: 'sale',
-        amountIn: total,
-        amountOut: 0,
-        description: `Venta #${number}`,
-        refId: saleId,
-        userId: input.sellerId ?? null,
-      },
-    });
+    // Movimiento de caja: SOLO los pagos que afectan caja (efectivo) entran al cajón.
+    // Una venta 100% con tarjeta/transferencia no mueve la caja.
+    const cashIn = input.payments.reduce(
+      (s, p) => s + ((p.affectsCash ?? isCashMethod(p.methodId)) ? p.amount : 0),
+      0,
+    );
+    if (cashIn !== 0) {
+      await tx.cashMovement.create({
+        data: {
+          id: randomId(),
+          datetime,
+          branchId: input.branchId,
+          type: 'sale',
+          amountIn: cashIn,
+          amountOut: 0,
+          description: `Venta #${number}`,
+          refId: saleId,
+          userId: input.sellerId ?? null,
+        },
+      });
+    }
 
     return saleId;
   });
@@ -229,20 +243,28 @@ export async function cancelSale(id: string, opts: { userId?: string; reason?: s
         reason: `Cancel sale ${id}`,
       });
     }
-    // Compensating cash movement
-    await tx.cashMovement.create({
-      data: {
-        id: randomId(),
-        datetime: new Date(),
-        branchId: sale.branchId,
-        type: 'adjustment',
-        amountIn: 0,
-        amountOut: sale.total,
-        description: `Cancelaci\u00f3n venta #${sale.number}${opts.reason ? ' - ' + opts.reason : ''}`,
-        refId: id,
-        userId: opts.userId ?? null,
-      },
+    // Movimiento compensatorio: revierte SOLO el efectivo que esta venta meti\u00f3 en caja
+    // (puede ser menos que el total si se pag\u00f3 parte con tarjeta/transferencia).
+    const booked = await tx.cashMovement.aggregate({
+      _sum: { amountIn: true },
+      where: { refId: id, type: 'sale' },
     });
+    const cashToReverse = booked._sum.amountIn ?? 0;
+    if (cashToReverse > 0) {
+      await tx.cashMovement.create({
+        data: {
+          id: randomId(),
+          datetime: new Date(),
+          branchId: sale.branchId,
+          type: 'adjustment',
+          amountIn: 0,
+          amountOut: cashToReverse,
+          description: `Cancelaci\u00f3n venta #${sale.number}${opts.reason ? ' - ' + opts.reason : ''}`,
+          refId: id,
+          userId: opts.userId ?? null,
+        },
+      });
+    }
     await tx.sale.update({ where: { id }, data: { status: 'cancelled' } });
   });
 

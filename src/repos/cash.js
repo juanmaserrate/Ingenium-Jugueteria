@@ -1,88 +1,87 @@
-// Movimientos de caja: ventas efvo, devoluciones efvo, gastos, apertura, cierre, ajustes.
-import { put, getAll, newId } from '../core/db.js';
-import * as Audit from '../core/audit.js';
+// Movimientos de caja — MIGRADO A "TODO ONLINE".
+// El servidor (Postgres) es la única fuente de verdad. Mantiene las mismas firmas que
+// la versión IndexedDB para no romper a los consumidores (topbar, módulo Caja, checks).
+
+import { api } from '../core/api.js';
 import { emit, EV } from '../core/events.js';
-import { todayKey } from '../core/format.js';
 
 export async function balance(branchId) {
-  const all = await getAll('cash_movements');
-  return all.filter(m => m.branch_id === branchId)
-    .reduce((s, m) => s + (m.amount_in || 0) - (m.amount_out || 0), 0);
+  const r = await api(`/api/cash/${encodeURIComponent(branchId)}/balance`);
+  return r?.balance || 0;
 }
 
-// ¿Hay apertura de caja hoy y todavía no se cerró?
+// Lista de movimientos (shape backend → front snake_case, con balance_after calculado).
+export async function listMovements(branchId) {
+  const raw = await api(`/api/cash/${encodeURIComponent(branchId)}/movements`);
+  let running = 0;
+  return (raw || []).map((m) => {
+    running += (m.amountIn || 0) - (m.amountOut || 0);
+    return {
+      id: m.id, type: m.type, datetime: m.datetime, branch_id: m.branchId,
+      amount_in: m.amountIn || 0, amount_out: m.amountOut || 0,
+      balance_after: running, description: m.description || '', ref_id: m.refId || null,
+    };
+  });
+}
+
+export async function listExpenses(branchId) {
+  const raw = await api(`/api/cash/${encodeURIComponent(branchId)}/expenses`);
+  return (raw || []).map((e) => ({
+    id: e.id, datetime: e.datetime, branch_id: e.branchId, amount: e.amount,
+    category: e.category || 'General', description: e.description || '',
+    payment_method_id: e.paymentMethodId || 'cash',
+  }));
+}
+
+// ¿Hay apertura de caja hoy y todavía no se cerró? (lo calcula el backend en hora AR)
 export async function isDayOpen(branchId) {
-  const all = await getAll('cash_movements');
-  const today = todayKey();
-  const todays = all.filter(m => m.branch_id === branchId && m.datetime?.startsWith(today));
-  const opened = todays.some(m => m.type === 'opening');
-  const closed = todays.some(m => m.type === 'closing');
-  return opened && !closed;
+  try {
+    const s = await api(`/api/cash/${encodeURIComponent(branchId)}/status`);
+    return !!s?.isOpen;
+  } catch {
+    return false;
+  }
 }
 
+export async function dayStatus(branchId) {
+  return api(`/api/cash/${encodeURIComponent(branchId)}/status`);
+}
+
+// Balance "a una fecha" — el backend no expone corte temporal; aproximamos sumando
+// los movimientos hasta esa fecha desde la lista completa.
 export async function balanceAt(branchId, isoDateTime) {
-  const all = await getAll('cash_movements');
-  return all.filter(m => m.branch_id === branchId && m.datetime <= isoDateTime)
-    .reduce((s, m) => s + (m.amount_in || 0) - (m.amount_out || 0), 0);
+  const raw = await api(`/api/cash/${encodeURIComponent(branchId)}/movements`);
+  return (raw || [])
+    .filter((m) => new Date(m.datetime).toISOString() <= isoDateTime)
+    .reduce((s, m) => s + (m.amountIn || 0) - (m.amountOut || 0), 0);
 }
 
-export async function move({ branchId, type, amountIn = 0, amountOut = 0, description = '', refId = null, userId = null }) {
-  const cur = await balance(branchId);
-  const mv = {
-    id: newId('cm'),
-    type,
-    datetime: new Date().toISOString(),
-    branch_id: branchId,
-    amount_in: Number(amountIn) || 0,
-    amount_out: Number(amountOut) || 0,
-    balance_after: cur + (Number(amountIn) || 0) - (Number(amountOut) || 0),
-    description,
-    ref_id: refId,
-    user_id: userId,
-  };
-  await put('cash_movements', mv);
-  await Audit.log({
-    action: 'cash_move', entity: 'caja', entity_id: mv.id,
-    after: mv, description: `${type} — ${description} (${mv.amount_in ? '+' : '-'}${mv.amount_in || mv.amount_out})`,
+export async function move({ branchId, type, amountIn = 0, amountOut = 0, description = '', userId = null }) {
+  const mv = await api('/api/cash/move', {
+    method: 'POST',
+    body: { branchId, type, amountIn: Number(amountIn) || 0, amountOut: Number(amountOut) || 0, description },
   });
   emit(EV.CASH_MOVED, mv);
   return mv;
 }
 
 export async function openDay(branchId, initialAmount, userId) {
-  const all = await getAll('cash_movements');
-  const already = all.find(m => m.branch_id === branchId && m.type === 'opening' && m.datetime.startsWith(todayKey()));
-  if (already) throw new Error('La caja ya fue abierta hoy');
-  return move({ branchId, type: 'opening', amountIn: initialAmount, description: 'Apertura de caja', userId });
+  const r = await api('/api/cash/open', { method: 'POST', body: { branchId, initialAmount: Number(initialAmount) || 0 } });
+  emit(EV.CASH_MOVED, r);
+  return r;
 }
 
 export async function closeDay(branchId, countedAmount, userId) {
-  const expected = await balance(branchId);
-  const diff = countedAmount - expected;
-  return move({
-    branchId, type: 'closing',
-    amountIn: diff > 0 ? diff : 0,
-    amountOut: diff < 0 ? -diff : 0,
-    description: `Cierre de caja · Esperado ${expected.toFixed(2)} / Contado ${countedAmount.toFixed(2)} / Dif ${diff.toFixed(2)}`,
-    userId,
-  });
+  const r = await api('/api/cash/close', { method: 'POST', body: { branchId, countedAmount: Number(countedAmount) || 0 } });
+  emit(EV.CASH_MOVED, r);
+  return r;
 }
 
 export async function addExpense({ branchId, amount, category, description, paymentMethodId, userId }) {
-  const exp = {
-    id: newId('exp'),
-    datetime: new Date().toISOString(),
-    branch_id: branchId,
-    amount: Number(amount) || 0,
-    category: category || 'General',
-    description,
-    payment_method_id: paymentMethodId,
-    user_id: userId,
-  };
-  await put('expenses', exp);
-  await Audit.log({ action: 'create', entity: 'gasto', entity_id: exp.id, after: exp, description: `Gasto ${category}: ${description}` });
-  if (paymentMethodId === 'cash') {
-    await move({ branchId, type: 'expense', amountOut: exp.amount, description: `Gasto: ${description}`, refId: exp.id, userId });
-  }
-  return exp;
+  const r = await api('/api/cash/expense', {
+    method: 'POST',
+    body: { branchId, amount: Number(amount) || 0, category: category || 'General', description, paymentMethodId },
+  });
+  emit(EV.CASH_MOVED, r);
+  return r;
 }

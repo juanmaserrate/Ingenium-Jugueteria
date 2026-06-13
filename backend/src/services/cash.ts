@@ -6,6 +6,27 @@ export async function balance(branchId: string): Promise<number> {
   return movements.reduce((s, m) => s + m.amountIn - m.amountOut, 0);
 }
 
+export async function listMovements(branchId: string) {
+  return prisma.cashMovement.findMany({ where: { branchId }, orderBy: { datetime: 'asc' } });
+}
+
+export async function listExpenses(branchId: string) {
+  return prisma.expense.findMany({ where: { branchId }, orderBy: { datetime: 'desc' } });
+}
+
+// Estado de la caja del día: si hubo apertura hoy y todavía no se cerró.
+// Usa hora Argentina (-03:00) para el "hoy".
+export async function dayStatus(branchId: string) {
+  const now = new Date();
+  const ar = new Date(now.getTime() - 3 * 3600 * 1000);
+  const todayKey = ar.toISOString().slice(0, 10);
+  const movements = await prisma.cashMovement.findMany({ where: { branchId }, orderBy: { datetime: 'desc' }, take: 200 });
+  const todays = movements.filter((m) => new Date(m.datetime.getTime() - 3 * 3600 * 1000).toISOString().slice(0, 10) === todayKey);
+  const opened = todays.some((m) => m.type === 'opening');
+  const closed = todays.some((m) => m.type === 'closing');
+  return { isOpen: opened && !closed, openedToday: opened, closedToday: closed };
+}
+
 export async function move(input: {
   branchId: string;
   type: string;
@@ -61,7 +82,7 @@ export async function addExpense(input: {
   paymentMethodId?: string;
   userId?: string;
 }) {
-  await prisma.expense.create({
+  const expense = await prisma.expense.create({
     data: {
       id: randomId(),
       datetime: new Date(),
@@ -73,11 +94,17 @@ export async function addExpense(input: {
       userId: input.userId ?? null,
     },
   });
-  return move({
-    branchId: input.branchId,
-    type: 'expense',
-    amountOut: input.amount,
-    description: input.description ?? input.category ?? 'Gasto',
-    userId: input.userId,
-  });
+  // Solo impacta la caja si el gasto se pagó en efectivo.
+  const isCash = ['cash', 'efectivo', 'efvo'].includes((input.paymentMethodId ?? 'cash').toLowerCase());
+  if (isCash) {
+    await move({
+      branchId: input.branchId,
+      type: 'expense',
+      amountOut: input.amount,
+      description: input.description ?? input.category ?? 'Gasto',
+      refId: expense.id,
+      userId: input.userId,
+    });
+  }
+  return expense;
 }

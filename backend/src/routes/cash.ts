@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { balance, openDay, closeDay, addExpense, move } from '../services/cash.js';
+import { balance, openDay, closeDay, addExpense, move, listMovements, listExpenses, dayStatus } from '../services/cash.js';
 
 export async function cashRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate);
@@ -8,6 +8,21 @@ export async function cashRoutes(app: FastifyInstance) {
   app.get('/cash/:branchId/balance', async (req) => {
     const { branchId } = req.params as { branchId: string };
     return { balance: await balance(branchId) };
+  });
+
+  app.get('/cash/:branchId/movements', async (req) => {
+    const { branchId } = req.params as { branchId: string };
+    return listMovements(branchId);
+  });
+
+  app.get('/cash/:branchId/expenses', async (req) => {
+    const { branchId } = req.params as { branchId: string };
+    return listExpenses(branchId);
+  });
+
+  app.get('/cash/:branchId/status', async (req) => {
+    const { branchId } = req.params as { branchId: string };
+    return dayStatus(branchId);
   });
 
   app.post('/cash/open', async (req) => {

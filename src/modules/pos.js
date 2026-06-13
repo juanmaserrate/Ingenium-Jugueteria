@@ -611,11 +611,16 @@ async function confirmSale(root) {
       discountFixed: it.discount_fixed ? Number(it.discount_fixed) : null,
       priceOverridden: false,
     })),
-    payments: (sale.payments || []).map(p => ({
-      methodId: p.method_id,
-      methodName: state.methods.find(m => m.id === p.method_id)?.name || p.method_id,
-      amount: Number(p.amount) || 0,
-    })),
+    payments: (sale.payments || []).map(p => {
+      const m = state.methods.find(x => x.id === p.method_id);
+      return {
+        methodId: p.method_id,
+        methodName: m?.name || p.method_id,
+        amount: Number(p.amount) || 0,
+        // El backend usa esto para saber si el pago entra a la caja (efectivo).
+        affectsCash: m ? !!m.affects_cash : (p.method_id === 'cash'),
+      };
+    }),
     discountGlobalPct: sale.discount_global_pct || null,
     discountGlobalFixed: sale.discount_global_fixed || null,
     surchargeGlobalPct: sale.surcharge_global_pct || null,

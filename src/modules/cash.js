@@ -22,16 +22,30 @@ export async function mount(el) {
 
 async function render(el) {
   const branchId = activeBranchId();
-  const [all, expenses, methodsCfg] = await Promise.all([getAll('cash_movements'), getAll('expenses'), get('config', 'payment_methods')]);
-  const moves = all.filter(m => m.branch_id === branchId).sort((a, b) => b.datetime.localeCompare(a.datetime));
-  const balance = moves.reduce((s, m) => s + (m.amount_in || 0) - (m.amount_out || 0), 0);
+  let movesAsc, expenses, status;
+  try {
+    [movesAsc, expenses, status] = await Promise.all([
+      Cash.listMovements(branchId), Cash.listExpenses(branchId), Cash.dayStatus(branchId),
+    ]);
+  } catch (e) {
+    if (e?.status === 0) {
+      el.innerHTML = `<div class="ing-card p-6 text-center"><span class="material-symbols-outlined text-4xl text-amber-500">cloud_off</span>
+        <p class="mt-2 font-bold">Sin conexión</p><p class="text-sm text-[#7d6c5c]">La caja necesita internet para operar.</p></div>`;
+      return;
+    }
+    throw e;
+  }
+  const methodsCfg = await get('config', 'payment_methods');
+  // movesAsc viene ascendente (con balance_after correcto); para mostrar, descendente.
+  const moves = movesAsc.slice().sort((a, b) => b.datetime.localeCompare(a.datetime));
+  const balance = movesAsc.reduce((s, m) => s + (m.amount_in || 0) - (m.amount_out || 0), 0);
   const methods = methodsCfg?.value || [];
 
   const todayMoves = moves.filter(m => m.datetime.startsWith(todayKey()));
   const todayIn = todayMoves.reduce((s, m) => s + (m.amount_in || 0), 0);
   const todayOut = todayMoves.reduce((s, m) => s + (m.amount_out || 0), 0);
-  const openedToday = todayMoves.some(m => m.type === 'opening');
-  const closedToday = todayMoves.some(m => m.type === 'closing');
+  const openedToday = !!status?.openedToday;
+  const closedToday = !!status?.closedToday;
 
   el.innerHTML = `
     <div class="mb-6 flex justify-between items-start gap-4">
