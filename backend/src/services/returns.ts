@@ -22,11 +22,18 @@ export type ReturnInput = {
   tnOrderId?: string | null;
 };
 
-export async function listReturns(opts: { branchId?: string } = {}) {
+export async function listReturns(opts: { branchId?: string; from?: string; to?: string } = {}) {
+  const where: any = {};
+  if (opts.branchId) where.branchId = opts.branchId;
+  if (opts.from || opts.to) {
+    where.datetime = {};
+    if (opts.from) where.datetime.gte = new Date(opts.from);
+    if (opts.to) where.datetime.lt = new Date(opts.to);
+  }
   return prisma.return.findMany({
-    where: opts.branchId ? { branchId: opts.branchId } : undefined,
+    where: Object.keys(where).length ? where : undefined,
     orderBy: { datetime: 'desc' },
-    take: 200,
+    take: 1000,
   });
 }
 

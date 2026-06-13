@@ -39,8 +39,11 @@ export async function salesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate);
 
   app.get('/sales', async (req) => {
-    const q = req.query as { branchId?: string; limit?: string };
-    return listSales({ branchId: q.branchId, limit: q.limit ? parseInt(q.limit) : undefined });
+    const q = req.query as { branchId?: string; limit?: string; from?: string; to?: string; status?: string; source?: string };
+    return listSales({
+      branchId: q.branchId, limit: q.limit ? parseInt(q.limit) : undefined,
+      from: q.from, to: q.to, status: q.status, source: q.source,
+    });
   });
 
   app.get('/sales/:id', async (req) => {

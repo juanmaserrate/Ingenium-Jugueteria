@@ -39,12 +39,21 @@ export type SaleInput = {
   datetime?: Date;
 };
 
-export async function listSales(opts: { branchId?: string; limit?: number } = {}) {
+export async function listSales(opts: { branchId?: string; limit?: number; from?: string; to?: string; status?: string; source?: string } = {}) {
+  const where: any = {};
+  if (opts.branchId) where.branchId = opts.branchId;
+  if (opts.status) where.status = opts.status;
+  if (opts.source) where.source = opts.source;
+  if (opts.from || opts.to) {
+    where.datetime = {};
+    if (opts.from) where.datetime.gte = new Date(opts.from);
+    if (opts.to) where.datetime.lt = new Date(opts.to);
+  }
   return prisma.sale.findMany({
-    where: opts.branchId ? { branchId: opts.branchId } : undefined,
+    where: Object.keys(where).length ? where : undefined,
     include: { items: true, payments: true, customer: true },
     orderBy: { datetime: 'desc' },
-    take: opts.limit ?? 200,
+    take: opts.limit ?? 1000,
   });
 }
 
