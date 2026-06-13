@@ -31,11 +31,28 @@ export type PurchaseItemInput = {
 export type PurchaseHeaderInput = {
   branchId: string;
   supplierId?: string | null;
+  supplierName?: string | null; // para upsert: los proveedores viven en IndexedDB del front
   invoiceType?: string; // "A" | "X"
   invoiceNumber?: string | null;
   marginPctDefault?: number;
   notes?: string | null;
 };
+
+/**
+ * Los proveedores se administran en IndexedDB del frontend; Postgres puede no
+ * tenerlos. Para no violar el FK de Purchase.supplierId, lo reflejamos on-demand:
+ * si viene supplierId + supplierName, upsert (crea si falta, no pisa el nombre si existe).
+ * Devuelve el id válido o null.
+ */
+async function ensureSupplier(id?: string | null, name?: string | null): Promise<string | null> {
+  if (!id) return null;
+  await prisma.supplier.upsert({
+    where: { id },
+    create: { id, name: name?.trim() || id },
+    update: {},
+  });
+  return id;
+}
 
 function computeTotals(items: PurchaseItemInput[]) {
   const itemsCount = items.length;
@@ -69,12 +86,13 @@ export async function createPurchase(input: PurchaseHeaderInput, userId?: string
   if (!input.branchId) throw new ValidationError('branchId requerido');
   const id = randomId();
   const number = await nextYearlyCounter(`purchase_${input.branchId}`);
+  const supplierId = await ensureSupplier(input.supplierId, input.supplierName);
   const created = await prisma.purchase.create({
     data: {
       id,
       number,
       branchId: input.branchId,
-      supplierId: input.supplierId ?? null,
+      supplierId,
       invoiceType: input.invoiceType === 'X' ? 'X' : 'A',
       invoiceNumber: input.invoiceNumber ?? null,
       marginPctDefault: input.marginPctDefault ?? 100,
@@ -123,12 +141,15 @@ export async function updatePurchase(
   } as PurchaseItemInput));
 
   const { itemsCount, totalCost } = computeTotals(items);
+  const supplierId = input.supplierId !== undefined
+    ? await ensureSupplier(input.supplierId, input.supplierName)
+    : undefined;
 
   const updated = await prisma.$transaction(async (tx) => {
     await tx.purchase.update({
       where: { id },
       data: {
-        supplierId: input.supplierId ?? undefined,
+        supplierId: supplierId ?? undefined,
         invoiceType: input.invoiceType ? (input.invoiceType === 'X' ? 'X' : 'A') : undefined,
         invoiceNumber: input.invoiceNumber ?? undefined,
         marginPctDefault: input.marginPctDefault ?? undefined,

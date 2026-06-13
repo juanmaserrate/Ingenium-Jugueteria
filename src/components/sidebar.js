@@ -9,6 +9,7 @@ const NAV = [
 
   { section: 'Catálogo' },
   { path: '/inventory',    label: 'Inventario',       icon: 'inventory_2' },
+  { path: '/purchases',    label: 'Compras',          icon: 'shopping_cart' },
 
   { section: 'Tienda Nube' },
   { path: '/ventas-web',          label: 'Ventas Web',        icon: 'shopping_bag' },

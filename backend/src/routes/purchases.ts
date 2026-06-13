@@ -33,6 +33,7 @@ const itemSchema = z.object({
 const headerSchema = z.object({
   branchId: z.string().min(1),
   supplierId: z.string().nullable().optional(),
+  supplierName: z.string().nullable().optional(),
   invoiceType: z.enum(['A', 'X']).optional(),
   invoiceNumber: z.string().nullable().optional(),
   marginPctDefault: z.number().optional(),
