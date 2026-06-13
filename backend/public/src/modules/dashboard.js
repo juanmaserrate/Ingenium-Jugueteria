@@ -1,58 +1,25 @@
 // Dashboard — vista general con KPIs, gráficos y actividad reciente.
-// P-1 memo por {branch, month} · P-3 reutiliza instancias Chart con update('none').
+// Backend-first: los KPIs y agregaciones vienen de /api/metrics/dashboard
+// (consolidado o por sucursal). El POS y la caja siguen offline aparte.
 
-import { getAll } from '../core/db.js';
+import { api, ApiError } from '../core/api.js';
 import { money, fmtDate, fmtDateTime, monthKey, todayKey } from '../core/format.js';
 import { activeBranchId, currentSession } from '../core/auth.js';
 import { on, EV } from '../core/events.js';
 
 const charts = new Map();       // canvasId -> Chart instance
-const aggCache = new Map();     // `${branch}|${month}` -> { monthSales, byProduct, byCategory, monthTotal, monthCount }
-let methodsCache = null;
 let refreshTimer = null;
-
-function invalidate() { aggCache.clear(); }
-
-async function getMethods() {
-  if (methodsCache) return methodsCache;
-  const cfg = await (await import('../core/db.js')).get('config', 'payment_methods');
-  methodsCache = cfg?.value || [];
-  return methodsCache;
-}
-
-function monthAgg(branch, month, sales, products, categories) {
-  const k = `${branch}|${month}`;
-  if (aggCache.has(k)) return aggCache.get(k);
-  const monthSales = sales.filter(s => s.branch_id === branch && s.datetime?.slice(0, 7) === month && s.status !== 'cancelled');
-  const prMap = Object.fromEntries(products.map(p => [p.id, p]));
-  const catMap = Object.fromEntries(categories.map(c => [c.id, c.name]));
-  const byProduct = {};
-  const byCategory = {};
-  let monthTotal = 0;
-  for (const s of monthSales) {
-    monthTotal += Number(s.total) || 0;
-    for (const it of (s.items || [])) {
-      const pk = it.name || it.product_id;
-      if (!byProduct[pk]) byProduct[pk] = { qty: 0, subtotal: 0 };
-      byProduct[pk].qty += Number(it.qty) || 0;
-      byProduct[pk].subtotal += Number(it.subtotal) || 0;
-      const cid = prMap[it.product_id]?.category_id || '—';
-      const cname = catMap[cid] || 'Sin categoría';
-      byCategory[cname] = (byCategory[cname] || 0) + (Number(it.subtotal) || 0);
-    }
-  }
-  const result = { monthSales, monthTotal, monthCount: monthSales.length, byProduct, byCategory };
-  aggCache.set(k, result);
-  return result;
-}
+const state = { branch: activeBranchId() || '', branches: [] };
 
 export async function mount(el) {
+  state.branch = activeBranchId() || '';
+  try { state.branches = await api('/auth/branches'); } catch { state.branches = []; }
   renderShell(el);
+  wireBranchSelector(el);
   await refreshAll(el);
   const handler = () => {
-    invalidate();
     if (refreshTimer) clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => { if (el.isConnected) refreshAll(el); }, 60);
+    refreshTimer = setTimeout(() => { if (el.isConnected) refreshAll(el); }, 400);
   };
   const offs = [
     on(EV.SALE_CONFIRMED, handler),
@@ -65,9 +32,13 @@ export async function mount(el) {
     offs.forEach(f => f());
     charts.forEach(c => { try { c.destroy(); } catch {} });
     charts.clear();
-    aggCache.clear();
     if (refreshTimer) clearTimeout(refreshTimer);
   };
+}
+
+function wireBranchSelector(el) {
+  const sel = el.querySelector('#dash-branch');
+  sel?.addEventListener('change', () => { state.branch = sel.value; refreshAll(el); });
 }
 
 function kpiCard(id, label, icon, color) {
@@ -120,10 +91,17 @@ function renderShell(el) {
         <h1 class="text-3xl font-black text-[#241a0d]">Panel principal</h1>
         <p class="text-sm text-[#7d6c5c] mt-1" id="dash-greeting">Hola <b>${session?.user_name || 'usuario'}</b></p>
       </div>
-      <div class="flex gap-2">
+      <div class="flex gap-2 items-center">
+        <select id="dash-branch" class="ing-input !py-2 !w-auto text-sm font-bold">
+          <option value="">Total (todas)</option>
+          ${state.branches.map(b => `<option value="${b.id}" ${state.branch === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
+        </select>
         <a href="#/pos" class="ing-btn-primary flex items-center gap-2"><span class="material-symbols-outlined text-base">point_of_sale</span> Vender</a>
         <a href="#/cash" class="ing-btn-secondary flex items-center gap-2"><span class="material-symbols-outlined text-base">account_balance_wallet</span> Caja</a>
       </div>
+    </div>
+    <div id="dash-offline" class="hidden mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm font-bold">
+      Sin conexión: los informes necesitan internet. El POS y la caja siguen funcionando normalmente.
     </div>
 
     <div class="grid grid-cols-4 gap-4 mb-5">
@@ -233,90 +211,47 @@ function fmtDeltaInline(d) {
 
 async function refreshAll(el) {
   if (!el || !el.isConnected) return;
-
-  const [sales, returns, products, stocks, cash, customers, checks, employees, expenses, categories, branches] = await Promise.all([
-    getAll('sales'), getAll('returns'), getAll('products'), getAll('stock'),
-    getAll('cash_movements'), getAll('customers'), getAll('checks'),
-    getAll('employees'), getAll('expenses'), getAll('categories'), getAll('branches'),
-  ]);
-
-  const branch = activeBranchId();
+  const branch = state.branch;
   const today = todayKey();
   const month = monthKey();
-  const branchName = branches.find(b => b.id === branch)?.name || '—';
+  const branchName = branch ? (state.branches.find(b => b.id === branch)?.name || '—') : 'Todas las sucursales';
 
   const greeting = el.querySelector('#dash-greeting');
   if (greeting) greeting.innerHTML = `Hola <b>${currentSession()?.user_name || 'usuario'}</b> · Vista de <b>${branchName}</b> · ${fmtDate(today)}`;
   const brName = el.querySelector('#dash-branch-name');
   if (brName) brName.textContent = branchName;
 
-  const salesBr = sales.filter(s => s.branch_id === branch && s.status !== 'cancelled');
-  const todaySales = salesBr.filter(s => s.datetime?.slice(0, 10) === today);
-  const agg = monthAgg(branch, month, sales, products, categories);
-
-  const todayTotal = todaySales.reduce((s, x) => s + (Number(x.total) || 0), 0);
-  const monthTotal = agg.monthTotal;
-  const monthCount = agg.monthCount;
-  const avgTicket = monthCount ? monthTotal / monthCount : 0;
-
-  const yesterdayKey = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); })();
-  const prevMonthStr = (() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 7); })();
-  const yesterdayTotal = salesBr.filter(s => s.datetime?.slice(0, 10) === yesterdayKey).reduce((s, x) => s + (Number(x.total) || 0), 0);
-  const prevAgg = monthAgg(branch, prevMonthStr, sales, products, categories);
-  const prevMonthTotal = prevAgg.monthTotal;
-  const prevAvgTicket = prevAgg.monthCount ? prevMonthTotal / prevAgg.monthCount : 0;
-  const todayDelta = pctDelta(todayTotal, yesterdayTotal);
-  const monthDelta = pctDelta(monthTotal, prevMonthTotal);
-  const ticketDelta = pctDelta(avgTicket, prevAvgTicket);
-
-  const cashBr = cash.filter(m => m.branch_id === branch).sort((a, b) => a.datetime.localeCompare(b.datetime));
-  const cashBalance = cashBr.reduce((s, m) => s + (Number(m.amount_in) || 0) - (Number(m.amount_out) || 0), 0);
-
-  let invValueCost = 0, invValueSale = 0, invUnits = 0, lowStockCount = 0, outOfStock = 0;
-  for (const p of products) {
-    const qty = stocks.filter(s => s.product_id === p.id).reduce((t, s) => t + (s.qty || 0), 0);
-    invUnits += qty;
-    invValueCost += qty * (Number(p.cost) || 0);
-    invValueSale += qty * (Number(p.price) || 0);
-    const qtyBr = stocks.find(s => s.product_id === p.id && s.branch_id === branch)?.qty || 0;
-    const min = Number(p.min_stock) || 0;
-    if (qtyBr === 0) outOfStock++;
-    else if (min > 0 && qtyBr <= min) lowStockCount++;
+  let d;
+  try {
+    const qs = new URLSearchParams({ month, today });
+    if (branch) qs.set('branchId', branch);
+    d = await api(`/api/metrics/dashboard?${qs.toString()}`);
+    el.querySelector('#dash-offline')?.classList.add('hidden');
+  } catch (err) {
+    el.querySelector('#dash-offline')?.classList.remove('hidden');
+    return;
   }
 
-  const checksPending = checks.filter(c => c.status === 'pending');
-  const checksPendingSum = checksPending.reduce((s, c) => s + (Number(c.amount) || 0), 0);
-  const checksOverdue = checksPending.filter(c => c.due_at && c.due_at < today).length;
-  const checksSoon = checksPending.filter(c => {
-    if (!c.due_at || c.due_at < today) return false;
-    const diff = (new Date(c.due_at) - new Date(today)) / (1000 * 60 * 60 * 24);
-    return diff <= 7;
-  }).length;
+  const todayDelta = pctDelta(d.today.total, d.yesterday.total);
+  const monthDelta = pctDelta(d.month.total, d.prevMonth.total);
+  const prevAvgTicket = d.prevMonth.count ? d.prevMonth.total / d.prevMonth.count : 0;
+  const ticketDelta = pctDelta(d.month.avgTicket, prevAvgTicket);
 
-  const monthExpenses = expenses.filter(e => e.branch_id === branch && e.datetime?.slice(0, 7) === month)
-    .reduce((s, e) => s + (Number(e.amount) || 0), 0);
-  const monthReturns = returns.filter(r => r.branch_id === branch && r.datetime?.slice(0, 7) === month);
-  const monthReturnsTotal = monthReturns.reduce((s, r) => s + (Number(r.returned_total) || 0), 0);
+  setKpi(el, 'kpi-today', money(d.today.total), `${d.today.count} ticket${d.today.count !== 1 ? 's' : ''} · ayer ${money(d.yesterday.total)}`, todayDelta);
+  setKpi(el, 'kpi-month', money(d.month.total), `${d.month.count} ventas · ticket ${money(d.month.avgTicket)} (${fmtDeltaInline(ticketDelta)})`, monthDelta);
+  setKpi(el, 'kpi-cash', money(d.cash.balance), `${d.cash.movements} movimientos`);
+  setCardColor(el, 'kpi-cash', d.cash.balance >= 0 ? '#16a34a' : '#dc2626');
+  setKpi(el, 'kpi-inv', money(d.inventory.valueCost), `${d.inventory.units} unidades · valor venta ${money(d.inventory.valueSale)}`);
+  setKpi(el, 'kpi-stock', d.inventory.outOfStock, `${d.inventory.outOfStock} sin stock`);
+  setKpi(el, 'kpi-checks', d.checks.count, `${money(d.checks.sum)} · ${d.checks.overdue} vencidos · ${d.checks.soon} esta semana`);
+  setKpi(el, 'kpi-expenses', money(d.expensesMonth), `Devoluciones: ${money(d.returnsMonth)}`);
+  setKpi(el, 'kpi-birthdays', d.birthdays, `cumpleaños este mes`);
 
-  const mm = String(new Date().getMonth() + 1).padStart(2, '0');
-  const birthdaysThisMonth = customers.filter(c => c.birthday?.slice(5, 7) === mm);
-  const empActiveBr = employees.filter(e => e.active && e.branch_id === branch).length;
-
-  setKpi(el, 'kpi-today', money(todayTotal), `${todaySales.length} ticket${todaySales.length !== 1 ? 's' : ''} · ayer ${money(yesterdayTotal)}`, todayDelta);
-  setKpi(el, 'kpi-month', money(monthTotal), `${monthCount} ventas · ticket ${money(avgTicket)} (${fmtDeltaInline(ticketDelta)})`, monthDelta);
-  setKpi(el, 'kpi-cash', money(cashBalance), `${cashBr.length} movimientos`);
-  setCardColor(el, 'kpi-cash', cashBalance >= 0 ? '#16a34a' : '#dc2626');
-  setKpi(el, 'kpi-inv', money(invValueCost), `${invUnits} unidades · valor venta ${money(invValueSale)}`);
-  setKpi(el, 'kpi-stock', lowStockCount, `${outOfStock} sin stock`);
-  setKpi(el, 'kpi-checks', checksPending.length, `${money(checksPendingSum)} · ${checksOverdue} vencidos · ${checksSoon} esta semana`);
-  setKpi(el, 'kpi-expenses', money(monthExpenses), `Devoluciones: ${money(monthReturnsTotal)}`);
-  setKpi(el, 'kpi-birthdays', birthdaysThisMonth.length, `${empActiveBr} empleados activos`);
-
-  renderSalesChart(el, salesBr);
-  await renderMethodsChart(el, agg.monthSales);
-  renderTopProductsChart(el, agg);
-  renderCategoryChart(el, agg);
-  renderActivity(el, salesBr, returns.filter(r => r.branch_id === branch), customers, employees);
+  renderSalesChart(el, d.serie30 || []);
+  renderMethodsChart(el, d.methods || []);
+  renderTopProductsChart(el, d.topProducts || []);
+  renderCategoryChart(el, d.byCategory || []);
+  renderActivity(el, d.recent || []);
 }
 
 function upsertChart(canvas, config) {
@@ -334,22 +269,11 @@ function upsertChart(canvas, config) {
   return c;
 }
 
-function renderSalesChart(el, salesBr) {
+function renderSalesChart(el, serie30) {
   const canvas = el.querySelector('#chart-sales');
   if (!canvas) return;
-  const days = 30;
-  const labels = [];
-  const data = [];
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const key = d.toISOString().slice(0, 10);
-    labels.push(`${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`);
-    const tot = salesBr.filter(s => s.datetime?.slice(0, 10) === key).reduce((s, x) => s + (Number(x.total) || 0), 0);
-    data.push(Number(tot.toFixed(2)));
-  }
+  const labels = serie30.map(p => { const [, m, dd] = p.day.split('-'); return `${dd}/${m}`; });
+  const data = serie30.map(p => Number((p.total || 0).toFixed(2)));
   const ctx = canvas.getContext('2d');
   const gradient = ctx.createLinearGradient(0, 0, 0, 280);
   gradient.addColorStop(0, 'rgba(216, 47, 30, 0.35)');
@@ -377,20 +301,11 @@ function renderSalesChart(el, salesBr) {
   });
 }
 
-async function renderMethodsChart(el, monthSales) {
+function renderMethodsChart(el, methods) {
   const canvas = el.querySelector('#chart-methods');
   if (!canvas) return;
-  const methods = await getMethods();
-  const mMap = Object.fromEntries(methods.map(m => [m.id, m.name]));
-  const byMethod = {};
-  for (const s of monthSales) {
-    for (const p of (s.payments || [])) {
-      const key = mMap[p.method_id] || p.method_id || '—';
-      byMethod[key] = (byMethod[key] || 0) + (Number(p.amount) || 0);
-    }
-  }
-  const labels = Object.keys(byMethod);
-  const data = Object.values(byMethod);
+  const labels = methods.map(m => m.methodName || m.methodId || '—');
+  const data = methods.map(m => Number((m.amount || 0).toFixed(2)));
   const palette = ['#d82f1e', '#f97316', '#eab308', '#16a34a', '#0ea5e9', '#8b5cf6', '#ec4899', '#64748b'];
   upsertChart(canvas, {
     type: 'doughnut',
@@ -408,12 +323,11 @@ async function renderMethodsChart(el, monthSales) {
   });
 }
 
-function renderTopProductsChart(el, agg) {
+function renderTopProductsChart(el, topProducts) {
   const canvas = el.querySelector('#chart-top');
   if (!canvas) return;
-  const top = Object.entries(agg.byProduct).sort((a, b) => b[1].qty - a[1].qty).slice(0, 8);
-  const labels = top.map(([n]) => n.length > 22 ? n.slice(0, 20) + '…' : n);
-  const data = top.map(([, v]) => v.qty);
+  const labels = topProducts.map(p => { const n = p.name || ''; return n.length > 22 ? n.slice(0, 20) + '…' : n; });
+  const data = topProducts.map(p => p.qty || 0);
   upsertChart(canvas, {
     type: 'bar',
     data: {
@@ -432,12 +346,11 @@ function renderTopProductsChart(el, agg) {
   });
 }
 
-function renderCategoryChart(el, agg) {
+function renderCategoryChart(el, byCategory) {
   const canvas = el.querySelector('#chart-cat');
   if (!canvas) return;
-  const entries = Object.entries(agg.byCategory).sort((a, b) => b[1] - a[1]);
-  const labels = entries.map(([k]) => k);
-  const data = entries.map(([, v]) => Number(v.toFixed(2)));
+  const labels = byCategory.map(c => c.name);
+  const data = byCategory.map(c => Number((c.total || 0).toFixed(2)));
   const palette = ['#d82f1e', '#f97316', '#eab308', '#16a34a', '#0ea5e9', '#8b5cf6', '#ec4899', '#64748b', '#14b8a6', '#a855f7'];
   upsertChart(canvas, {
     type: 'pie',
@@ -455,14 +368,12 @@ function renderCategoryChart(el, agg) {
   });
 }
 
-function renderActivity(el, salesBr, returnsBr, customers, employees) {
-  const cuMap = Object.fromEntries(customers.map(c => [c.id, `${c.name} ${c.lastname || ''}`.trim()]));
-  const emMap = Object.fromEntries(employees.map(e => [e.id, `${e.name} ${e.lastname || ''}`.trim()]));
-  const feed = [];
-  for (const s of salesBr) feed.push({ t: s.datetime, kind: 'sale', icon: 'shopping_cart', color: '#16a34a', title: `Venta #${s.number}`, sub: `${cuMap[s.customer_id] || 'Sin cliente'} · ${emMap[s.seller_id] || ''}`, amount: s.total });
-  for (const r of returnsBr) feed.push({ t: r.datetime, kind: 'return', icon: 'assignment_return', color: '#dc2626', title: `Devolución #${r.number}`, sub: `${cuMap[r.customer_id] || 'Sin cliente'}${r.credit_note_code ? ' · Vale ' + r.credit_note_code : ''}`, amount: -Math.abs(r.returned_total || 0) });
-  feed.sort((a, b) => (b.t || '').localeCompare(a.t || ''));
-  const top = feed.slice(0, 10);
+function renderActivity(el, recent) {
+  const brMap = Object.fromEntries(state.branches.map(b => [b.id, b.name]));
+  const top = (recent || []).map(s => ({
+    t: s.datetime, icon: 'shopping_cart', color: '#16a34a',
+    title: `Venta #${s.number}`, sub: brMap[s.branchId] || '', amount: s.total,
+  }));
   const container = el.querySelector('#activity-list');
   if (!container) return;
   if (!top.length) {
