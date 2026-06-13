@@ -37,6 +37,10 @@ export async function listReturns(opts: { branchId?: string; from?: string; to?:
   });
 }
 
+export async function listCreditNotes() {
+  return prisma.creditNote.findMany({ orderBy: { issuedAt: 'desc' }, take: 1000 });
+}
+
 export async function processReturn(input: ReturnInput) {
   if (input.returnedItems.length === 0 && input.takenItems.length === 0) {
     throw new ValidationError('La devoluci\u00f3n no tiene items');

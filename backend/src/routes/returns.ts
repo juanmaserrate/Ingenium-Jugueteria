@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { processReturn, listReturns } from '../services/returns.js';
+import { processReturn, listReturns, listCreditNotes } from '../services/returns.js';
 
 const itemSchema = z.object({
   variantId: z.string(),
@@ -35,4 +35,6 @@ export async function returnsRoutes(app: FastifyInstance) {
     const body = schema.parse(req.body);
     return processReturn({ ...body, userId: req.user.userId });
   });
+
+  app.get('/credit-notes', async () => listCreditNotes());
 }

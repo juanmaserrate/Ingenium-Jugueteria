@@ -45,6 +45,7 @@ const productSchema = z.object({
   brandId: z.string().nullable().optional(),
   supplierId: z.string().nullable().optional(),
   publishedTn: z.boolean().optional(),
+  publishedMeli: z.boolean().optional(),
   active: z.boolean().optional(),
   variants: z.array(variantSchema).optional(),
 });
@@ -77,7 +78,8 @@ export async function productsRoutes(app: FastifyInstance) {
 
   app.delete('/products/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    await deleteProduct(id, req.user.userId);
+    const { keepTn } = req.query as { keepTn?: string };
+    await deleteProduct(id, req.user.userId, { keepTn: keepTn === '1' || keepTn === 'true' });
     return reply.status(204).send();
   });
 }

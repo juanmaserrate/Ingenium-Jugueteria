@@ -28,6 +28,7 @@ export type ProductInput = {
   brandId?: string | null;
   supplierId?: string | null;
   publishedTn?: boolean;
+  publishedMeli?: boolean;
   active?: boolean;
   // Las variantes se crean con el producto. Si no se especifican, se crea una "default".
   variants?: Array<{
@@ -90,6 +91,7 @@ export async function createProduct(data: ProductInput, userId?: string) {
         brandId: data.brandId ?? null,
         supplierId: data.supplierId ?? null,
         publishedTn: data.publishedTn ?? false,
+        publishedMeli: data.publishedMeli ?? false,
         active: data.active ?? true,
       },
     });
@@ -164,6 +166,7 @@ export async function updateProduct(id: string, data: Partial<ProductInput>, use
       brandId: data.brandId ?? undefined,
       supplierId: data.supplierId ?? undefined,
       publishedTn: data.publishedTn ?? undefined,
+      publishedMeli: data.publishedMeli ?? undefined,
       active: data.active ?? undefined,
     },
   });
@@ -190,10 +193,11 @@ export async function updateProduct(id: string, data: Partial<ProductInput>, use
   return getProduct(id);
 }
 
-export async function deleteProduct(id: string, userId?: string) {
+export async function deleteProduct(id: string, userId?: string, opts: { keepTn?: boolean } = {}) {
   const before = await getProduct(id);
   // Si est\u00e1 publicado en TN, encolar delete en TN antes de borrar local
-  if (before.tnMapping) {
+  // (salvo keepTn: el usuario eligi\u00f3 "solo del POS" y deja el producto vivo en su tienda).
+  if (before.tnMapping && !opts.keepTn) {
     await enqueueSync('push_product_delete', {
       productId: id,
       tnProductId: before.tnMapping.tnProductId,

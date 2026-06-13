@@ -4,7 +4,8 @@
 
 import * as Returns from '../repos/returns.js';
 import * as P from '../repos/products.js';
-import { getAll, get } from '../core/db.js';
+import { get } from '../core/db.js';
+import { api } from '../core/api.js';
 import { money, round2, fmtDateTime } from '../core/format.js';
 import { openModal, confirmModal } from '../components/modal.js';
 import { toast } from '../core/notifications.js';
@@ -25,16 +26,38 @@ const state = {
 };
 
 export async function mount(el) {
-  state.data = await loadData();
+  try {
+    state.data = await loadData();
+  } catch (e) {
+    if (e?.status === 0) {
+      el.innerHTML = `<div class="ing-card p-6 text-center"><span class="material-symbols-outlined text-4xl text-amber-500">cloud_off</span>
+        <p class="mt-2 font-bold">Sin conexión</p><p class="text-sm text-[#7d6c5c]">Las devoluciones necesitan internet para operar.</p></div>`;
+      return;
+    }
+    throw e;
+  }
   render(el);
   on(EV.RETURN_CONFIRMED, async () => { state.data = await loadData(); render(el); });
 }
 
 async function loadData() {
-  const [products, stocks, customers, sales, returns, creditNotes, methodsCfg] = await Promise.all([
-    P.list(), getAll('stock'), getAll('customers'), getAll('sales'),
-    getAll('returns'), getAll('credit_notes'), get('config', 'payment_methods'),
+  const [products, stocks, customersRaw, sales, returnsRaw, creditNotesRaw, methodsCfg] = await Promise.all([
+    P.list(), P.listStock(), api('/api/customers'), api('/api/sales'),
+    Returns.list(), Returns.listCreditNotes(), get('config', 'payment_methods'),
   ]);
+  // El backend devuelve camelCase; mapeamos al shape snake_case que usan los renders.
+  const returns = (returnsRaw || []).map(r => ({
+    id: r.id, number: r.number, datetime: r.datetime,
+    customer_id: r.customerId,
+    returned_total: r.returnedTotal, taken_total: r.takenTotal,
+    difference: r.difference, invoiced_delta: r.difference,
+    credit_note_code: r.creditNoteId ? 'Vale' : null,
+  }));
+  const creditNotes = (creditNotesRaw || []).map(cn => ({
+    id: cn.id, code: cn.code, customer_id: cn.customerId, amount: cn.amount,
+    issued_at: cn.issuedAt, expires_at: cn.expiresAt, redeemed_at: cn.redeemedAt,
+  }));
+  const customers = (customersRaw || []).map(c => ({ id: c.id, name: c.name, lastname: '' }));
   return { products, stocks, customers, sales, returns, creditNotes, methods: methodsCfg?.value || [] };
 }
 
@@ -305,7 +328,7 @@ async function pickItem(container, listKey) {
         grid.querySelectorAll('[data-pid]').forEach(b => b.addEventListener('click', () => {
           const p = state.data.products.find(x => x.id === b.dataset.pid);
           if (p) {
-            state[listKey].push({ product_id: p.id, name: p.name, code: p.code, qty: 1, unit_price: Number(p.price) || 0, cost_snapshot: Number(p.cost) || 0 });
+            state[listKey].push({ product_id: p.id, variant_id: p.variant_id || null, name: p.name, code: p.code, qty: 1, unit_price: Number(p.price) || 0, cost_snapshot: Number(p.cost) || 0 });
             close(true);
           }
         }));

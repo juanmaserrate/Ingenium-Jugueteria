@@ -5,6 +5,8 @@
 import * as Sales from '../repos/sales.js';
 import * as P from '../repos/products.js';
 import { getAll, get } from '../core/db.js';
+import { api, ApiError } from '../core/api.js';
+import { Categories, Brands } from '../repos/catalog.js';
 import { money, round2 } from '../core/format.js';
 import { openModal, confirmModal } from '../components/modal.js';
 import { toast } from '../core/notifications.js';
@@ -69,19 +71,32 @@ export async function mount(el) {
 }
 
 async function refreshData() {
-  const [products, stocks, customers, employees, methodsCfg, categories, brands] = await Promise.all([
-    P.list(),
-    getAll('stock'),
-    getAll('customers'),
+  const br = activeBranchId();
+  // Datos online (única fuente de verdad). Si no hay conexión, dejamos listas vacías
+  // y el POS avisa al intentar vender.
+  let products = [], stocks = [], customers = [];
+  state.offline = false;
+  try {
+    [products, stocks, customers] = await Promise.all([
+      P.list(), P.listStock(), api('/api/customers'),
+    ]);
+  } catch (e) {
+    if (e?.status === 0) {
+      state.offline = true;
+      toast('Sin conexión: se necesita internet para vender', 'error');
+    } else {
+      throw e;
+    }
+  }
+  const [employees, methodsCfg, categories, brands] = await Promise.all([
     getAll('employees'),
     get('config', 'payment_methods'),
-    getAll('categories'),
-    getAll('brands'),
+    Categories.list().catch(() => []),
+    Brands.list().catch(() => []),
   ]);
-  const br = activeBranchId();
   state.products = products;
   state.stocks = stocks;
-  state.customers = customers;
+  state.customers = customers || [];
   state.employees = employees.filter(e => !e.branch_id || e.branch_id === br);
   state.methods = methodsCfg?.value || [];
   state.categories = categories;
@@ -261,6 +276,7 @@ function addToCart(product, qty = 1) {
   else {
     const item = {
       product_id: product.id,
+      variant_id: product.variant_id || null,
       name: product.name,
       code: product.code,
       qty,
@@ -517,6 +533,22 @@ async function persistDraft() {
   t.draftId = saved.id;
 }
 
+// Mapea la venta que devuelve el backend (camelCase + snapshots) al shape que
+// usan el recibo y el ticket del POS.
+function saleToFront(bs) {
+  return {
+    id: bs.id,
+    number: bs.number,
+    datetime: bs.datetime,
+    total: bs.total,
+    items_subtotal: bs.itemsSubtotal,
+    discount_total: bs.discountTotal,
+    surcharge_total: bs.surchargeTotal,
+    items: (bs.items || []).map(i => ({ name: i.productNameSnap, qty: i.qty, subtotal: i.subtotal })),
+    payments: (bs.payments || []).map(p => ({ method_id: p.methodName || p.methodId, amount: p.amount })),
+  };
+}
+
 // ===== Confirmar venta =====
 async function confirmSale(root) {
   const t = activeTab();
@@ -534,9 +566,23 @@ async function confirmSale(root) {
     }
   }
 
-  // Pre-check de stock en sucursal activa (best-effort — la verificación atómica
-  // ocurre dentro de Sales.confirm, por si otra pestaña vendió el mismo producto).
   const br = activeBranchId();
+
+  // Resolver variantId de cada item (los items viejos de drafts pueden no tenerlo).
+  for (const it of sale.items) {
+    if (!it.variant_id) {
+      const p = state.products.find(x => x.id === it.product_id);
+      it.variant_id = p?.variant_id || null;
+    }
+  }
+  const missingVariant = sale.items.find(it => !it.variant_id);
+  if (missingVariant) {
+    toast(`"${missingVariant.name}" no está sincronizado con el servidor. Recargá el catálogo.`, 'error');
+    return;
+  }
+
+  // Pre-check de stock en sucursal activa (best-effort — la validación atómica la
+  // hace el backend en POST /api/sales; acá sólo confirmamos con el usuario).
   let allowNegative = false;
   for (const it of sale.items) {
     const st = state.stocks.find(s => s.product_id === it.product_id && s.branch_id === br);
@@ -552,26 +598,54 @@ async function confirmSale(root) {
     }
   }
 
+  const buildBody = (negative) => ({
+    branchId: br,
+    sellerId: null, // empleados aún no migrados al backend
+    customerId: sale.customer_id || null,
+    items: sale.items.map(it => ({
+      variantId: it.variant_id,
+      qty: Number(it.qty),
+      unitPrice: Number(it.unit_price),
+      discountPct: it.discount_pct ? Number(it.discount_pct) : null,
+      discountFixed: it.discount_fixed ? Number(it.discount_fixed) : null,
+      priceOverridden: false,
+    })),
+    payments: (sale.payments || []).map(p => ({
+      methodId: p.method_id,
+      methodName: state.methods.find(m => m.id === p.method_id)?.name || p.method_id,
+      amount: Number(p.amount) || 0,
+    })),
+    discountGlobalPct: sale.discount_global_pct || null,
+    discountGlobalFixed: sale.discount_global_fixed || null,
+    surchargeGlobalPct: sale.surcharge_global_pct || null,
+    surchargeGlobalFixed: sale.surcharge_global_fixed || null,
+    source: 'pos',
+    allowNegative: negative,
+  });
+
   try {
-    const session = currentSession();
-    let rec;
+    let bs;
     try {
-      rec = await Sales.confirm(sale, { userId: session.user_id, branchId: br, allowNegative });
+      bs = await api('/api/sales', { method: 'POST', body: buildBody(allowNegative) });
     } catch (err) {
-      // Race condition: otra pestaña vendió el mismo producto entre el pre-check y el confirm.
-      if (err instanceof Sales.StockInsufficientError) {
-        const list = err.items.map(i => `• ${i.name}: tenías ${i.available}, pediste ${i.needed}`).join('\n');
+      // El backend valida stock atómicamente. Si falta stock, ofrecemos vender en negativo.
+      if (err instanceof ApiError && err.status === 409 && err.code === 'STOCK_INSUFFICIENT') {
+        const d = err.details || {};
         const ok = await confirmModal({
-          title: 'Stock cambió mientras confirmabas',
-          message: `${list}\n\n¿Confirmás igual? El stock va a quedar en negativo.`,
+          title: 'Stock insuficiente en el servidor',
+          message: `No alcanza el stock (disponible ${d.available ?? 0}, pediste ${d.requested ?? ''}). ¿Confirmás igual? El stock va a quedar en negativo.`,
           danger: true, confirmLabel: 'Confirmar igual',
         });
         if (!ok) { await refreshData(); renderCart(root); return; }
-        rec = await Sales.confirm(sale, { userId: session.user_id, branchId: br, allowNegative: true });
+        bs = await api('/api/sales', { method: 'POST', body: buildBody(true) });
+      } else if (err instanceof ApiError && err.status === 0) {
+        toast('Sin conexión: se necesita internet para vender', 'error');
+        return;
       } else {
         throw err;
       }
     }
+    const rec = saleToFront(bs);
     // Remover draft
     if (t.draftId) await Sales.removeDraft(t.draftId).catch(() => {});
     // Si es la única tab → reset, si hay otras → cerrar
@@ -596,7 +670,7 @@ async function confirmSale(root) {
         timeoutMs: 8000,
         onClick: async () => {
           try {
-            await Sales.cancelSale(rec.id, { userId: currentSession()?.user_id, reason: 'undo-toast' });
+            await api(`/api/sales/${encodeURIComponent(rec.id)}/cancel`, { method: 'POST', body: { reason: 'undo-toast' } });
             toast(`Venta #${rec.number} anulada`, 'info');
             await refreshData();
             renderCart(root);

@@ -108,8 +108,19 @@ function tabBtn(id, label, icon) {
 
 // ==================== PRODUCTOS ====================
 async function renderProducts(container) {
-  const [products, stocks, categories, brands, suppliers, branches, subcats] = await Promise.all([
-    P.list(), getAll('stock'), Categories.list(), Brands.list(), Suppliers.list(), getAll('branches'), Subcategories.list(),
+  let products, stocks;
+  try {
+    [products, stocks] = await Promise.all([P.list(), P.listStock()]);
+  } catch (e) {
+    if (e?.status === 0) {
+      container.innerHTML = `<div class="ing-card p-6 text-center"><span class="material-symbols-outlined text-4xl text-amber-500">cloud_off</span>
+        <p class="mt-2 font-bold">Sin conexión</p><p class="text-sm text-[#7d6c5c]">El inventario necesita internet para operar.</p></div>`;
+      return;
+    }
+    throw e;
+  }
+  const [categories, brands, suppliers, branches, subcats] = await Promise.all([
+    Categories.list(), Brands.list(), Suppliers.list(), getAll('branches'), Subcategories.list(),
   ]);
   const catMap = Object.fromEntries(categories.map(c => [c.id, c.name]));
   const brMap  = Object.fromEntries(brands.map(b => [b.id, b.name]));
@@ -287,12 +298,8 @@ async function renderProducts(container) {
     const choice = await chooseDeleteScope(p);
     if (choice === 'cancel') return;
     try {
-      if (choice === 'both') {
-        const { api } = await import('../core/api.js');
-        // Backend delete: enqueue push_product_delete en TN + borra producto local del POS server.
-        await api(`/api/products/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
-      }
-      await P.remove(p.id);
+      // 'local' = solo del POS (queda en TN) · 'both' = también de Tienda Nube.
+      await P.remove(p.id, { keepTn: choice === 'local' });
       toast(choice === 'both' ? 'Eliminado del POS y Tienda Nube' : 'Eliminado del POS', 'success');
       renderProducts(container);
     } catch (e) {
@@ -780,73 +787,26 @@ async function openProductForm(p, container) {
           if (costNum <= 0) { toast('Para publicar en Tienda Nube el costo debe ser mayor a 0', 'error'); return null; }
           if (priceNum <= 0) { toast('Para publicar en Tienda Nube el precio debe ser mayor a 0', 'error'); return null; }
         }
+        // P.save crea/actualiza el producto en el backend (única fuente de verdad).
+        // Si published_tn = true, el backend encola el sync a Tienda Nube automáticamente.
         const saved = await P.save({ ...(p || {}), ...d });
-        const prevLomas = isEdit ? stockLomas : 0;
-        const prevBanf  = isEdit ? stockBanf  : 0;
-        if (qtyLomas !== prevLomas) {
-          await P.adjustStock(saved.id, 'br_lomas', qtyLomas - prevLomas, isEdit ? 'Ajuste manual desde edición' : 'Stock inicial');
-        }
-        if (qtyBanf !== prevBanf) {
-          await P.adjustStock(saved.id, 'br_banfield', qtyBanf - prevBanf, isEdit ? 'Ajuste manual desde edición' : 'Stock inicial');
-        }
-        if (d.published_tn) {
-          try {
-            const { api } = await import('../core/api.js');
-            const baseBody = {
-              id: saved.id, code: saved.code, name: saved.name,
-              cost: Number(saved.cost) || 0,
-              marginPct: Number(saved.margin_pct) || 0,
-              price: Number(saved.price) || 0,
-              publishedTn: true,
-              // Campos extendidos para TN
-              description: saved.description ?? null,
-              promotionalPrice: saved.promotional_price ?? null,
-              weight: saved.weight ?? null,
-              width: saved.width ?? null,
-              height: saved.height ?? null,
-              depth: saved.depth ?? null,
-              seoTitle: saved.seo_title ?? null,
-              seoDescription: saved.seo_description ?? null,
-              handle: saved.handle ?? null,
-              videoUrl: saved.video_url ?? null,
-              tnCategoryIds: saved.tn_category_ids ?? [],
-            };
-            const method = isEdit ? 'PUT' : 'POST';
-            const path = isEdit ? `/api/products/${encodeURIComponent(saved.id)}` : '/api/products';
-            const apiBody = method === 'POST'
-              ? { ...baseBody, variants: [{ isDefault: true, stocks: [
-                  { branchId: 'br_lomas', qty: qtyLomas },
-                  { branchId: 'br_banfield', qty: qtyBanf },
-                ] }] }
-              : baseBody;
-            const resp = await api(path, { method, body: apiBody });
-            if (method === 'PUT') {
-              const variantId = resp?.variants?.[0]?.id;
-              if (variantId) {
-                await api('/api/stock/set', { method: 'POST', body: { variantId, branchId: 'br_lomas',    qty: qtyLomas, reason: 'Ajuste desde inventario' } });
-                await api('/api/stock/set', { method: 'POST', body: { variantId, branchId: 'br_banfield', qty: qtyBanf,  reason: 'Ajuste desde inventario' } });
-              }
+        // Stock absoluto por sucursal (el form maneja cantidades absolutas).
+        await P.setStock(saved.id, 'br_lomas',    { qty: qtyLomas, reason: isEdit ? 'Ajuste desde inventario' : 'Stock inicial' });
+        await P.setStock(saved.id, 'br_banfield', { qty: qtyBanf,  reason: isEdit ? 'Ajuste desde inventario' : 'Stock inicial' });
+        // Drenar imágenes pendientes (productos nuevos; en edición se suben al pickear).
+        if (pendingFiles.length > 0) {
+          const { uploadFile } = await import('../core/api.js');
+          for (const f of pendingFiles) {
+            try {
+              const img = await uploadFile(`/api/products/${encodeURIComponent(saved.id)}/images`, f);
+              if (img?.id) savedImages.push({ id: img.id, url: img.url });
+            } catch (err) {
+              console.warn('Upload imagen falló', err);
+              toast(`No se pudo subir "${f.name}"`, 'warn');
             }
-            // Drenar imágenes pendientes (sólo aplica si estamos creando producto nuevo en
-            // backend: en edición las imágenes ya se subieron al momento de pickearlas).
-            if (pendingFiles.length > 0) {
-              const { uploadFile } = await import('../core/api.js');
-              for (const f of pendingFiles) {
-                try {
-                  const img = await uploadFile(`/api/products/${encodeURIComponent(saved.id)}/images`, f);
-                  if (img?.id) savedImages.push({ id: img.id, url: img.url });
-                } catch (err) {
-                  console.warn('Upload imagen falló', err);
-                  toast(`No se pudo subir "${f.name}"`, 'warn');
-                }
-              }
-              pendingFiles.length = 0;
-              renderImageThumbs();
-            }
-          } catch (e) {
-            console.warn('push a TN falló', e);
-            toast(`"${saved.name}" guardado local — sync TN pendiente`, 'warn');
           }
+          pendingFiles.length = 0;
+          renderImageThumbs();
         }
         return saved;
       };
@@ -1003,7 +963,7 @@ function openColumnsModal(cols, container) {
 
 async function bulkSetMeli(flag, container) {
   for (const id of state.selected) {
-    const p = await get('products', id);
+    const p = await P.byId(id);
     if (p) { p.published_meli = flag; await P.save(p); }
   }
   toast(`${state.selected.size} producto(s) ${flag?'publicado(s)':'despublicado(s)'}`, 'success');
@@ -1017,7 +977,7 @@ async function bulkPricePct(container) {
   const pct = Number(pctStr);
   if (Number.isNaN(pct)) { toast('Valor inválido', 'error'); return; }
   for (const id of state.selected) {
-    const p = await get('products', id);
+    const p = await P.byId(id);
     if (!p) continue;
     p.price = +(p.price * (1 + pct / 100)).toFixed(2);
     if (p.cost > 0) p.margin_pct = +((p.price / p.cost - 1) * 100).toFixed(2);
@@ -1126,7 +1086,7 @@ async function openCatalogForm(item, title, repo, entityLabel, withParentCat, co
 // ==================== TRANSFERENCIAS ====================
 async function renderTransfers(container) {
   const [transfers, branches, products, stocks] = await Promise.all([
-    getAll('transfers'), getAll('branches'), P.list(), getAll('stock'),
+    getAll('transfers'), getAll('branches'), P.list(), P.listStock(),
   ]);
   const brMap = Object.fromEntries(branches.map(b => [b.id, b.name]));
   const pMap  = Object.fromEntries(products.map(p => [p.id, p]));

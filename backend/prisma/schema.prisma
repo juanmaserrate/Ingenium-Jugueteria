@@ -143,6 +143,7 @@ model Product {
   brandId       String?  @map("brand_id")
   supplierId    String?  @map("supplier_id")
   publishedTn   Boolean  @default(false) @map("published_tn")
+  publishedMeli Boolean  @default(false) @map("published_meli")
   active        Boolean  @default(true)
   updatedAt     DateTime @updatedAt @map("updated_at")
   createdAt     DateTime @default(now()) @map("created_at")
