@@ -317,5 +317,13 @@ export async function getAudit(params: { from?: string; to?: string; action?: st
   if (params.entity) where.entity = params.entity;
   if (params.userId) where.userId = params.userId;
   if (params.q) where.description = { contains: params.q, mode: 'insensitive' };
-  return prisma.auditLog.findMany({ where, orderBy: { datetime: 'desc' }, take: 500 });
+  const rows = await prisma.auditLog.findMany({
+    where, orderBy: { datetime: 'desc' }, take: 500,
+    include: { user: { select: { name: true, lastname: true } } },
+  });
+  return rows.map((r) => ({
+    datetime: r.datetime, action: r.action, entity: r.entity, entityId: r.entityId,
+    description: r.description, userId: r.userId,
+    userName: r.user ? `${r.user.name} ${r.user.lastname || ''}`.trim() : (r.userId || ''),
+  }));
 }
