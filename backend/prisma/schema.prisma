@@ -110,6 +110,7 @@ model Supplier {
   email   String?
   address String?
   cuit    String?
+  notes   String?
 
   products Product[]
   checks   Check[]

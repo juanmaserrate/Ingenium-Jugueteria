@@ -19,6 +19,7 @@ import { webhooksRoutes } from './routes/webhooks.js';
 import { syncRoutes } from './routes/sync.js';
 import { imagesRoutes } from './routes/images.js';
 import { purchasesRoutes } from './routes/purchases.js';
+import { catalogRoutes } from './routes/catalog.js';
 import { AppError } from './utils/errors.js';
 import { startSyncWorker } from './sync/worker.js';
 import { runSeed } from './scripts/seed.js';
@@ -126,6 +127,7 @@ async function main() {
   await app.register(integrationsRoutes, { prefix: '/api' });
   await app.register(imagesRoutes, { prefix: '/api' });
   await app.register(purchasesRoutes, { prefix: '/api' });
+  await app.register(catalogRoutes, { prefix: '/api' });
   await app.register(syncRoutes, { prefix: '/api' });
   // Webhooks SIN prefix /api porque TN los consulta en URL p\u00fablica
   await app.register(webhooksRoutes);
