@@ -10,7 +10,12 @@ import {
 } from '../services/catalog.js';
 
 const nameSchema = z.object({ id: z.string().optional(), name: z.string().min(1) });
-const subSchema = z.object({ id: z.string().optional(), name: z.string().min(1), categoryId: z.string().nullable().optional() });
+const subSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1),
+  categoryId: z.string().nullable().optional(),
+  category_id: z.string().nullable().optional(),
+});
 const supplierSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1),

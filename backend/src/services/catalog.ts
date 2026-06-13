@@ -8,6 +8,10 @@ import { ValidationError } from '../utils/errors.js';
 // Backend-first. El frontend cachea estos datos en IndexedDB.
 // =========================================================
 
+// El front usa snake_case (category_id); Prisma usa camelCase (categoryId).
+// Serializamos subcategorías a snake para mantener el contrato que ya usan los módulos del front.
+const subToFront = (s: { id: string; name: string; categoryId: string | null }) => ({ id: s.id, name: s.name, category_id: s.categoryId });
+
 /** Catálogo completo en un solo round-trip (para el sync inicial del front). */
 export async function getCatalog() {
   const [categories, subcategories, brands, suppliers] = await Promise.all([
@@ -16,7 +20,7 @@ export async function getCatalog() {
     prisma.brand.findMany({ orderBy: { name: 'asc' } }),
     prisma.supplier.findMany({ orderBy: { name: 'asc' } }),
   ]);
-  return { categories, subcategories, brands, suppliers };
+  return { categories, subcategories: subcategories.map(subToFront), brands, suppliers };
 }
 
 // ---------- Categorías ----------
@@ -42,23 +46,25 @@ export async function deleteCategory(id: string, userId?: string) {
 
 // ---------- Subcategorías ----------
 export async function listSubcategories() {
-  return prisma.subcategory.findMany({ orderBy: { name: 'asc' } });
+  const subs = await prisma.subcategory.findMany({ orderBy: { name: 'asc' } });
+  return subs.map(subToFront);
 }
-export async function upsertSubcategory(data: { id?: string; name: string; categoryId?: string | null }, userId?: string) {
+// Acepta categoryId (camel) o category_id (snake, como manda el front).
+export async function upsertSubcategory(data: { id?: string; name: string; categoryId?: string | null; category_id?: string | null }, userId?: string) {
   const id = data.id ?? randomId();
-  // Validar FK si viene categoryId
-  if (data.categoryId) {
-    const cat = await prisma.category.findUnique({ where: { id: data.categoryId } });
-    if (!cat) throw new ValidationError(`Categoría ${data.categoryId} no existe`);
+  const categoryId = data.categoryId ?? data.category_id ?? null;
+  if (categoryId) {
+    const cat = await prisma.category.findUnique({ where: { id: categoryId } });
+    if (!cat) throw new ValidationError(`Categoría ${categoryId} no existe`);
   }
   const before = await prisma.subcategory.findUnique({ where: { id } });
   const rec = await prisma.subcategory.upsert({
     where: { id },
-    create: { id, name: data.name, categoryId: data.categoryId ?? null as any },
-    update: { name: data.name, categoryId: data.categoryId ?? undefined },
+    create: { id, name: data.name, categoryId: categoryId as any },
+    update: { name: data.name, categoryId: categoryId ?? undefined },
   });
   await logAudit({ userId, action: before ? AUDIT_ACTIONS.UPDATE : AUDIT_ACTIONS.CREATE, entity: 'subcategory', entityId: id, before, after: rec });
-  return rec;
+  return subToFront(rec);
 }
 export async function deleteSubcategory(id: string, userId?: string) {
   const before = await prisma.subcategory.findUnique({ where: { id } });

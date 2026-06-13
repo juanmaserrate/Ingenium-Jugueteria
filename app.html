@@ -103,6 +103,10 @@
     // Arrancar cola de sync local para modo offline
     import('./src/core/sync-queue.js');
 
+    // Sincronizar catálogo (proveedores/categorías/marcas/subcategorías) desde el backend
+    // al cache local. No bloqueante: si falla (offline), se usa el cache existente.
+    import('./src/repos/catalog.js').then((m) => m.syncCatalog().catch(() => null));
+
     // Registrar Service Worker (cache de assets)
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('./sw.js').catch(() => null);
