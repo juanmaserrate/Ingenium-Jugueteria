@@ -3,6 +3,12 @@ import { randomId } from '../utils/crypto.js';
 import { nextYearlyCounter } from './counters.js';
 import { logAudit, AUDIT_ACTIONS } from '../utils/audit.js';
 import { NotFoundError, ValidationError, ConflictError } from '../utils/errors.js';
+import { createProduct } from './products.js';
+import { adjustStock } from './stock.js';
+import { enqueueSync } from '../sync/queue.js';
+
+const BR_LOMAS = 'br_lomas';
+const BR_BANFIELD = 'br_banfield';
 
 export type PurchaseItemInput = {
   id?: string;
@@ -208,4 +214,163 @@ export async function deletePurchase(id: string, userId?: string) {
     before,
     description: `Compra #${before.number} borrada`,
   });
+}
+
+/**
+ * Auto-match de líneas (de scan o carga manual) contra variantes existentes,
+ * por barcode o por SKU (Variant.code). Devuelve la sugerencia de vínculo;
+ * NO modifica nada. El operador puede corregir antes de recibir.
+ */
+export async function autoMatch(
+  lines: Array<{ barcode?: string | null; sku?: string | null }>,
+) {
+  const results = [];
+  for (const line of lines) {
+    const barcode = line.barcode?.trim() || null;
+    const sku = line.sku?.trim() || null;
+    if (!barcode && !sku) {
+      results.push({ matchType: 'new', variantId: null, productId: null });
+      continue;
+    }
+    const or: any[] = [];
+    if (barcode) or.push({ barcode });
+    if (sku) or.push({ code: sku });
+    const variant = await prisma.variant.findFirst({
+      where: { OR: or },
+      include: { product: true },
+    });
+    if (!variant) {
+      results.push({ matchType: 'new', variantId: null, productId: null });
+      continue;
+    }
+    const matchType = barcode && variant.barcode === barcode ? 'matched_barcode' : 'matched_sku';
+    results.push({
+      matchType,
+      variantId: variant.id,
+      productId: variant.productId,
+      productName: variant.product.name,
+      currentCost: variant.product.cost,
+      currentPrice: variant.product.price,
+    });
+  }
+  return results;
+}
+
+/**
+ * Recepción de la compra: pending → received. Impacta stock y crea/actualiza
+ * productos. Diseñado para ser IDEMPOTENTE y RESUMIBLE a nivel item (no usa una
+ * transacción global porque createProduct ya abre la suya; anidar txs interactivas
+ * de Prisma es frágil). Cada item marca su receivedAt al procesarse; un reintento
+ * saltea los ya hechos. El cambio de status a 'received' es lo último.
+ */
+export async function receivePurchase(id: string, userId?: string) {
+  const purchase = await getPurchase(id);
+  if (purchase.status === 'received') return purchase; // idempotencia total
+  if (purchase.status !== 'pending') {
+    throw new ConflictError('Solo una compra pendiente puede recibirse');
+  }
+
+  const receivedAt = new Date();
+  const affectedVariantIds = new Set<string>();
+
+  for (const item of purchase.items) {
+    if (item.receivedAt) {
+      // Ya procesado en un intento anterior; recolectamos su variante para el push final.
+      if (item.variantId) affectedVariantIds.add(item.variantId);
+      continue;
+    }
+
+    const qtyLomas = Math.max(0, item.qtyLomas || 0);
+    const qtyBanfield = Math.max(0, item.qtyBanfield || 0);
+
+    if (item.variantId) {
+      // --- Producto existente (recompra): suma stock + actualiza costo/precio ---
+      const variant = await prisma.variant.findUnique({ where: { id: item.variantId } });
+      if (!variant) throw new NotFoundError('Variant', item.variantId);
+      if (qtyLomas > 0) {
+        await adjustStock(item.variantId, BR_LOMAS, qtyLomas, {
+          userId, reason: `Compra #${purchase.number}`,
+        });
+      }
+      if (qtyBanfield > 0) {
+        await adjustStock(item.variantId, BR_BANFIELD, qtyBanfield, {
+          userId, reason: `Compra #${purchase.number}`,
+        });
+      }
+      await prisma.product.update({
+        where: { id: variant.productId },
+        data: {
+          cost: item.unitCost,
+          marginPct: item.marginPct,
+          price: item.salePrice,
+        },
+      });
+      affectedVariantIds.add(item.variantId);
+      await prisma.purchaseItem.update({
+        where: { id: item.id },
+        data: { receivedAt, productId: variant.productId },
+      });
+    } else {
+      // --- Producto nuevo: createProduct (encola push TN si publishTn) ---
+      const tn = (item.tnConfig as any) || {};
+      const created = await createProduct(
+        {
+          code: item.sku?.trim() || `SKU-${Date.now().toString().slice(-6)}-${randomId(2)}`,
+          name: item.rawName,
+          cost: item.unitCost,
+          marginPct: item.marginPct,
+          price: item.salePrice,
+          supplierId: purchase.supplierId ?? null,
+          publishedTn: !!item.publishTn,
+          description: tn.description ?? null,
+          promotionalPrice: tn.promotionalPrice ?? null,
+          weight: tn.weight ?? null,
+          width: tn.width ?? null,
+          height: tn.height ?? null,
+          depth: tn.depth ?? null,
+          seoTitle: tn.seoTitle ?? null,
+          seoDescription: tn.seoDescription ?? null,
+          handle: tn.handle ?? null,
+          videoUrl: tn.videoUrl ?? null,
+          tnCategoryIds: tn.tnCategoryIds ?? [],
+          variants: [{
+            isDefault: true,
+            barcode: item.barcode?.trim() || null,
+            code: item.sku?.trim() || null,
+            stocks: [
+              { branchId: BR_LOMAS, qty: qtyLomas },
+              { branchId: BR_BANFIELD, qty: qtyBanfield },
+            ],
+          }],
+        },
+        userId,
+      );
+      const variantId = created.variants[0]?.id ?? null;
+      if (variantId) affectedVariantIds.add(variantId);
+      await prisma.purchaseItem.update({
+        where: { id: item.id },
+        data: { receivedAt, createdProductId: created.id, variantId },
+      });
+    }
+  }
+
+  // Stock sync a TN (dedup en enqueueSync evita duplicados). Para productos nuevos
+  // con publishTn, push_product_create ya encola push_stock; igual encolamos por las dudas.
+  for (const variantId of affectedVariantIds) {
+    await enqueueSync('push_stock', { variantId });
+  }
+
+  const updated = await prisma.purchase.update({
+    where: { id },
+    data: { status: 'received', receivedAt },
+  });
+  await logAudit({
+    userId,
+    action: AUDIT_ACTIONS.UPDATE,
+    entity: 'compra',
+    entityId: id,
+    after: updated,
+    description: `Compra #${purchase.number} recibida (${purchase.items.length} items, stock impactado)`,
+  });
+  return getPurchase(id);
 }

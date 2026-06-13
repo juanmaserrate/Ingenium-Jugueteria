@@ -7,6 +7,8 @@ import {
   updatePurchase,
   setPurchaseStatus,
   deletePurchase,
+  autoMatch,
+  receivePurchase,
 } from '../services/purchases.js';
 import { savePurchaseDocument } from '../storage/documents.js';
 
@@ -75,6 +77,23 @@ export async function purchasesRoutes(app: FastifyInstance) {
   app.post('/purchases/:id/cancel', async (req) => {
     const { id } = req.params as { id: string };
     return setPurchaseStatus(id, 'cancelled', req.user.userId);
+  });
+
+  // Recepción: impacta stock + crea/actualiza productos + encola push TN.
+  app.post('/purchases/:id/receive', async (req) => {
+    const { id } = req.params as { id: string };
+    return receivePurchase(id, req.user.userId);
+  });
+
+  // Auto-match de líneas contra variantes existentes (barcode/SKU). No persiste.
+  app.post('/purchases/match', async (req) => {
+    const body = z.object({
+      lines: z.array(z.object({
+        barcode: z.string().nullable().optional(),
+        sku: z.string().nullable().optional(),
+      })),
+    }).parse(req.body);
+    return autoMatch(body.lines);
   });
 
   app.delete('/purchases/:id', async (req, reply) => {
