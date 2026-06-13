@@ -45,7 +45,9 @@ export type ProductInput = {
 };
 
 export async function listProducts() {
+  // Solo productos activos: los "borrados" con historial se marcan active=false (soft-delete).
   return prisma.product.findMany({
+    where: { active: true },
     include: { variants: { include: { stocks: true } }, images: true },
     orderBy: { name: 'asc' },
   });
@@ -203,14 +205,30 @@ export async function deleteProduct(id: string, userId?: string, opts: { keepTn?
       tnProductId: before.tnMapping.tnProductId,
     });
   }
-  await prisma.product.delete({ where: { id } });
+
+  // Si el producto tiene historial (ventas o compras), un hard-delete violar\u00eda las FK
+  // de SaleItem/PurchaseItem. En ese caso hacemos soft-delete (active=false) para
+  // preservar el historial; el listado de productos filtra active=true, as\u00ed desaparece.
+  const variantIds = before.variants.map((v) => v.id);
+  const [saleCount, purchaseCount] = await Promise.all([
+    prisma.saleItem.count({ where: { variantId: { in: variantIds } } }),
+    prisma.purchaseItem.count({ where: { variantId: { in: variantIds } } }),
+  ]);
+  const hasHistory = saleCount > 0 || purchaseCount > 0;
+
+  if (hasHistory) {
+    await prisma.product.update({ where: { id }, data: { active: false } });
+  } else {
+    await prisma.product.delete({ where: { id } });
+  }
+
   await logAudit({
     userId,
     action: AUDIT_ACTIONS.DELETE,
     entity: 'product',
     entityId: id,
     before,
-    description: `Producto eliminado: ${before.name}`,
+    description: `Producto eliminado: ${before.name}${hasHistory ? ' (soft-delete, tiene historial)' : ''}`,
   });
 }
 

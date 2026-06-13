@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { getDashboard, getBalance, getProfits, getContribution, getAudit } from '../services/metrics.js';
+import { ValidationError } from '../utils/errors.js';
 
 export async function metricsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate);
@@ -14,7 +15,7 @@ export async function metricsRoutes(app: FastifyInstance) {
 
   app.get('/metrics/balance', async (req) => {
     const q = req.query as { branchId?: string; from?: string; to?: string };
-    if (!q.from || !q.to) throw new Error('from y to requeridos (ISO)');
+    if (!q.from || !q.to) throw new ValidationError('from y to requeridos (ISO)');
     return getBalance({ branchId: q.branchId || undefined, from: q.from, to: q.to });
   });
 

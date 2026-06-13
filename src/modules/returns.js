@@ -41,10 +41,11 @@ export async function mount(el) {
 }
 
 async function loadData() {
-  const [products, stocks, customersRaw, sales, returnsRaw, creditNotesRaw, methodsCfg] = await Promise.all([
-    P.list(), P.listStock(), api('/api/customers'), api('/api/sales'),
+  const [products, customersRaw, sales, returnsRaw, creditNotesRaw, methodsCfg] = await Promise.all([
+    P.list(), api('/api/customers'), api('/api/sales'),
     Returns.list(), Returns.listCreditNotes(), get('config', 'payment_methods'),
   ]);
+  const stocks = products.flatMap(p => p._stocks || []);
   // El backend devuelve camelCase; mapeamos al shape snake_case que usan los renders.
   const returns = (returnsRaw || []).map(r => ({
     id: r.id, number: r.number, datetime: r.datetime,

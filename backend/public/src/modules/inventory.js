@@ -110,7 +110,8 @@ function tabBtn(id, label, icon) {
 async function renderProducts(container) {
   let products, stocks;
   try {
-    [products, stocks] = await Promise.all([P.list(), P.listStock()]);
+    products = await P.list();
+    stocks = products.flatMap(p => p._stocks || []);
   } catch (e) {
     if (e?.status === 0) {
       container.innerHTML = `<div class="ing-card p-6 text-center"><span class="material-symbols-outlined text-4xl text-amber-500">cloud_off</span>
@@ -1085,9 +1086,10 @@ async function openCatalogForm(item, title, repo, entityLabel, withParentCat, co
 
 // ==================== TRANSFERENCIAS ====================
 async function renderTransfers(container) {
-  const [transfers, branches, products, stocks] = await Promise.all([
-    getAll('transfers'), getAll('branches'), P.list(), P.listStock(),
+  const [transfers, branches, products] = await Promise.all([
+    getAll('transfers'), getAll('branches'), P.list(),
   ]);
+  const stocks = products.flatMap(p => p._stocks || []);
   const brMap = Object.fromEntries(branches.map(b => [b.id, b.name]));
   const pMap  = Object.fromEntries(products.map(p => [p.id, p]));
 

@@ -77,9 +77,10 @@ async function refreshData() {
   let products = [], stocks = [], customers = [];
   state.offline = false;
   try {
-    [products, stocks, customers] = await Promise.all([
-      P.list(), P.listStock(), api('/api/customers'),
-    ]);
+    // Derivamos el stock de los productos ya traídos (cada uno trae _stocks) para evitar
+    // una segunda lectura que podría devolver cache vieja por carrera.
+    [products, customers] = await Promise.all([P.list(), api('/api/customers')]);
+    stocks = products.flatMap(p => p._stocks || []);
   } catch (e) {
     if (e?.status === 0) {
       state.offline = true;
