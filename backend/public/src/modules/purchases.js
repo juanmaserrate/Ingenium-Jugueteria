@@ -94,7 +94,7 @@ async function refreshList(el) {
       <thead><tr>
         <th>#</th><th>Proveedor</th><th>Fecha</th><th>Factura</th>
         <th class="text-center">Items</th><th class="text-right">Total</th>
-        <th class="text-center">Estado</th><th></th>
+        <th class="text-center">Estado</th><th class="text-center">Éxito</th><th></th>
       </tr></thead>
       <tbody>
         ${purchases.map((p) => `
@@ -106,6 +106,7 @@ async function refreshList(el) {
             <td class="text-center">${p._count?.items ?? p.itemsCount ?? 0}</td>
             <td class="text-right font-bold">${money(p.totalCost)}</td>
             <td class="text-center"><span class="px-2 py-0.5 rounded-full text-xs font-bold ${STATUS_CLASS[p.status] || ''}">${STATUS_LABEL[p.status] || p.status}</span></td>
+            <td class="text-center" data-success="${p.id}">${p.status === 'received' ? '<span class="text-[#7d6c5c] text-xs">…</span>' : '<span class="text-[#7d6c5c]">—</span>'}</td>
             <td class="text-right"><span class="material-symbols-outlined text-base text-[#7d6c5c] opacity-0 group-hover:opacity-100">chevron_right</span></td>
           </tr>
         `).join('')}
@@ -115,6 +116,19 @@ async function refreshList(el) {
   listEl.querySelectorAll('tr[data-id]').forEach((tr) => {
     tr.addEventListener('click', () => openEditor(el, tr.dataset.id));
   });
+
+  // Carga lazy del % de éxito (unidades) por cada compra recibida.
+  for (const p of purchases.filter((x) => x.status === 'received')) {
+    const cell = listEl.querySelector(`[data-success="${p.id}"]`);
+    if (!cell) continue;
+    api(`/api/purchases/${encodeURIComponent(p.id)}/success`)
+      .then((s) => {
+        const u = s.totals.unitsPct;
+        const color = u >= 70 ? 'bg-green-100 text-green-800' : u >= 30 ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-700';
+        cell.innerHTML = `<span class="px-2 py-0.5 rounded-full text-xs font-bold ${color}" title="${s.totals.sold}/${s.totals.ordered} unidades · ${s.totals.moneyPct}% dinero">${u}%</span>`;
+      })
+      .catch(() => { cell.innerHTML = '<span class="text-[#7d6c5c]">—</span>'; });
+  }
 }
 
 // ==================== EDITOR ====================
@@ -257,6 +271,16 @@ function renderEditor(el) {
       <p class="text-xs text-[#7d6c5c] p-3" id="items-empty"></p>
     </div>
 
+    ${p.status === 'received' ? `
+    <div class="ing-card mt-4" id="success-panel">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="material-symbols-outlined text-[#d82f1e]">trending_up</span>
+        <h3 class="font-black text-[#241a0d]">Éxito de la compra</h3>
+        <span class="material-symbols-outlined text-base text-[#7d6c5c] cursor-help" title="Estimación. Si compraste el mismo producto en varias compras, los períodos de venta pueden solaparse.">info</span>
+      </div>
+      <div id="success-body" class="text-sm text-[#7d6c5c]">Calculando...</div>
+    </div>` : ''}
+
     <!-- Footer acciones -->
     <div class="mt-4 flex justify-end gap-3">
       ${readonly ? `<div class="text-sm text-[#7d6c5c] self-center">Compra ${STATUS_LABEL[p.status]?.toLowerCase()} — solo lectura</div>` : `
@@ -270,6 +294,52 @@ function renderEditor(el) {
   el.querySelector('#btn-back').addEventListener('click', () => { state.view = 'list'; render(el); });
   if (!readonly) wireEditorControls(el);
   renderRows(el);
+  if (p.status === 'received') loadSuccessPanel(el);
+}
+
+const bar = (pct, color) => {
+  const w = Math.min(100, Math.max(0, pct || 0));
+  return `<div class="h-2.5 rounded-full bg-gray-100 overflow-hidden"><div class="h-full ${color}" style="width:${w}%"></div></div>`;
+};
+
+async function loadSuccessPanel(el) {
+  const body = el.querySelector('#success-body');
+  if (!body) return;
+  let s;
+  try {
+    s = await api(`/api/purchases/${encodeURIComponent(state.purchase.id)}/success`);
+  } catch (err) {
+    body.innerHTML = `<span class="text-red-700">${err.message}</span>`;
+    return;
+  }
+  const t = s.totals;
+  body.innerHTML = `
+    <div class="grid grid-cols-2 gap-6 mb-4">
+      <div>
+        <div class="flex justify-between text-xs font-bold mb-1"><span>Unidades vendidas</span><span>${t.sold}/${t.ordered} · ${t.unitsPct}%</span></div>
+        ${bar(t.unitsPct, 'bg-[#d82f1e]')}
+      </div>
+      <div>
+        <div class="flex justify-between text-xs font-bold mb-1"><span>Dinero recuperado</span><span>${money(t.recovered)} / ${money(t.invested)} · ${t.moneyPct}%</span></div>
+        ${bar(t.moneyPct, 'bg-green-600')}
+      </div>
+    </div>
+    <table class="w-full text-xs">
+      <thead><tr class="text-[#7d6c5c] uppercase text-left border-b border-[#fff1e6]">
+        <th class="py-1">Producto</th><th class="text-center">Vend./Comp.</th><th class="text-center">% Unid.</th><th class="text-right">Recuperado</th><th class="text-center">% $</th>
+      </tr></thead>
+      <tbody>
+        ${s.items.map((it) => `
+          <tr class="border-b border-[#fff1e6]">
+            <td class="py-1.5 font-bold">${escapeHtml(it.name)}</td>
+            <td class="text-center">${it.measured ? `${it.sold}/${it.qtyOrdered}` : '—'}</td>
+            <td class="text-center">${it.measured ? it.unitsPct.toFixed(0) + '%' : '—'}</td>
+            <td class="text-right">${it.measured ? money(it.recovered) : '—'}</td>
+            <td class="text-center">${it.measured ? it.moneyPct.toFixed(0) + '%' : '—'}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+  `;
 }
 
 function wireEditorControls(el) {

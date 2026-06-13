@@ -9,6 +9,7 @@ import {
   deletePurchase,
   autoMatch,
   receivePurchase,
+  computeSuccess,
 } from '../services/purchases.js';
 import { savePurchaseDocument, savePurchaseStagingImage } from '../storage/documents.js';
 
@@ -56,6 +57,11 @@ export async function purchasesRoutes(app: FastifyInstance) {
   app.get('/purchases/:id', async (req) => {
     const { id } = req.params as { id: string };
     return getPurchase(id);
+  });
+
+  app.get('/purchases/:id/success', async (req) => {
+    const { id } = req.params as { id: string };
+    return computeSuccess(id);
   });
 
   app.post('/purchases', async (req) => {

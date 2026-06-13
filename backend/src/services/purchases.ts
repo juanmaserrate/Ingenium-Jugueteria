@@ -238,6 +238,64 @@ export async function deletePurchase(id: string, userId?: string) {
 }
 
 /**
+ * Métricas de éxito de una compra, on-demand. Por cada item con variantId +
+ * receivedAt: cuenta unidades vendidas (Sale.datetime >= receivedAt, confirmadas),
+ * acotadas a qtyOrdered (FIFO simplificado — ver limitación documentada en el plan).
+ * Devuelve métricas por-item y agregadas (unidades % + dinero %).
+ */
+export async function computeSuccess(purchaseId: string) {
+  const purchase = await getPurchase(purchaseId);
+  const items = [];
+  let sumOrdered = 0, sumSold = 0, sumInvested = 0, sumRecovered = 0;
+
+  for (const it of purchase.items) {
+    const base = {
+      id: it.id, name: it.rawName, qtyOrdered: it.qtyOrdered,
+      unitCost: it.unitCost, measured: false,
+      sold: 0, unitsPct: 0, invested: it.qtyOrdered * it.unitCost, recovered: 0, moneyPct: 0,
+    };
+    if (it.variantId && it.receivedAt && it.qtyOrdered > 0) {
+      const agg = await prisma.saleItem.aggregate({
+        where: {
+          variantId: it.variantId,
+          sale: { datetime: { gte: it.receivedAt }, status: 'confirmed' },
+        },
+        _sum: { qty: true, subtotal: true },
+      });
+      const soldRaw = agg._sum.qty ?? 0;
+      const sold = Math.min(soldRaw, it.qtyOrdered);
+      const avgPrice = soldRaw > 0 ? (agg._sum.subtotal ?? 0) / soldRaw : 0;
+      const recovered = avgPrice * sold;
+      base.measured = true;
+      base.sold = sold;
+      base.unitsPct = it.qtyOrdered > 0 ? (sold / it.qtyOrdered) * 100 : 0;
+      base.recovered = Number(recovered.toFixed(2));
+      base.moneyPct = base.invested > 0 ? (recovered / base.invested) * 100 : 0;
+      sumSold += sold;
+      sumRecovered += recovered;
+    }
+    sumOrdered += it.qtyOrdered;
+    sumInvested += base.invested;
+    items.push(base);
+  }
+
+  return {
+    purchaseId,
+    status: purchase.status,
+    receivedAt: purchase.receivedAt,
+    totals: {
+      ordered: sumOrdered,
+      sold: sumSold,
+      unitsPct: sumOrdered > 0 ? Number(((sumSold / sumOrdered) * 100).toFixed(1)) : 0,
+      invested: Number(sumInvested.toFixed(2)),
+      recovered: Number(sumRecovered.toFixed(2)),
+      moneyPct: sumInvested > 0 ? Number(((sumRecovered / sumInvested) * 100).toFixed(1)) : 0,
+    },
+    items,
+  };
+}
+
+/**
  * Auto-match de líneas (de scan o carga manual) contra variantes existentes,
  * por barcode o por SKU (Variant.code). Devuelve la sugerencia de vínculo;
  * NO modifica nada. El operador puede corregir antes de recibir.
