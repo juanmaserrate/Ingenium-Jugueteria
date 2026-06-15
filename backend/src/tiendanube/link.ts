@@ -23,6 +23,9 @@ export type LinkReport = {
   noMatch: number;
   conflicts: Array<{ tnId: string; name: string; barcode: string; sku: string; systemMatches: number }>;
   samples: Array<{ tnName: string; key: string; productId: string }>;
+  pagesFetched: number;
+  systemProducts: number;
+  warning: string | null;
 };
 
 /**
@@ -70,13 +73,23 @@ export async function linkByBarcode(opts: { dryRun?: boolean } = {}): Promise<Li
   const rep: LinkReport = {
     dryRun, tnProductsScanned: 0, tnVariantProductsSkipped: 0,
     linked: 0, alreadyLinked: 0, noMatch: 0, conflicts: [], samples: [],
+    pagesFetched: 0, systemProducts: products.length, warning: null,
   };
 
-  // 3) Recorrer TN paginado.
+  // 3) Recorrer TN paginado. TN puede devolver 404 al pasar la última página → fin normal.
   let page = 1;
   for (;;) {
-    const batch = await tn.listProducts({ page, per_page: 200, fields: 'id,name,variants' });
+    let batch: any;
+    try {
+      batch = await tn.listProducts({ page, per_page: 200, fields: 'id,name,variants' });
+    } catch (e: any) {
+      const status = e?.response?.status;
+      if (status === 404) break; // fin de páginas
+      rep.warning = `Error al traer página ${page}: HTTP ${status ?? ''} ${e?.message ?? e}`;
+      break;
+    }
     if (!Array.isArray(batch) || batch.length === 0) break;
+    rep.pagesFetched++;
     for (const tp of batch) {
       rep.tnProductsScanned++;
       const variants: any[] = tp.variants ?? [];
