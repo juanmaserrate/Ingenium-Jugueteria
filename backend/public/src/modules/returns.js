@@ -303,6 +303,28 @@ function differenceHelp(difference, hasItems) {
   return `<span class="text-green-700">Queda a favor del cliente ${money(Math.abs(difference))}. Elegí vale o devolución en efvo.</span>`;
 }
 
+// Selector de variante para devoluciones (muestra stock de la sucursal activa).
+function pickReturnVariant(product, br) {
+  const variants = product.variants || [];
+  return openModal({
+    title: `Elegí variante · ${product.name}`,
+    size: 'md',
+    bodyHTML: `<div class="space-y-2">${variants.map((v, i) => {
+      const qty = v.stocks?.[br]?.qty ?? 0;
+      const price = v.price_override ?? product.price;
+      const label = Object.values(v.attributes || {})[0] || v.name || `Variante ${i + 1}`;
+      return `<button data-vi="${i}" class="w-full flex items-center justify-between gap-3 px-3 py-2 border border-[#fff1e6] rounded-xl hover:border-[#d82f1e] text-left">
+        <div><div class="font-bold text-sm">${label}</div><div class="text-xs text-[#7d6c5c]">Stock: ${qty}</div></div>
+        <div class="font-black text-[#d82f1e]">${money(price)}</div></button>`;
+    }).join('')}</div>`,
+    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button>`,
+    onOpen: (el, close) => {
+      el.querySelectorAll('[data-vi]').forEach(b => b.addEventListener('click', () => close(variants[Number(b.dataset.vi)])));
+      el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
+    },
+  });
+}
+
 async function pickItem(container, listKey) {
   const br = activeBranchId();
   await openModal({
@@ -326,12 +348,22 @@ async function pickItem(container, listKey) {
             <div class="text-xs mt-1 flex justify-between"><span>Stock: ${st?.qty || 0}</span><span class="font-bold text-[#d82f1e]">${money(p.price)}</span></div>
           </button>`;
         }).join('') || '<div class="col-span-3 text-center p-4 text-[#7d6c5c]">Sin resultados</div>';
-        grid.querySelectorAll('[data-pid]').forEach(b => b.addEventListener('click', () => {
+        grid.querySelectorAll('[data-pid]').forEach(b => b.addEventListener('click', async () => {
           const p = state.data.products.find(x => x.id === b.dataset.pid);
-          if (p) {
-            state[listKey].push({ product_id: p.id, variant_id: p.variant_id || null, name: p.name, code: p.code, qty: 1, unit_price: Number(p.price) || 0, cost_snapshot: Number(p.cost) || 0 });
-            close(true);
+          if (!p) return;
+          let v = null;
+          if (p.has_variants && (p.variants || []).length > 1) {
+            v = await pickReturnVariant(p, br);
+            if (!v) return; // canceló el selector
           }
+          const vLabel = v ? (Object.values(v.attributes || {})[0] || v.name) : null;
+          state[listKey].push({
+            product_id: p.id, variant_id: v?.id || p.variant_id || null,
+            name: vLabel ? `${p.name} · ${vLabel}` : p.name, code: v?.code || p.code,
+            qty: 1, unit_price: Number(v?.price_override ?? p.price) || 0,
+            cost_snapshot: Number(v?.cost_override ?? p.cost) || 0,
+          });
+          close(true);
         }));
       };
       el.querySelector('#pick-q').addEventListener('input', draw);

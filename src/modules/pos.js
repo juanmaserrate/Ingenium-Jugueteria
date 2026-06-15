@@ -190,11 +190,11 @@ function render(el) {
     if (ev.key === 'Enter') {
       const q = search.value.trim();
       if (!q) return;
-      // Si hay match único por code → agregar directo
+      // Si hay match único por code → agregar directo (con selector de variante si corresponde)
       const match = state.products.filter(p => p.code?.toLowerCase() === q.toLowerCase() || p.barcode === q);
-      if (match.length === 1) { addToCart(match[0]); search.value = ''; renderSearchResults(el); renderCart(el); return; }
+      if (match.length === 1) { pickAndAdd(match[0], el); return; }
       const first = el.querySelector('#pos-search-results [data-pid]');
-      if (first) { const pid = first.dataset.pid; const p = state.products.find(x => x.id === pid); if (p) { addToCart(p); search.value = ''; renderSearchResults(el); renderCart(el); } }
+      if (first) { const pid = first.dataset.pid; const p = state.products.find(x => x.id === pid); if (p) pickAndAdd(p, el); }
     }
   });
   el.querySelector('#pos-open-picker').addEventListener('click', () => openCatalogPicker(el));
@@ -265,26 +265,67 @@ function renderSearchResults(root) {
   `;
   box.querySelectorAll('[data-pid]').forEach(b => b.addEventListener('click', () => {
     const p = state.products.find(x => x.id === b.dataset.pid);
-    if (p) { addToCart(p); root.querySelector('#pos-search').value = ''; renderSearchResults(root); renderCart(root); }
+    if (p) pickAndAdd(p, root);
   }));
 }
 
 // ===== Cart =====
-function addToCart(product, qty = 1) {
+// Si el producto tiene variantes, abre el selector; si no, agrega directo.
+async function pickAndAdd(product, root) {
+  if (product?.has_variants && (product.variants || []).length > 1) {
+    const variant = await openVariantPicker(product);
+    if (variant) addToCart(product, 1, variant);
+  } else {
+    addToCart(product);
+  }
+  if (root) { const s = root.querySelector('#pos-search'); if (s) s.value = ''; renderSearchResults(root); renderCart(root); }
+}
+
+// Modal para elegir la variante (talle/color) con su stock en la sucursal activa.
+function openVariantPicker(product) {
+  const br = activeBranchId();
+  const variants = product.variants || [];
+  return openModal({
+    title: `Elegí variante · ${product.name}`,
+    size: 'md',
+    bodyHTML: `
+      <div class="space-y-2">
+        ${variants.map((v, i) => {
+          const qty = v.stocks?.[br]?.qty ?? 0;
+          const price = v.price_override ?? product.price;
+          const label = Object.values(v.attributes || {})[0] || v.name || `Variante ${i + 1}`;
+          return `<button data-vi="${i}" class="w-full flex items-center justify-between gap-3 px-3 py-2 border border-[#fff1e6] rounded-xl hover:border-[#d82f1e] text-left">
+            <div><div class="font-bold text-sm">${escapeHtml(label)}</div><div class="text-xs text-[#7d6c5c]">Stock: <span class="${qty <= 0 ? 'text-red-600 font-bold' : ''}">${qty}</span></div></div>
+            <div class="font-black text-[#d82f1e]">${money(price)}</div>
+          </button>`;
+        }).join('')}
+      </div>`,
+    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button>`,
+    onOpen: (el, close) => {
+      el.querySelectorAll('[data-vi]').forEach(b => b.addEventListener('click', () => close(variants[Number(b.dataset.vi)])));
+      el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
+    },
+  });
+}
+
+function addToCart(product, qty = 1, variant = null) {
   const sale = activeSale();
-  const ex = sale.items.find(it => it.product_id === product.id && !it.manual);
+  const variantId = variant?.id || product.variant_id || null;
+  const ex = sale.items.find(it => it.product_id === product.id && it.variant_id === variantId && !it.manual);
   if (ex) { ex.qty = (Number(ex.qty) || 0) + qty; ex.subtotal = Sales.computeItemSubtotal(ex); }
   else {
+    const vLabel = variant ? (Object.values(variant.attributes || {})[0] || variant.name) : null;
     const item = {
       product_id: product.id,
-      variant_id: product.variant_id || null,
-      name: product.name,
-      code: product.code,
+      variant_id: variantId,
+      variant_name: vLabel,
+      name: vLabel ? `${product.name} · ${vLabel}` : product.name,
+      code: variant?.code || product.code,
       qty,
-      unit_price: Number(product.price) || 0,
+      unit_price: Number(variant?.price_override ?? product.price) || 0,
       discount_pct: 0,
       discount_fixed: 0,
-      cost_snapshot: Number(product.cost) || 0,
+      cost_snapshot: Number(variant?.cost_override ?? product.cost) || 0,
     };
     item.subtotal = Sales.computeItemSubtotal(item);
     sale.items.push(item);
@@ -808,9 +849,13 @@ async function openCatalogPicker(root) {
             </div>
           </button>`;
         }).join('') : '<div class="col-span-4 text-center p-8 text-[#7d6c5c]">Sin resultados</div>';
-        grid.querySelectorAll('[data-pid]').forEach(b => b.addEventListener('click', () => {
+        grid.querySelectorAll('[data-pid]').forEach(b => b.addEventListener('click', async () => {
           const p = state.products.find(x => x.id === b.dataset.pid);
-          if (p) { addToCart(p); toast(`+1 ${p.name}`, 'info'); }
+          if (!p) return;
+          if (p.has_variants && (p.variants || []).length > 1) {
+            const variant = await openVariantPicker(p);
+            if (variant) { addToCart(p, 1, variant); toast(`+1 ${p.name}`, 'info'); }
+          } else { addToCart(p); toast(`+1 ${p.name}`, 'info'); }
         }));
       };
       el.querySelector('#cp-q').addEventListener('input', (ev) => { q = ev.target.value.trim().toLowerCase(); renderGrid(); });

@@ -57,7 +57,7 @@ async function chooseDeleteScope(product) {
 const state = {
   tab: 'products',
   selected: new Set(),
-  filters: { search: '', category: '', brand: '', supplier: '', onlyMeli: false },
+  filters: { search: '', category: '', brand: '', supplier: '', onlyMeli: false, variant: '' },
   visibleCols: new Set(['code', 'name', 'category', 'brand', 'supplier', 'cost', 'price', 'margin', 'stock_lomas', 'stock_banfield', 'total', 'meli']),
 };
 
@@ -140,12 +140,19 @@ async function renderProducts(container) {
     if (f.brand && p.brand_id !== f.brand) return false;
     if (f.supplier && p.supplier_id !== f.supplier) return false;
     if (f.onlyMeli && !p.published_meli) return false;
+    if (f.variant) {
+      const vq = f.variant.toLowerCase();
+      const hit = (p.variants || []).some(v =>
+        (v.name || '').toLowerCase().includes(vq) ||
+        Object.entries(v.attributes || {}).some(([k, val]) => `${k} ${val}`.toLowerCase().includes(vq)));
+      if (!hit) return false;
+    }
     return true;
   });
 
   const cols = [
     { id: 'code', label: 'Código', render: p => `<span class="font-mono text-xs text-[#7d6c5c]">${p.code}</span>` },
-    { id: 'name', label: 'Nombre', render: p => `<span class="font-bold">${p.name}</span>`, editable: 'text' },
+    { id: 'name', label: 'Nombre', render: p => `<span class="font-bold">${p.name}</span>${p.has_variants ? `<span class="ml-2 px-1.5 py-0.5 rounded-full bg-[#fff1e6] text-[#d82f1e] text-[10px] font-black align-middle">${(p.variants||[]).length} ${p.variant_type || 'var'}</span>` : ''}`, editable: 'text' },
     { id: 'category', label: 'Categoría', render: p => catMap[p.category_id] || '-' },
     { id: 'brand', label: 'Marca', render: p => brMap[p.brand_id] || '-' },
     { id: 'supplier', label: 'Proveedor', render: p => spMap[p.supplier_id] || '-' },
@@ -193,6 +200,7 @@ async function renderProducts(container) {
           <option value="">Todos los proveedores</option>
           ${suppliers.map(s => `<option value="${s.id}" ${f.supplier===s.id?'selected':''}>${s.name}</option>`).join('')}
         </select>
+        <input id="f-variant" class="ing-input max-w-[160px]" placeholder="Variante (talle…)" value="${escapeAttr(f.variant || '')}" />
         <label class="flex items-center gap-2 text-sm font-bold cursor-pointer">
           <input id="f-meli" type="checkbox" ${f.onlyMeli?'checked':''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" /> Sólo MELI
         </label>
@@ -253,7 +261,8 @@ async function renderProducts(container) {
   container.querySelector('#f-brand').addEventListener('change', e => { state.filters.brand = e.target.value; renderProducts(container); });
   container.querySelector('#f-supplier').addEventListener('change', e => { state.filters.supplier = e.target.value; renderProducts(container); });
   container.querySelector('#f-meli').addEventListener('change', e => { state.filters.onlyMeli = e.target.checked; renderProducts(container); });
-  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false }; renderProducts(container); });
+  container.querySelector('#f-variant').addEventListener('input', e => { state.filters.variant = e.target.value; renderProducts(container); });
+  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false, variant:'' }; renderProducts(container); });
 
   container.querySelector('#btn-new').addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-cols').addEventListener('click', () => openColumnsModal(cols, container));
@@ -441,13 +450,33 @@ async function openProductForm(p, container) {
       <label class="col-span-2"><span class="text-xs font-black text-[#7d6c5c] uppercase">Código</span>
         <input name="code" class="ing-input mt-1" value="${p?.code || ''}" />
       </label>
-      <div class="col-span-3 grid grid-cols-2 gap-3 p-2 bg-[#fff1e6] rounded-xl border border-[#e3ceba]">
+      <div id="single-stock-block" class="col-span-3 grid grid-cols-2 gap-3 p-2 bg-[#fff1e6] rounded-xl border border-[#e3ceba]">
         <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Stock ${lomas?.name || 'Lomas'}</span>
           <input name="stock_lomas" type="number" min="0" step="1" class="ing-input mt-1" value="${stockLomas}" />
         </label>
         <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Stock ${banf?.name || 'Banfield'}</span>
           <input name="stock_banfield" type="number" min="0" step="1" class="ing-input mt-1" value="${stockBanf}" />
         </label>
+      </div>
+
+      <!-- Variantes -->
+      <div class="col-span-3">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" id="chk-has-variants" ${p?.has_variants ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+          <span class="text-sm font-bold">Este producto tiene variantes (talles / colores)</span>
+        </label>
+        <div id="variant-editor" class="${p?.has_variants ? '' : 'hidden'} mt-2 p-3 rounded-2xl bg-[#fff8f0] border border-[#e3ceba] space-y-2">
+          <label class="block max-w-xs"><span class="text-xs font-black text-[#7d6c5c] uppercase">Tipo de variante</span>
+            <input id="variant-type" list="variant-types-dl" class="ing-input mt-1" placeholder="Talle, Color…" value="${escapeAttr(p?.variant_type || '')}" />
+            <datalist id="variant-types-dl"></datalist>
+          </label>
+          <datalist id="variant-values-dl"></datalist>
+          <div class="grid grid-cols-[1fr_110px_140px_100px_90px_90px_32px] gap-2 px-1 text-[10px] font-black uppercase text-[#7d6c5c]">
+            <div>Valor</div><div>Código</div><div>Barcode</div><div>Precio</div><div class="text-center">${lomas?.name || 'Lomas'}</div><div class="text-center">${banf?.name || 'Banfield'}</div><div></div>
+          </div>
+          <div id="variant-rows" class="space-y-1"></div>
+          <button type="button" id="add-variant-row" class="text-sm font-bold text-[#d82f1e] hover:underline">+ Agregar valor</button>
+        </div>
       </div>
       <div class="col-span-3 flex gap-6 items-center">
         <label class="flex items-center gap-2 cursor-pointer">
@@ -563,6 +592,55 @@ async function openProductForm(p, container) {
       costIn.addEventListener('input', recalcPrice);
       pctIn.addEventListener('input', recalcPrice);
       priceIn.addEventListener('input', recalcPct);
+
+      // ----- Editor de variantes -----
+      const hasVarChk = el.querySelector('#chk-has-variants');
+      const variantEditor = el.querySelector('#variant-editor');
+      const singleStock = el.querySelector('#single-stock-block');
+      const variantTypeIn = el.querySelector('#variant-type');
+      const variantRowsEl = el.querySelector('#variant-rows');
+      try {
+        const sug = P.variantSuggestions();
+        el.querySelector('#variant-types-dl').innerHTML = (sug.types || []).map(t => `<option value="${escapeAttr(t)}"></option>`).join('');
+        el.querySelector('#variant-values-dl').innerHTML = (sug.values || []).map(v => `<option value="${escapeAttr(v)}"></option>`).join('');
+      } catch { /* sin sugerencias */ }
+      const variantRows = [];
+      if (isEdit && p?.has_variants && p?.variants?.length) {
+        for (const v of p.variants) {
+          variantRows.push({
+            id: v.id, valor: Object.values(v.attributes || {})[0] || v.name || '',
+            code: v.code || '', barcode: v.barcode || '', price: v.price_override ?? '',
+            lomas: v.stocks?.br_lomas?.qty ?? 0, banf: v.stocks?.br_banfield?.qty ?? 0,
+          });
+        }
+      }
+      const drawVariantRows = () => {
+        variantRowsEl.innerHTML = variantRows.map((r, i) => `
+          <div class="grid grid-cols-[1fr_110px_140px_100px_90px_90px_32px] gap-2 items-center" data-vrow="${i}">
+            <input data-vk="valor" list="variant-values-dl" class="ing-input !py-1" value="${escapeAttr(r.valor)}" placeholder="M" />
+            <input data-vk="code" class="ing-input !py-1" value="${escapeAttr(r.code)}" />
+            <input data-vk="barcode" class="ing-input !py-1" value="${escapeAttr(r.barcode)}" />
+            <input data-vk="price" type="number" step="0.01" class="ing-input !py-1" value="${r.price}" placeholder="opc" />
+            <input data-vk="lomas" type="number" min="0" step="1" class="ing-input !py-1 text-center" value="${r.lomas}" />
+            <input data-vk="banf" type="number" min="0" step="1" class="ing-input !py-1 text-center" value="${r.banf}" />
+            <button type="button" data-vrm="${i}" class="text-red-500 font-bold">✕</button>
+          </div>`).join('');
+        variantRowsEl.querySelectorAll('[data-vrow]').forEach((row) => {
+          const i = Number(row.dataset.vrow);
+          row.querySelectorAll('[data-vk]').forEach((inp) => inp.addEventListener('input', (e) => { variantRows[i][inp.dataset.vk] = e.target.value; }));
+        });
+        variantRowsEl.querySelectorAll('[data-vrm]').forEach((b) => b.addEventListener('click', () => { variantRows.splice(Number(b.dataset.vrm), 1); drawVariantRows(); }));
+      };
+      drawVariantRows();
+      el.querySelector('#add-variant-row')?.addEventListener('click', () => { variantRows.push({ valor: '', code: '', barcode: '', price: '', lomas: 0, banf: 0 }); drawVariantRows(); });
+      const syncVariantVisibility = () => {
+        const on = !!hasVarChk?.checked;
+        variantEditor?.classList.toggle('hidden', !on);
+        singleStock?.classList.toggle('hidden', on);
+        if (on && variantRows.length === 0) { variantRows.push({ valor: '', code: '', barcode: '', price: '', lomas: 0, banf: 0 }); drawVariantRows(); }
+      };
+      hasVarChk?.addEventListener('change', syncVariantVisibility);
+      syncVariantVisibility();
 
       // Toggle de la sección TN según el checkbox "Publicar en Tienda Nube".
       const tnSection = el.querySelector('#tn-section');
@@ -774,41 +852,88 @@ async function openProductForm(p, container) {
           .map((cb) => Number(cb.dataset.tnCat))
           .filter((n) => !Number.isNaN(n));
         d.tn_category_ids = tnCatIds;
-        return { d, qtyLomas, qtyBanf };
+        // Variantes (si el toggle está activo): un "tipo" + filas de valores.
+        let variants = null;
+        if (hasVarChk?.checked) {
+          const type = (variantTypeIn?.value || '').trim() || 'Variante';
+          variants = variantRows
+            .filter((r) => String(r.valor).trim())
+            .map((r) => ({
+              id: r.id || null, type, valor: String(r.valor).trim(),
+              code: (r.code || '').trim() || null, barcode: (r.barcode || '').trim() || null,
+              price: r.price === '' || r.price == null ? null : Number(r.price),
+              lomas: Math.max(0, Number(r.lomas) || 0), banf: Math.max(0, Number(r.banf) || 0),
+            }));
+        }
+        return { d, qtyLomas, qtyBanf, variants };
       };
 
-      const persistOne = async ({ d, qtyLomas, qtyBanf }) => {
-        if (!d.name?.trim()) { toast('Nombre requerido', 'error'); return null; }
-        // Validación específica para publicación en Tienda Nube: TN rechaza con
-        // 'cost must be greater than 0' / 'price must be greater than 0'. Detectamos
-        // acá para mostrar un error claro en lugar de un sync silencioso que falla.
-        if (d.published_tn) {
-          const costNum = Number(d.cost) || 0;
-          const priceNum = Number(d.price) || 0;
-          if (costNum <= 0) { toast('Para publicar en Tienda Nube el costo debe ser mayor a 0', 'error'); return null; }
-          if (priceNum <= 0) { toast('Para publicar en Tienda Nube el precio debe ser mayor a 0', 'error'); return null; }
+      const drainImages = async (saved) => {
+        if (pendingFiles.length === 0) return;
+        const { uploadFile } = await import('../core/api.js');
+        for (const f of pendingFiles) {
+          try {
+            const img = await uploadFile(`/api/products/${encodeURIComponent(saved.id)}/images`, f);
+            if (img?.id) savedImages.push({ id: img.id, url: img.url });
+          } catch (err) {
+            console.warn('Upload imagen falló', err);
+            toast(`No se pudo subir "${f.name}"`, 'warn');
+          }
         }
-        // P.save crea/actualiza el producto en el backend (única fuente de verdad).
-        // Si published_tn = true, el backend encola el sync a Tienda Nube automáticamente.
-        const saved = await P.save({ ...(p || {}), ...d });
-        // Stock absoluto por sucursal (el form maneja cantidades absolutas).
-        await P.setStock(saved.id, 'br_lomas',    { qty: qtyLomas, reason: isEdit ? 'Ajuste desde inventario' : 'Stock inicial' });
-        await P.setStock(saved.id, 'br_banfield', { qty: qtyBanf,  reason: isEdit ? 'Ajuste desde inventario' : 'Stock inicial' });
-        // Drenar imágenes pendientes (productos nuevos; en edición se suben al pickear).
-        if (pendingFiles.length > 0) {
-          const { uploadFile } = await import('../core/api.js');
-          for (const f of pendingFiles) {
-            try {
-              const img = await uploadFile(`/api/products/${encodeURIComponent(saved.id)}/images`, f);
-              if (img?.id) savedImages.push({ id: img.id, url: img.url });
-            } catch (err) {
-              console.warn('Upload imagen falló', err);
-              toast(`No se pudo subir "${f.name}"`, 'warn');
+        pendingFiles.length = 0;
+        renderImageThumbs();
+      };
+
+      const persistOne = async ({ d, qtyLomas, qtyBanf, variants }) => {
+        if (!d.name?.trim()) { toast('Nombre requerido', 'error'); return null; }
+        if (d.published_tn) {
+          if ((Number(d.cost) || 0) <= 0) { toast('Para publicar en Tienda Nube el costo debe ser mayor a 0', 'error'); return null; }
+          if ((Number(d.price) || 0) <= 0) { toast('Para publicar en Tienda Nube el precio debe ser mayor a 0', 'error'); return null; }
+        }
+
+        // --- Con variantes ---
+        if (variants && variants.length) {
+          if (!isEdit) {
+            // Alta: createProduct con variants[] (cada una con su stock por sucursal).
+            const saved = await P.save({ ...d, variants: variants.map((v) => ({
+              name: v.valor, attributes: { [v.type]: v.valor }, code: v.code, barcode: v.barcode,
+              price_override: v.price, stocks: { br_lomas: v.lomas, br_banfield: v.banf },
+            })) });
+            await drainImages(saved);
+            return saved;
+          }
+          // Edición: actualizar producto + diff de variantes (el backend sincroniza a TN solo).
+          const saved = await P.save({ ...(p || {}), ...d });
+          const formIds = new Set(variants.filter((v) => v.id).map((v) => v.id));
+          for (const ev of (p?.variants || [])) {
+            if (!formIds.has(ev.id)) {
+              try { await P.removeVariant(ev.id); }
+              catch { toast(`No se pudo borrar la variante "${ev.name}" (¿tiene ventas?)`, 'warn'); }
             }
           }
-          pendingFiles.length = 0;
-          renderImageThumbs();
+          for (const v of variants) {
+            const attrs = { [v.type]: v.valor };
+            let vid = v.id;
+            if (vid) {
+              await P.updateVariant(vid, { name: v.valor, attributes: attrs, code: v.code, barcode: v.barcode, priceOverride: v.price });
+            } else {
+              const nv = await P.createVariant({ productId: saved.id, name: v.valor, attributes: attrs, code: v.code, barcode: v.barcode, priceOverride: v.price });
+              vid = nv?.id;
+            }
+            if (vid) {
+              await P.setStock(saved.id, 'br_lomas',    { qty: v.lomas, variantId: vid, reason: 'Ajuste variante' });
+              await P.setStock(saved.id, 'br_banfield', { qty: v.banf,  variantId: vid, reason: 'Ajuste variante' });
+            }
+          }
+          await drainImages(saved);
+          return saved;
         }
+
+        // --- Producto simple (sin variantes) ---
+        const saved = await P.save({ ...(p || {}), ...d });
+        await P.setStock(saved.id, 'br_lomas',    { qty: qtyLomas, reason: isEdit ? 'Ajuste desde inventario' : 'Stock inicial' });
+        await P.setStock(saved.id, 'br_banfield', { qty: qtyBanf,  reason: isEdit ? 'Ajuste desde inventario' : 'Stock inicial' });
+        await drainImages(saved);
         return saved;
       };
 
@@ -820,6 +945,10 @@ async function openProductForm(p, container) {
         form.elements.price.value = 0;
         form.elements.stock_lomas.value = 0;
         form.elements.stock_banfield.value = 0;
+        // Variantes: limpiar valores cargados (mantener el "tipo" sticky para el lote).
+        variantRows.length = 0;
+        drawVariantRows();
+        if (hasVarChk?.checked) { variantRows.push({ valor: '', code: '', barcode: '', price: '', lomas: 0, banf: 0 }); drawVariantRows(); }
         // En lote, dejamos sticky los checkboxes de publicación: si querés publicar
         // todo el lote a TN/MELI tildás una vez y queda. Desactivá manualmente para excepciones.
         // Limpiamos los campos específicos del producto que NO son categorización.

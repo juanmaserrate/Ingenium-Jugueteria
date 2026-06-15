@@ -38,6 +38,32 @@ function toFront(bp) {
   const stocks = Object.entries(byBranch).map(([branch_id, e]) => ({
     product_id: bp.id, branch_id, qty: e.qty, reserved_qty: e.reserved_qty,
   }));
+  // Variantes expuestas para el front (editor de inventario + selector del POS).
+  const frontVariants = variants.map((v) => {
+    const st = {};
+    for (const s of v.stocks || []) st[s.branchId] = { qty: s.qty || 0, reserved: s.reservedQty || 0 };
+    return {
+      id: v.id,
+      name: v.name,
+      attributes: v.attributes || {},
+      code: v.code ?? null,
+      barcode: v.barcode ?? null,
+      is_default: !!v.isDefault,
+      price_override: v.priceOverride ?? null,
+      cost_override: v.costOverride ?? null,
+      stocks: st,
+    };
+  });
+  // "Tiene variantes" = más de una, o una sola que NO es la default genérica.
+  const hasVariants = frontVariants.length > 1
+    || (frontVariants.length === 1 && !frontVariants[0].is_default && frontVariants[0].name !== 'default');
+  const variantType = (() => {
+    for (const v of frontVariants) {
+      const k = Object.keys(v.attributes || {})[0];
+      if (k) return k;
+    }
+    return null;
+  })();
   return {
     id: bp.id,
     code: bp.code,
@@ -66,6 +92,9 @@ function toFront(bp) {
     created_at: bp.createdAt ?? null,
     updated_at: bp.updatedAt ?? null,
     variant_id: dv?.id ?? null,
+    variants: frontVariants,
+    has_variants: hasVariants,
+    variant_type: variantType,
     _stocks: stocks,
   };
 }
@@ -149,11 +178,22 @@ export async function save(data) {
   let resp;
   if (isNew) {
     const id = newId('prod');
-    // Generamos el variantId en el front para conocerlo desde el origen.
-    resp = await api('/api/products', {
-      method: 'POST',
-      body: { ...body, id, variants: [{ id: newId('var'), isDefault: true, name: 'default' }] },
-    });
+    // Si el form trae variantes, las creamos con el producto (cada una con su stock por sucursal).
+    // Si no, una sola variante "default" (producto simple).
+    const variants = Array.isArray(data.variants) && data.variants.length
+      ? data.variants.map((v, i) => ({
+          id: v.id || newId('var'),
+          name: v.name || 'default',
+          attributes: v.attributes || {},
+          code: v.code || null,
+          barcode: v.barcode || null,
+          priceOverride: num(v.price_override),
+          costOverride: num(v.cost_override),
+          isDefault: i === 0 && data.variants.length === 1,
+          stocks: Object.entries(v.stocks || {}).map(([branchId, qty]) => ({ branchId, qty: Math.max(0, Number(qty) || 0) })),
+        }))
+      : [{ id: newId('var'), isDefault: true, name: 'default' }];
+    resp = await api('/api/products', { method: 'POST', body: { ...body, id, variants } });
   } else {
     resp = await api(`/api/products/${encodeURIComponent(data.id)}`, { method: 'PUT', body });
   }
@@ -187,52 +227,112 @@ export async function getStock(productId, branchId) {
   return { product_id: productId, branch_id: branchId, qty: st?.qty || 0, reserved_qty: st?.reservedQty || 0 };
 }
 
-// Setea stock absoluto en una sucursal.
+// Setea stock absoluto en una sucursal. fields.variantId opcional (si no, la default).
 export async function setStock(productId, branchId, fields) {
-  const variantId = await resolveVariantId(productId);
+  const variantId = fields?.variantId || await resolveVariantId(productId);
   if (!variantId) throw new Error('Producto sin variante en el servidor');
   const qty = Math.max(0, Number(fields?.qty) || 0);
   const st = await api('/api/stock/set', {
     method: 'POST',
     body: { variantId, branchId, qty, reason: fields?.reason || 'Ajuste desde inventario' },
   });
-  patchCacheStock(productId, branchId, st);
+  patchCacheStock(productId, branchId, st, variantId);
   emit(EV.STOCK_CHANGED, { product_id: productId, branch_id: branchId });
   return { product_id: productId, branch_id: branchId, qty: st?.qty ?? qty, reserved_qty: st?.reservedQty || 0 };
 }
 
-export async function adjustStock(productId, branchId, delta, reason = '') {
-  const variantId = await resolveVariantId(productId);
-  if (!variantId) throw new Error('Producto sin variante en el servidor');
+export async function adjustStock(productId, branchId, delta, reason = '', { variantId } = {}) {
+  const vid = variantId || await resolveVariantId(productId);
+  if (!vid) throw new Error('Producto sin variante en el servidor');
   const st = await api('/api/stock/adjust', {
     method: 'POST',
-    body: { variantId, branchId, delta: Math.trunc(Number(delta) || 0), reason },
+    body: { variantId: vid, branchId, delta: Math.trunc(Number(delta) || 0), reason },
   });
-  patchCacheStock(productId, branchId, st);
+  patchCacheStock(productId, branchId, st, vid);
   emit(EV.STOCK_CHANGED, { product_id: productId, branch_id: branchId });
   return { product_id: productId, branch_id: branchId, qty: st?.qty || 0, reserved_qty: st?.reservedQty || 0 };
 }
 
-export async function transferStock({ product_id, from_branch, to_branch, qty }) {
-  const variantId = await resolveVariantId(product_id);
-  if (!variantId) throw new Error('Producto sin variante en el servidor');
+export async function transferStock({ product_id, from_branch, to_branch, qty, variantId }) {
+  const vid = variantId || await resolveVariantId(product_id);
+  if (!vid) throw new Error('Producto sin variante en el servidor');
   await api('/api/stock/transfer', {
     method: 'POST',
-    body: { variantId, fromBranch: from_branch, toBranch: to_branch, qty: Math.trunc(Number(qty) || 0) },
+    body: { variantId: vid, fromBranch: from_branch, toBranch: to_branch, qty: Math.trunc(Number(qty) || 0) },
   });
   emit(EV.STOCK_CHANGED, { product_id, branch_id: to_branch });
   return { ok: true };
 }
 
+// --- CRUD de variantes (el backend sincroniza a TN solo si el producto está publicado) ---
+export async function createVariant({ productId, name, attributes, code, barcode, priceOverride, costOverride }) {
+  const v = await api('/api/variants', {
+    method: 'POST',
+    body: { productId, name, attributes: attributes || {}, code: code || null, barcode: barcode || null,
+      priceOverride: num(priceOverride), costOverride: num(costOverride) },
+  });
+  emit(EV.PRODUCT_UPDATED, { id: productId });
+  return v;
+}
+
+export async function updateVariant(id, fields) {
+  const body = {};
+  if (fields.name !== undefined) body.name = fields.name;
+  if (fields.attributes !== undefined) body.attributes = fields.attributes;
+  if (fields.code !== undefined) body.code = fields.code || null;
+  if (fields.barcode !== undefined) body.barcode = fields.barcode || null;
+  if (fields.priceOverride !== undefined) body.priceOverride = num(fields.priceOverride);
+  if (fields.costOverride !== undefined) body.costOverride = num(fields.costOverride);
+  const v = await api(`/api/variants/${encodeURIComponent(id)}`, { method: 'PUT', body });
+  return v;
+}
+
+export async function removeVariant(id) {
+  await api(`/api/variants/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+// Sugerencias para autocompletar tipo y valores de variante, juntando lo del catálogo en cache.
+export function variantSuggestions() {
+  const types = new Set();
+  const values = new Set();
+  for (const p of _cache.list) {
+    for (const v of p.variants || []) {
+      for (const [k, val] of Object.entries(v.attributes || {})) {
+        if (k) types.add(k);
+        if (val) values.add(String(val));
+      }
+      if (v.name && v.name !== 'default') values.add(v.name);
+    }
+  }
+  return { types: [...types].sort(), values: [...values].sort() };
+}
+
 // Actualiza la cache local tras una operación de stock (para que el próximo
 // getStock/listStock refleje el nuevo valor sin refetch).
-function patchCacheStock(productId, branchId, st) {
+function patchCacheStock(productId, branchId, st, variantId) {
   const p = _cache.byId.get(productId);
   if (!p) return;
-  p._stocks = p._stocks || [];
-  const e = p._stocks.find((s) => s.branch_id === branchId);
-  const qty = st?.qty || 0;
   const reserved = st?.reservedQty || 0;
-  if (e) { e.qty = qty; e.reserved_qty = reserved; }
-  else p._stocks.push({ product_id: productId, branch_id: branchId, qty, reserved_qty: reserved });
+  // Actualizar la variante específica en cache (si la conocemos).
+  if (variantId && Array.isArray(p.variants)) {
+    const v = p.variants.find((x) => x.id === variantId);
+    if (v) { v.stocks = v.stocks || {}; v.stocks[branchId] = { qty: st?.qty || 0, reserved }; }
+  }
+  p._stocks = p._stocks || [];
+  if (Array.isArray(p.variants) && p.variants.length) {
+    // Recalcular el agregado por sucursal (suma de variantes).
+    const byBranch = {};
+    for (const v of p.variants) {
+      for (const [bid, s] of Object.entries(v.stocks || {})) {
+        const e = byBranch[bid] || { qty: 0, reserved_qty: 0 };
+        e.qty += s.qty || 0; e.reserved_qty += s.reserved || 0;
+        byBranch[bid] = e;
+      }
+    }
+    p._stocks = Object.entries(byBranch).map(([branch_id, e]) => ({ product_id: productId, branch_id, qty: e.qty, reserved_qty: e.reserved_qty }));
+  } else {
+    const e = p._stocks.find((s) => s.branch_id === branchId);
+    if (e) { e.qty = st?.qty || 0; e.reserved_qty = reserved; }
+    else p._stocks.push({ product_id: productId, branch_id: branchId, qty: st?.qty || 0, reserved_qty: reserved });
+  }
 }
