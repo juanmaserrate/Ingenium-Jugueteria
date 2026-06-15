@@ -13,6 +13,7 @@ import { randomId } from '../utils/crypto.js';
 import { confirmSale } from '../services/sales.js';
 import { enqueueSync } from '../sync/queue.js';
 import { getTnClient } from '../tiendanube/client.js';
+import { linkByBarcode } from '../tiendanube/link.js';
 
 export async function integrationsRoutes(app: FastifyInstance) {
   // Status p\u00fablico (sin auth) para el ping del frontend
@@ -66,6 +67,13 @@ export async function integrationsRoutes(app: FastifyInstance) {
     r.post('/integrations/tiendanube/disconnect', async (req) => {
       await disconnect(req.user.userId);
       return { ok: true };
+    });
+
+    // Enlaza productos del sistema con TN por código de barras / SKU (lee la API de TN).
+    // dryRun=true (default) solo reporta; dryRun=false crea los mapeos.
+    r.post('/integrations/tiendanube/link-by-barcode', async (req) => {
+      const body = z.object({ dryRun: z.boolean().optional() }).parse(req.body ?? {});
+      return linkByBarcode({ dryRun: body.dryRun ?? true });
     });
 
     r.patch('/integrations/tiendanube/settings', async (req) => {
