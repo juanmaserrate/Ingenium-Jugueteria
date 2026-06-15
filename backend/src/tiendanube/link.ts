@@ -14,6 +14,48 @@ function tnName(n: any): string {
   return n.es ?? n.pt ?? Object.values(n)[0] ?? '';
 }
 
+// Vuelca el catálogo de TN (vía API, barcodes completos) como filas planas:
+// una por variante. Sirve para cruzar offline contra el consolidado.
+export async function dumpTnCatalog() {
+  const tn = await requireTnClient();
+  const rows: any[] = [];
+  let page = 1; let warning: string | null = null;
+  for (;;) {
+    let batch: any;
+    try {
+      batch = await tn.listProducts({ page, per_page: 200, fields: 'id,name,variants' });
+    } catch (e: any) {
+      const s = e?.response?.status;
+      if (s === 404) break;
+      warning = `Error página ${page}: HTTP ${s ?? ''} ${e?.message ?? e}`;
+      break;
+    }
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    for (const tp of batch) {
+      const vs: any[] = tp.variants ?? [];
+      const isVar = vs.length !== 1;
+      for (const v of vs) {
+        rows.push({
+          tnProductId: String(tp.id),
+          name: tnName(tp.name),
+          isVariantProduct: isVar,
+          variantCount: vs.length,
+          tnVariantId: String(v.id),
+          sku: v.sku ?? '',
+          barcode: v.barcode ?? '',
+          price: v.price ?? '',
+          promotionalPrice: v.promotional_price ?? '',
+          stock: v.stock ?? null,
+          values: (v.values ?? []).map((x: any) => x?.es ?? x).join(' / '),
+        });
+      }
+    }
+    page++;
+    if (page > 500) break;
+  }
+  return { count: rows.length, pages: page - 1, warning, rows };
+}
+
 export type LinkReport = {
   dryRun: boolean;
   tnProductsScanned: number;

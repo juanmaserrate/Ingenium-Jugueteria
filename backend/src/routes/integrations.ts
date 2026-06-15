@@ -13,7 +13,7 @@ import { randomId } from '../utils/crypto.js';
 import { confirmSale } from '../services/sales.js';
 import { enqueueSync } from '../sync/queue.js';
 import { getTnClient } from '../tiendanube/client.js';
-import { linkByBarcode } from '../tiendanube/link.js';
+import { linkByBarcode, dumpTnCatalog } from '../tiendanube/link.js';
 
 export async function integrationsRoutes(app: FastifyInstance) {
   // Status p\u00fablico (sin auth) para el ping del frontend
@@ -74,6 +74,11 @@ export async function integrationsRoutes(app: FastifyInstance) {
     r.post('/integrations/tiendanube/link-by-barcode', async (req) => {
       const body = z.object({ dryRun: z.boolean().optional() }).parse(req.body ?? {});
       return linkByBarcode({ dryRun: body.dryRun ?? true });
+    });
+
+    // Vuelca el catálogo de TN (API, barcodes completos) para cruzar offline.
+    r.get('/integrations/tiendanube/catalog-dump', async () => {
+      return dumpTnCatalog();
     });
 
     r.patch('/integrations/tiendanube/settings', async (req) => {
