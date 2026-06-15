@@ -7,7 +7,7 @@
 //   - API (/api, /auth, /webhooks): NUNCA cachear — se deja a fetch normal.
 //     Cuando no hay red, la cola local de sync-queue.js se encarga.
 
-const VERSION = 'ingenium-v2-tn';
+const VERSION = 'ingenium-v3-online';
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSETS_CACHE = `${VERSION}-assets`;
 const CDN_CACHE = `${VERSION}-cdn`;
@@ -106,6 +106,21 @@ async function cacheFirst(event, cacheName) {
   }
 }
 
+// Network-first: online siempre trae la última versión; offline cae a la cache.
+// Necesario para que los DEPLOYS lleguen al usuario (antes era cache-first y servía
+// el JS viejo hasta el siguiente refresh en background).
+async function networkFirst(event, cacheName) {
+  const cache = await caches.open(cacheName);
+  try {
+    const res = await fetch(event.request);
+    if (res && res.ok) cache.put(event.request, res.clone());
+    return res;
+  } catch (err) {
+    const cached = await cache.match(event.request);
+    return cached || new Response('', { status: 504, statusText: 'Offline' });
+  }
+}
+
 async function staleWhileRevalidate(event, cacheName) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(event.request);
@@ -158,9 +173,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Mismo origen: cache-first
+  // Mismo origen (JS/CSS de la app): network-first → el deploy llega al instante online,
+  // con fallback a cache si no hay red.
   if (url.origin === self.location.origin) {
-    event.respondWith(cacheFirst(event, ASSETS_CACHE));
+    event.respondWith(networkFirst(event, ASSETS_CACHE));
     return;
   }
 });
