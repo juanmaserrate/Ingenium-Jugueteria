@@ -1,5 +1,6 @@
 import { prisma } from '../db.js';
 import { requireTnClient } from './client.js';
+import { ValidationError } from '../utils/errors.js';
 
 // Normaliza un código/barcode para comparar: trim + saca ceros a la izquierda.
 function z(s: unknown): string {
@@ -29,6 +30,12 @@ export async function linkManual(input: { productId: string; tnProductId: string
     tnVariantId = String((tp.variants ?? [])[0]?.id ?? '');
   }
   if (!tnVariantId) throw new Error('No se pudo determinar la variante de TN');
+
+  // Evitar choque de unicidad: si ese producto/variante de TN ya está vinculado a OTRO, avisar claro.
+  const existP = await prisma.productTnMapping.findUnique({ where: { tnProductId: String(input.tnProductId) } });
+  if (existP && existP.productId !== product.id) throw new ValidationError('Ese producto de Tienda Nube ya está vinculado a otro producto del sistema.');
+  const existV = await prisma.variantTnMapping.findUnique({ where: { tnVariantId: String(tnVariantId) } });
+  if (existV && existV.variantId !== dv.id) throw new ValidationError('Esa variante de Tienda Nube ya está vinculada a otra del sistema.');
 
   await prisma.$transaction(async (tx) => {
     await tx.productTnMapping.upsert({
