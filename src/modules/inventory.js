@@ -244,6 +244,7 @@ async function renderProducts(container) {
               <td><input type="checkbox" class="row-check rounded text-[#d82f1e] focus:ring-[#d82f1e]" ${state.selected.has(p.id)?'checked':''} /></td>
               ${visibleCols.map(c => `<td class="${c.align==='right'?'text-right':c.align==='center'?'text-center':''}" ${c.editable?`data-editable="${c.editable}" data-field="${c.field||c.id}"`:''}>${c.render(p)}</td>`).join('')}
               <td class="text-right">
+                <button data-tnlink="${p.id}" title="${p.linked_tn ? 'Vinculado a Tienda Nube (click para desvincular)' : 'Vincular con Tienda Nube'}" class="${p.linked_tn ? '' : 'opacity-0 group-hover:opacity-100'} p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base ${p.linked_tn ? 'text-green-600' : 'text-[#7d6c5c]'}">${p.linked_tn ? 'link' : 'add_link'}</span></button>
                 <button data-edit="${p.id}" class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base text-[#7d6c5c]">edit</span></button>
                 <button data-del="${p.id}"  class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 rounded-full transition-all"><span class="material-symbols-outlined text-base text-red-500">delete</span></button>
               </td>
@@ -315,6 +316,20 @@ async function renderProducts(container) {
     } catch (e) {
       console.warn('delete falló', e);
       toast('No se pudo eliminar', 'error');
+    }
+  }));
+
+  // Vincular / desvincular con Tienda Nube
+  container.querySelectorAll('[data-tnlink]').forEach(b => b.addEventListener('click', async () => {
+    const p = list.find(x => x.id === b.dataset.tnlink);
+    if (!p) return;
+    if (p.linked_tn) {
+      const ok = await confirmModal({ title: 'Desvincular de Tienda Nube', message: `¿Desvincular "${p.name}" de Tienda Nube? (deja de sincronizar stock)`, danger: true, confirmLabel: 'Desvincular' });
+      if (!ok) return;
+      try { await P.unlinkTn(p.id); toast('Desvinculado de Tienda Nube', 'success'); renderProducts(container); }
+      catch (e) { toast('No se pudo desvincular', 'error'); }
+    } else {
+      openTnLinkModal(p, container);
     }
   }));
 
@@ -1061,6 +1076,47 @@ async function openProductForm(p, container) {
           renderProducts(container);
         });
       }
+    },
+  });
+}
+
+// Modal para vincular un producto del sistema con uno de Tienda Nube (busca en el catálogo TN).
+async function openTnLinkModal(product, container) {
+  await openModal({
+    title: `Vincular con Tienda Nube · ${product.name}`,
+    size: 'lg',
+    bodyHTML: `
+      <input id="tnl-q" class="ing-input w-full mb-2" placeholder="Buscar en Tienda Nube (nombre, barcode o SKU)…" />
+      <div id="tnl-list" class="max-h-[55vh] overflow-auto border border-[#fff1e6] rounded-xl divide-y divide-[#fff1e6]"><div class="p-4 text-center text-[#7d6c5c]">Cargando catálogo de Tienda Nube…</div></div>
+      <p class="text-xs text-[#7d6c5c] mt-2">Elegí el producto de TN que corresponde. Se vincula y el stock se sincroniza automáticamente.</p>`,
+    footerHTML: `<button class="ing-btn-secondary" data-act="close">Cerrar</button>`,
+    onOpen: async (el, close) => {
+      el.querySelector('[data-act="close"]').addEventListener('click', () => close(null));
+      const listEl = el.querySelector('#tnl-list');
+      let catalog = [];
+      try { catalog = await P.getTnCatalog(); }
+      catch { listEl.innerHTML = '<div class="p-4 text-center text-red-600">No se pudo cargar el catálogo de TN (¿conectada?).</div>'; return; }
+      const draw = (q) => {
+        const ql = (q || '').trim().toLowerCase();
+        let rows;
+        if (ql) rows = catalog.filter(r => (r.name || '').toLowerCase().includes(ql) || (r.barcode || '').includes(ql) || (r.sku || '').toLowerCase().includes(ql));
+        else { const seed = (product.name || '').toLowerCase().slice(0, 12); rows = catalog.filter(r => (r.name || '').toLowerCase().includes(seed)); }
+        rows = rows.slice(0, 60);
+        listEl.innerHTML = rows.length ? rows.map(r => `
+          <button data-tnp="${r.tnProductId}" data-tnv="${r.tnVariantId}" class="w-full flex items-center justify-between gap-3 px-3 py-2 hover:bg-[#fff8f4] text-left">
+            <div class="min-w-0"><div class="font-bold text-sm truncate">${escapeAttr(r.name)}</div><div class="text-xs text-[#7d6c5c] font-mono">${escapeAttr(r.barcode || r.sku || '')}${r.isVariant ? ' · (con variantes)' : ''}</div></div>
+            <div class="font-bold text-[#d82f1e] whitespace-nowrap">${r.price ? ('$' + r.price) : ''}</div>
+          </button>`).join('') : '<div class="p-4 text-center text-[#7d6c5c]">Sin resultados</div>';
+        listEl.querySelectorAll('[data-tnp]').forEach(btn => btn.addEventListener('click', async () => {
+          try {
+            await P.linkTn(product.id, btn.dataset.tnp, btn.dataset.tnv);
+            toast('Vinculado a Tienda Nube', 'success'); close(true); renderProducts(container);
+          } catch (e) { toast('No se pudo vincular: ' + (e.message || ''), 'error'); }
+        }));
+      };
+      const qIn = el.querySelector('#tnl-q');
+      qIn.addEventListener('input', () => draw(qIn.value));
+      draw(''); qIn.focus();
     },
   });
 }

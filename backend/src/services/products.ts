@@ -48,9 +48,41 @@ export async function listProducts() {
   // Solo productos activos: los "borrados" con historial se marcan active=false (soft-delete).
   return prisma.product.findMany({
     where: { active: true },
-    include: { variants: { include: { stocks: true } }, images: true },
+    include: { variants: { include: { stocks: true } }, images: true, tnMapping: true },
     orderBy: { name: 'asc' },
   });
+}
+
+// Alta masiva idempotente (importación del consolidado). Saltea por `code` existente;
+// crea producto + variante "default" + stock por sucursal. No toca TN.
+export async function bulkCreateProducts(
+  items: Array<{ code: string; name?: string; cost?: number; price?: number; marginPct?: number; stocks?: Record<string, number> }>,
+  userId?: string,
+) {
+  const codes = items.map((i) => i.code).filter(Boolean);
+  const existing = new Set(
+    (await prisma.product.findMany({ where: { code: { in: codes } }, select: { code: true } })).map((p) => p.code),
+  );
+  let created = 0, skipped = 0;
+  for (const it of items) {
+    if (!it.code || existing.has(it.code)) { skipped++; continue; }
+    const pid = randomId(); const vid = randomId();
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.product.create({
+          data: { id: pid, code: it.code, name: it.name || it.code, cost: it.cost ?? 0, marginPct: it.marginPct ?? 0, price: it.price ?? 0, active: true },
+        });
+        await tx.variant.create({ data: { id: vid, productId: pid, name: 'default', attributes: {}, isDefault: true } });
+        for (const [branchId, qty] of Object.entries(it.stocks ?? {})) {
+          await tx.stock.create({ data: { id: `${vid}|${branchId}`, variantId: vid, branchId, qty: Math.max(0, Math.trunc(Number(qty) || 0)) } });
+        }
+      });
+      existing.add(it.code); created++;
+    } catch {
+      skipped++;
+    }
+  }
+  return { created, skipped, total: items.length };
 }
 
 export async function getProduct(id: string) {

@@ -14,6 +14,48 @@ function tnName(n: any): string {
   return n.es ?? n.pt ?? Object.values(n)[0] ?? '';
 }
 
+// Vincula manualmente un producto del sistema con un producto de TN (elegido por el usuario).
+// Mapea la variante "default" del producto local con la variante de TN indicada (o la 1ª).
+export async function linkManual(input: { productId: string; tnProductId: string; tnVariantId?: string }) {
+  const product = await prisma.product.findUnique({ where: { id: input.productId }, include: { variants: true } });
+  if (!product) throw new Error('Producto no encontrado');
+  const dv = product.variants.find((v) => v.isDefault) ?? product.variants[0];
+  if (!dv) throw new Error('El producto no tiene variante');
+
+  let tnVariantId = input.tnVariantId;
+  if (!tnVariantId) {
+    const tn = await requireTnClient();
+    const tp = await tn.getProduct(input.tnProductId);
+    tnVariantId = String((tp.variants ?? [])[0]?.id ?? '');
+  }
+  if (!tnVariantId) throw new Error('No se pudo determinar la variante de TN');
+
+  await prisma.$transaction(async (tx) => {
+    await tx.productTnMapping.upsert({
+      where: { productId: product.id },
+      update: { tnProductId: String(input.tnProductId), lastPullAt: new Date() },
+      create: { productId: product.id, tnProductId: String(input.tnProductId), lastPullAt: new Date() },
+    });
+    await tx.variantTnMapping.upsert({
+      where: { variantId: dv.id },
+      update: { tnProductId: String(input.tnProductId), tnVariantId: String(tnVariantId), lastPullAt: new Date() },
+      create: { variantId: dv.id, tnProductId: String(input.tnProductId), tnVariantId: String(tnVariantId), lastPullAt: new Date() },
+    });
+  });
+  // Empuja el stock actual a TN para dejarlo sincronizado de entrada.
+  const { enqueueSync } = await import('../sync/queue.js');
+  await enqueueSync('push_stock', { variantId: dv.id });
+  return { ok: true, productId: product.id, variantId: dv.id, tnProductId: input.tnProductId, tnVariantId };
+}
+
+export async function unlinkProduct(productId: string) {
+  const product = await prisma.product.findUnique({ where: { id: productId }, include: { variants: true } });
+  if (!product) throw new Error('Producto no encontrado');
+  await prisma.variantTnMapping.deleteMany({ where: { variantId: { in: product.variants.map((v) => v.id) } } });
+  await prisma.productTnMapping.deleteMany({ where: { productId } });
+  return { ok: true };
+}
+
 // Vuelca el catálogo de TN (vía API, barcodes completos) como filas planas:
 // una por variante. Sirve para cruzar offline contra el consolidado.
 export async function dumpTnCatalog() {

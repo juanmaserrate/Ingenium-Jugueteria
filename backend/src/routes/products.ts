@@ -7,6 +7,7 @@ import {
   updateProduct,
   deleteProduct,
   findByBarcode,
+  bulkCreateProducts,
 } from '../services/products.js';
 
 const variantSchema = z.object({
@@ -68,6 +69,19 @@ export async function productsRoutes(app: FastifyInstance) {
   app.post('/products', async (req) => {
     const body = productSchema.parse(req.body);
     return createProduct(body, req.user.userId);
+  });
+
+  // Alta masiva idempotente (importación del consolidado).
+  app.post('/products/bulk', async (req) => {
+    const body = z.array(z.object({
+      code: z.string().min(1),
+      name: z.string().optional(),
+      cost: z.number().optional(),
+      price: z.number().optional(),
+      marginPct: z.number().optional(),
+      stocks: z.record(z.number()).optional(),
+    })).parse(req.body);
+    return bulkCreateProducts(body, req.user.userId);
   });
 
   app.put('/products/:id', async (req) => {

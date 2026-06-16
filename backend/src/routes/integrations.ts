@@ -13,7 +13,7 @@ import { randomId } from '../utils/crypto.js';
 import { confirmSale } from '../services/sales.js';
 import { enqueueSync } from '../sync/queue.js';
 import { getTnClient } from '../tiendanube/client.js';
-import { linkByBarcode, dumpTnCatalog } from '../tiendanube/link.js';
+import { linkByBarcode, dumpTnCatalog, linkManual, unlinkProduct } from '../tiendanube/link.js';
 
 export async function integrationsRoutes(app: FastifyInstance) {
   // Status p\u00fablico (sin auth) para el ping del frontend
@@ -79,6 +79,16 @@ export async function integrationsRoutes(app: FastifyInstance) {
     // Vuelca el catálogo de TN (API, barcodes completos) para cruzar offline.
     r.get('/integrations/tiendanube/catalog-dump', async () => {
       return dumpTnCatalog();
+    });
+
+    // Vinculación manual producto del sistema ↔ producto TN (elegido por el usuario).
+    r.post('/integrations/tiendanube/link-manual', async (req) => {
+      const body = z.object({ productId: z.string(), tnProductId: z.string(), tnVariantId: z.string().optional() }).parse(req.body);
+      return linkManual(body);
+    });
+    r.post('/integrations/tiendanube/unlink', async (req) => {
+      const body = z.object({ productId: z.string() }).parse(req.body);
+      return unlinkProduct(body.productId);
     });
 
     r.patch('/integrations/tiendanube/settings', async (req) => {

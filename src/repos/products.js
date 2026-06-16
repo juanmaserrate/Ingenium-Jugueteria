@@ -95,6 +95,8 @@ function toFront(bp) {
     variants: frontVariants,
     has_variants: hasVariants,
     variant_type: variantType,
+    linked_tn: !!bp.tnMapping,
+    tn_product_id: bp.tnMapping?.tnProductId ?? null,
     _stocks: stocks,
   };
 }
@@ -289,6 +291,37 @@ export async function updateVariant(id, fields) {
 
 export async function removeVariant(id) {
   await api(`/api/variants/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+// --- Vinculación con Tienda Nube (módulo manual en Inventario) ---
+let _tnCatalog = null; // cache del dump de TN (productos simples para elegir)
+export async function getTnCatalog(force = false) {
+  if (_tnCatalog && !force) return _tnCatalog;
+  const resp = await api('/api/integrations/tiendanube/catalog-dump');
+  // 1 fila por variante; para vincular ofrecemos productos (dedup por tnProductId, simples primero).
+  const byProd = new Map();
+  for (const r of (resp?.rows || [])) {
+    if (!byProd.has(r.tnProductId)) {
+      byProd.set(r.tnProductId, { tnProductId: r.tnProductId, tnVariantId: r.tnVariantId, name: r.name, barcode: r.barcode || '', sku: r.sku || '', price: r.price || '', isVariant: !!r.isVariantProduct });
+    }
+  }
+  _tnCatalog = [...byProd.values()];
+  return _tnCatalog;
+}
+
+export async function linkTn(productId, tnProductId, tnVariantId) {
+  const r = await api('/api/integrations/tiendanube/link-manual', { method: 'POST', body: { productId, tnProductId, tnVariantId } });
+  const p = _cache.byId.get(productId);
+  if (p) { p.linked_tn = true; p.tn_product_id = tnProductId; }
+  emit(EV.PRODUCT_UPDATED, { id: productId });
+  return r;
+}
+
+export async function unlinkTn(productId) {
+  await api('/api/integrations/tiendanube/unlink', { method: 'POST', body: { productId } });
+  const p = _cache.byId.get(productId);
+  if (p) { p.linked_tn = false; p.tn_product_id = null; }
+  emit(EV.PRODUCT_UPDATED, { id: productId });
 }
 
 // Sugerencias para autocompletar tipo y valores de variante, juntando lo del catálogo en cache.
