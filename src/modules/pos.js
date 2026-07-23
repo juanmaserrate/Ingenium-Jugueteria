@@ -43,8 +43,17 @@ export async function mount(el) {
   render(el);
 
   // Reactividad: al tocar stock/producto actualizar datos
-  const offStock = on(EV.STOCK_CHANGED, async () => { await refreshData(); renderCart(el); });
-  const offProd = on(EV.PRODUCT_UPDATED, async () => { await refreshData(); renderCart(el); });
+  // Las guardas evitan errores si el elemento ya no está en el DOM (el usuario cambió de módulo)
+  const offStock = on(EV.STOCK_CHANGED, async () => {
+    if (!el || !el.isConnected) { offStock(); return; }
+    await refreshData();
+    if (el.isConnected) renderCart(el);
+  });
+  const offProd = on(EV.PRODUCT_UPDATED, async () => {
+    if (!el || !el.isConnected) { offProd(); return; }
+    await refreshData();
+    if (el.isConnected) renderCart(el);
+  });
 
   // U-1: atajos de teclado para caja sin mouse
   const keyHandler = (ev) => {

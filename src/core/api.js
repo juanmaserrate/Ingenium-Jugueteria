@@ -1,5 +1,6 @@
 // HTTP client para llamar al backend Ingenium.
-// Maneja JWT, errores tipados y fallback offline para operaciones cr\u00edticas.
+// Maneja JWT, errores tipados y fallback offline para operaciones críticas.
+import { emit, EV } from './events.js';
 
 // Frontend + backend viven en el mismo origin (Railway sirve ambos).
 // En dev local apuntamos al Fastify local por si corren separados (file:// o 5500).
@@ -38,7 +39,11 @@ export class ApiError extends Error {
   }
 }
 
+// Estado de conexión: se usa para emitir ONLINE_STATUS_CHANGED solo al cambiar
+let _wasOffline = false;
+
 export async function api(path, opts = {}) {
+
   const base = getApiBase();
   const token = getToken();
   const headers = {
@@ -56,8 +61,11 @@ export async function api(path, opts = {}) {
         ? JSON.stringify(opts.body)
         : opts.body,
     });
+    // Si estábamos offline y ahora logramos hacer la petición, notificamos reconexión
+    if (_wasOffline) { _wasOffline = false; emit(EV.ONLINE_STATUS_CHANGED, { online: true }); }
   } catch (err) {
     // Network error → offline
+    if (!_wasOffline) { _wasOffline = true; emit(EV.ONLINE_STATUS_CHANGED, { online: false }); }
     const e = new ApiError(0, { error: 'offline', code: 'OFFLINE' });
     e.networkError = err;
     throw e;

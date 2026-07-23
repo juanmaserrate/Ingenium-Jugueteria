@@ -61,11 +61,12 @@ export const hoursDecimal = (checkIn, checkOut) => {
 };
 
 // Aplica descuento/recargo. rule = { pct?: n, fixed?: n } (pct sobre el base)
+// El resultado se redondea a 2 decimales para evitar acumulación de errores de coma flotante.
 export const applyDiscount = (base, pct = 0, fixed = 0) => {
   const afterPct = base * (1 - pct / 100);
-  return Math.max(0, afterPct - fixed);
+  return round2(Math.max(0, afterPct - fixed));
 };
 export const applySurcharge = (base, pct = 0, fixed = 0) => {
   const afterPct = base * (1 + pct / 100);
-  return afterPct + fixed;
+  return round2(afterPct + fixed);
 };

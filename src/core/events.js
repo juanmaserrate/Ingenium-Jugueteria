@@ -41,4 +41,6 @@ export const EV = {
   TN_PRODUCT_PENDING: 'tn:product_pending',
   SYNC_QUEUE_UPDATED: 'sync:queue_updated',
   SYNC_CONFLICT: 'sync:conflict',
+  // Estado de conexión con el backend
+  ONLINE_STATUS_CHANGED: 'online:status_changed',
 };

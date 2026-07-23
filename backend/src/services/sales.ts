@@ -20,6 +20,10 @@ function isCashMethod(methodId: string) {
   return ['cash', 'efectivo', 'efvo'].includes((methodId || '').toLowerCase());
 }
 
+// Redondeo monetario a 2 decimales con corrección de Number.EPSILON
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+
 export type SaleItemInput = {
   variantId: string;
   qty: number;
@@ -84,16 +88,19 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
   if (!input.items || input.items.length === 0) throw new ValidationError('La venta no tiene items');
   if (!input.payments || input.payments.length === 0) throw new ValidationError('La venta no tiene pagos');
 
-  const itemsSubtotal = input.items.reduce((s, it) => s + computeItemSubtotal(it), 0);
-  const discountGlobal =
+  const itemsSubtotal = round2(input.items.reduce((s, it) => s + computeItemSubtotal(it), 0));
+  const discountGlobal = round2(
     (input.discountGlobalPct ? (itemsSubtotal * input.discountGlobalPct) / 100 : 0) +
-    (input.discountGlobalFixed ?? 0);
-  const surchargeGlobal =
+    (input.discountGlobalFixed ?? 0)
+  );
+  const surchargeGlobal = round2(
     (input.surchargeGlobalPct ? (itemsSubtotal * input.surchargeGlobalPct) / 100 : 0) +
-    (input.surchargeGlobalFixed ?? 0);
-  const total = Math.max(0, itemsSubtotal - discountGlobal + surchargeGlobal);
-  const paymentsTotal = input.payments.reduce((s, p) => s + p.amount, 0);
-  if (Math.abs(paymentsTotal - total) > 0.01) {
+    (input.surchargeGlobalFixed ?? 0)
+  );
+  const total = round2(Math.max(0, itemsSubtotal - discountGlobal + surchargeGlobal));
+  const paymentsTotal = round2(input.payments.reduce((s, p) => s + p.amount, 0));
+  // Tolerancia de $0.02 para absorber imprecisiones de coma flotante en pagos mixtos
+  if (Math.abs(paymentsTotal - total) > 0.02) {
     throw new ValidationError(`Total de pagos ${paymentsTotal} no coincide con total ${total}`);
   }
 
