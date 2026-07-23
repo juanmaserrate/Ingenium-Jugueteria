@@ -1,6 +1,6 @@
 // Formatos consistentes (moneda AR, fechas, horas).
 
-export const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+export const round2 = (n) => Math.round(((Number(n) || 0) + Number.EPSILON) * 100) / 100;
 
 export const money = (n, withSymbol = true) => {
   const v = Number(n || 0);

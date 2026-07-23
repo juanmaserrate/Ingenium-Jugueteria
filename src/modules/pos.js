@@ -202,7 +202,9 @@ function render(el) {
 }
 
 function renderTabs(root) {
+  if (!root || !root.isConnected) return;
   const container = root.querySelector('#pos-tabs');
+  if (!container) return;
   container.innerHTML = state.tabs.map(t => {
     const active = t.id === state.activeTab;
     const items = t.sale.items.length;
@@ -434,10 +436,13 @@ async function editItemPrice(root, i) {
 
 // ===== Panel lateral: cliente, vendedor, totales, pagos =====
 function renderSide(root, totals) {
+  if (!root || !root.isConnected) return;
   const sale = activeSale();
+  if (!sale) return;
   const side = root.querySelector('#pos-side');
-  const paid = (sale.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
-  const pending = totals.total - paid;
+  if (!side) return;
+  const paid = round2((sale.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0));
+  const pending = round2(totals.total - paid);
 
   side.innerHTML = `
     <div class="ing-card p-4 space-y-4 sticky top-4">
