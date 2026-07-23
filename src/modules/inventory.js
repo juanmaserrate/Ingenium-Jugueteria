@@ -118,35 +118,44 @@ async function loadProductsData(container) {
       <span class="material-symbols-outlined text-4xl text-[#d82f1e] animate-spin">autorenew</span>
       <p class="mt-3 font-bold text-[#241a0d]">Cargando inventario...</p>
     </div>`;
-  let products;
   try {
-    products = await P.list();
+    const products = await P.list();
+    const [categories, brands, suppliers, branches, subcats] = await Promise.all([
+      Categories.list().catch(() => []),
+      Brands.list().catch(() => []),
+      Suppliers.list().catch(() => []),
+      getAll('branches').catch(() => []),
+      Subcategories.list().catch(() => []),
+    ]);
+    // P.list() ya devuelve la lista procesada por toFront(), donde p._stocks es la lista plana.
+    const stocks = (products || []).flatMap(p => p._stocks || []);
+    state.cache = {
+      products: products || [],
+      stocks,
+      categories: categories || [],
+      brands: brands || [],
+      suppliers: suppliers || [],
+      branches: branches || [],
+      subcats: subcats || [],
+    };
+    return true;
   } catch (e) {
-    if (e?.status === 0) {
-      container.innerHTML = `<div class="ing-card p-6 text-center"><span class="material-symbols-outlined text-4xl text-amber-500">cloud_off</span>
-        <p class="mt-2 font-bold">Sin conexión</p><p class="text-sm text-[#7d6c5c]">El inventario necesita internet para operar.</p></div>`;
-      return false;
-    }
-    throw e;
+    console.error('Error cargando datos de inventario:', e);
+    const isOffline = e?.status === 0;
+    container.innerHTML = `
+      <div class="ing-card p-6 text-center">
+        <span class="material-symbols-outlined text-4xl ${isOffline ? 'text-amber-500' : 'text-red-500'}">
+          ${isOffline ? 'cloud_off' : 'error'}
+        </span>
+        <p class="mt-2 font-bold text-[#241a0d]">${isOffline ? 'Sin conexión' : 'Error al cargar inventario'}</p>
+        <p class="text-sm text-[#7d6c5c] mb-4">${isOffline ? 'El inventario necesita internet para operar.' : (e.message || 'Ocurrió un error inesperado.')}</p>
+        <button id="btn-retry-load" class="ing-btn-primary text-sm inline-flex items-center gap-1">
+          <span class="material-symbols-outlined text-base">refresh</span> Reintentar
+        </button>
+      </div>`;
+    container.querySelector('#btn-retry-load')?.addEventListener('click', () => renderProducts(container, true));
+    return false;
   }
-  const [categories, brands, suppliers, branches, subcats] = await Promise.all([
-    Categories.list(), Brands.list(), Suppliers.list(), getAll('branches'), Subcategories.list(),
-  ]);
-  // El backend ahora devuelve stocks dentro de variants; normalizamos a un array plano
-  // compatible con el formato legacy { product_id, branch_id, qty, reserved_qty } para no
-  // romper stockOf() ni el resto del módulo.
-  const stocks = products.flatMap(p =>
-    (p.variants || []).flatMap(v =>
-      (v.stocks || []).map(s => ({
-        product_id: p.id,
-        branch_id: s.branchId,
-        qty: s.qty,
-        reserved_qty: s.reservedQty ?? 0,
-      }))
-    )
-  );
-  state.cache = { products, stocks, categories, brands, suppliers, branches, subcats };
-  return true;
 }
 
 async function renderProducts(container, forceReload = false) {
@@ -159,12 +168,12 @@ async function renderProducts(container, forceReload = false) {
   const { products, stocks, categories, brands, suppliers, branches } = state.cache;
 
   // Maps y helpers derivados del caché (O(n) lookup → O(1) map)
-  const catMap = Object.fromEntries(categories.map(c => [c.id, c.name]));
-  const brMap  = Object.fromEntries(brands.map(b => [b.id, b.name]));
-  const spMap  = Object.fromEntries(suppliers.map(s => [s.id, s.name]));
-  const stockOf = (pid, bid) => stocks.find(s => s.product_id === pid && s.branch_id === bid) || { qty: 0, reserved_qty: 0 };
-  const lomas = branches.find(b => b.id === 'br_lomas');
-  const banf  = branches.find(b => b.id === 'br_banfield');
+  const catMap = Object.fromEntries((categories || []).map(c => [c.id, c.name]));
+  const brMap  = Object.fromEntries((brands || []).map(b => [b.id, b.name]));
+  const spMap  = Object.fromEntries((suppliers || []).map(s => [s.id, s.name]));
+  const stockOf = (pid, bid) => (stocks || []).find(s => s.product_id === pid && s.branch_id === bid) || { qty: 0, reserved_qty: 0 };
+  const lomas = (branches || []).find(b => b.id === 'br_lomas');
+  const banf  = (branches || []).find(b => b.id === 'br_banfield');
 
   const f = state.filters;
   let list = products.filter(p => {
