@@ -59,6 +59,8 @@ const state = {
   selected: new Set(),
   filters: { search: '', category: '', brand: '', supplier: '', onlyMeli: false, variant: '' },
   visibleCols: new Set(['code', 'name', 'category', 'brand', 'supplier', 'cost', 'price', 'margin', 'stock_lomas', 'stock_banfield', 'total', 'meli']),
+  // Caché de datos: se carga una sola vez y los filtros operan sobre él
+  cache: null, // { products, stocks, categories, brands, suppliers, branches, subcats }
 };
 
 export async function mount(el) {
@@ -107,28 +109,62 @@ function tabBtn(id, label, icon) {
 }
 
 // ==================== PRODUCTOS ====================
-async function renderProducts(container) {
-  let products, stocks;
+
+// Carga (o recarga) todos los datos del inventario desde la API y los guarda en state.cache.
+// Solo se llama al montar el módulo o al presionar "Actualizar".
+async function loadProductsData(container) {
+  container.innerHTML = `
+    <div class="ing-card p-8 text-center">
+      <span class="material-symbols-outlined text-4xl text-[#d82f1e] animate-spin">autorenew</span>
+      <p class="mt-3 font-bold text-[#241a0d]">Cargando inventario...</p>
+    </div>`;
+  let products;
   try {
     products = await P.list();
-    stocks = products.flatMap(p => p._stocks || []);
   } catch (e) {
     if (e?.status === 0) {
       container.innerHTML = `<div class="ing-card p-6 text-center"><span class="material-symbols-outlined text-4xl text-amber-500">cloud_off</span>
         <p class="mt-2 font-bold">Sin conexión</p><p class="text-sm text-[#7d6c5c]">El inventario necesita internet para operar.</p></div>`;
-      return;
+      return false;
     }
     throw e;
   }
   const [categories, brands, suppliers, branches, subcats] = await Promise.all([
     Categories.list(), Brands.list(), Suppliers.list(), getAll('branches'), Subcategories.list(),
   ]);
+  // El backend ahora devuelve stocks dentro de variants; normalizamos a un array plano
+  // compatible con el formato legacy { product_id, branch_id, qty, reserved_qty } para no
+  // romper stockOf() ni el resto del módulo.
+  const stocks = products.flatMap(p =>
+    (p.variants || []).flatMap(v =>
+      (v.stocks || []).map(s => ({
+        product_id: p.id,
+        branch_id: s.branchId,
+        qty: s.qty,
+        reserved_qty: s.reservedQty ?? 0,
+      }))
+    )
+  );
+  state.cache = { products, stocks, categories, brands, suppliers, branches, subcats };
+  return true;
+}
+
+async function renderProducts(container, forceReload = false) {
+  // Si no hay caché o se pide recarga, cargar desde la API
+  if (!state.cache || forceReload) {
+    const ok = await loadProductsData(container);
+    if (!ok) return;
+  }
+
+  const { products, stocks, categories, brands, suppliers, branches } = state.cache;
+
+  // Maps y helpers derivados del caché (O(n) lookup → O(1) map)
   const catMap = Object.fromEntries(categories.map(c => [c.id, c.name]));
   const brMap  = Object.fromEntries(brands.map(b => [b.id, b.name]));
   const spMap  = Object.fromEntries(suppliers.map(s => [s.id, s.name]));
   const stockOf = (pid, bid) => stocks.find(s => s.product_id === pid && s.branch_id === bid) || { qty: 0, reserved_qty: 0 };
   const lomas = branches.find(b => b.id === 'br_lomas');
-  const banf = branches.find(b => b.id === 'br_banfield');
+  const banf  = branches.find(b => b.id === 'br_banfield');
 
   const f = state.filters;
   let list = products.filter(p => {
@@ -212,6 +248,9 @@ async function renderProducts(container) {
         <button id="btn-export" class="ing-btn-secondary text-sm">
           <span class="material-symbols-outlined align-middle text-base">download</span> XLSX
         </button>
+        <button id="btn-refresh" class="ing-btn-secondary text-sm" title="Actualizar datos desde el servidor">
+          <span class="material-symbols-outlined align-middle text-base">sync</span>
+        </button>
         <button id="btn-new" class="ing-btn-primary text-sm">
           <span class="material-symbols-outlined align-middle text-base">add</span> Nuevo
         </button>
@@ -267,6 +306,10 @@ async function renderProducts(container) {
 
   container.querySelector('#btn-new').addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-cols').addEventListener('click', () => openColumnsModal(cols, container));
+  container.querySelector('#btn-refresh').addEventListener('click', async () => {
+    state.cache = null; // Invalida caché para forzar recarga desde el servidor
+    await renderProducts(container);
+  });
   container.querySelector('#btn-export').addEventListener('click', () => {
     const rows = list.map(p => ({
       Codigo: p.code, Nombre: p.name,
@@ -311,6 +354,8 @@ async function renderProducts(container) {
     try {
       // 'local' = solo del POS (queda en TN) · 'both' = también de Tienda Nube.
       await P.remove(p.id, { keepTn: choice === 'local' });
+      // Quitar del caché en memoria (optimistic remove) para que renderProducts sea instantáneo
+      if (state.cache) state.cache.products = state.cache.products.filter(x => x.id !== p.id);
       toast(choice === 'both' ? 'Eliminado del POS y Tienda Nube' : 'Eliminado del POS', 'success');
       renderProducts(container);
     } catch (e) {
@@ -387,6 +432,11 @@ async function editInline(td, list, container) {
       p.margin_pct = +((p.price / p.cost - 1) * 100).toFixed(2);
     }
     await P.save(p);
+    // Actualizar el objeto en el caché (optimistic update) para que renderProducts no vaya a la red
+    if (state.cache) {
+      const idx = state.cache.products.findIndex(x => x.id === p.id);
+      if (idx !== -1) state.cache.products[idx] = { ...state.cache.products[idx], ...p };
+    }
     toast('Actualizado', 'success');
     renderProducts(container);
   };

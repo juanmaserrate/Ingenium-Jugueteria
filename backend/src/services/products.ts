@@ -46,9 +46,25 @@ export type ProductInput = {
 
 export async function listProducts() {
   // Solo productos activos: los "borrados" con historial se marcan active=false (soft-delete).
+  // Se excluyen `images` y `tnMapping` del listado: son pesados y solo se necesitan en el form
+  // de edición individual. Se cargan al abrir `getProduct(id)`.
   return prisma.product.findMany({
     where: { active: true },
-    include: { variants: { include: { stocks: true } }, images: true, tnMapping: true },
+    include: {
+      variants: {
+        select: {
+          id: true,
+          name: true,
+          attributes: true,
+          priceOverride: true,
+          costOverride: true,
+          isDefault: true,
+          code: true,
+          barcode: true,
+          stocks: { select: { branchId: true, qty: true, reservedQty: true } },
+        },
+      },
+    },
     orderBy: { name: 'asc' },
   });
 }
