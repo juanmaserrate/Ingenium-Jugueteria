@@ -101,6 +101,26 @@ export async function bulkCreateProducts(
   return { created, skipped, total: items.length };
 }
 
+// Asignación masiva de categoría/proveedor/marca por GRUPOS: cada grupo trae el
+// valor destino y la lista de códigos de producto. Usa updateMany (un query por
+// grupo) para no hacer miles de updates individuales.
+export async function bulkAssignProducts(
+  groups: Array<{ categoryId?: string | null; supplierId?: string | null; brandId?: string | null; codes: string[] }>,
+) {
+  let updated = 0;
+  for (const g of groups) {
+    if (!g.codes?.length) continue;
+    const data: Record<string, unknown> = {};
+    if (g.categoryId !== undefined) data.categoryId = g.categoryId;
+    if (g.supplierId !== undefined) data.supplierId = g.supplierId;
+    if (g.brandId !== undefined) data.brandId = g.brandId;
+    if (Object.keys(data).length === 0) continue;
+    const r = await prisma.product.updateMany({ where: { code: { in: g.codes } }, data });
+    updated += r.count;
+  }
+  return { updated };
+}
+
 export async function getProduct(id: string) {
   const p = await prisma.product.findUnique({
     where: { id },

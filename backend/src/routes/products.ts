@@ -8,6 +8,7 @@ import {
   deleteProduct,
   findByBarcode,
   bulkCreateProducts,
+  bulkAssignProducts,
 } from '../services/products.js';
 
 const variantSchema = z.object({
@@ -82,6 +83,17 @@ export async function productsRoutes(app: FastifyInstance) {
       stocks: z.record(z.number()).optional(),
     })).parse(req.body);
     return bulkCreateProducts(body, req.user.userId);
+  });
+
+  // Asignación masiva de categoría/proveedor/marca por grupos de códigos.
+  app.post('/products/bulk-assign', async (req) => {
+    const body = z.array(z.object({
+      categoryId: z.string().nullable().optional(),
+      supplierId: z.string().nullable().optional(),
+      brandId: z.string().nullable().optional(),
+      codes: z.array(z.string()).min(1),
+    })).parse(req.body);
+    return bulkAssignProducts(body);
   });
 
   app.put('/products/:id', async (req) => {
