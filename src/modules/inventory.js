@@ -171,7 +171,12 @@ async function renderProducts(container, forceReload = false) {
   const catMap = Object.fromEntries((categories || []).map(c => [c.id, c.name]));
   const brMap  = Object.fromEntries((brands || []).map(b => [b.id, b.name]));
   const spMap  = Object.fromEntries((suppliers || []).map(s => [s.id, s.name]));
-  const stockOf = (pid, bid) => (stocks || []).find(s => s.product_id === pid && s.branch_id === bid) || { qty: 0, reserved_qty: 0 };
+  // Índice O(1) de stock por producto+sucursal (antes era un .find lineal sobre
+  // ~30k stocks llamado por cada producto×sucursal → O(n²) que congelaba el render
+  // con muchos productos).
+  const _stockMap = new Map();
+  for (const s of (stocks || [])) _stockMap.set(`${s.product_id}|${s.branch_id}`, s);
+  const stockOf = (pid, bid) => _stockMap.get(`${pid}|${bid}`) || { qty: 0, reserved_qty: 0 };
   const lomas = (branches || []).find(b => b.id === 'br_lomas');
   const banf  = (branches || []).find(b => b.id === 'br_banfield');
 
