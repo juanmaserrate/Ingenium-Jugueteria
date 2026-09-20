@@ -81,6 +81,14 @@ export async function integrationsRoutes(app: FastifyInstance) {
       return dumpTnCatalog();
     });
 
+    // Lista los mapeos producto local ↔ producto TN (código local + tnProductId).
+    r.get('/integrations/tiendanube/mappings', async () => {
+      const maps = await prisma.productTnMapping.findMany({
+        include: { product: { select: { code: true, name: true } } },
+      });
+      return maps.map((m) => ({ code: m.product.code, name: m.product.name, tnProductId: m.tnProductId }));
+    });
+
     // Vinculación manual producto del sistema ↔ producto TN (elegido por el usuario).
     r.post('/integrations/tiendanube/link-manual', async (req) => {
       const body = z.object({ productId: z.string(), tnProductId: z.string(), tnVariantId: z.string().optional() }).parse(req.body);

@@ -9,6 +9,7 @@ import {
   findByBarcode,
   bulkCreateProducts,
   bulkAssignProducts,
+  bulkRenameProducts,
 } from '../services/products.js';
 
 const variantSchema = z.object({
@@ -94,6 +95,12 @@ export async function productsRoutes(app: FastifyInstance) {
       codes: z.array(z.string()).min(1),
     })).parse(req.body);
     return bulkAssignProducts(body);
+  });
+
+  // Renombrado masivo por código (para traer los nombres completos de Tienda Nube).
+  app.post('/products/bulk-rename', async (req) => {
+    const body = z.array(z.object({ code: z.string().min(1), name: z.string().min(1) })).parse(req.body);
+    return bulkRenameProducts(body);
   });
 
   app.put('/products/:id', async (req) => {

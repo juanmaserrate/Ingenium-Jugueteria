@@ -121,6 +121,17 @@ export async function bulkAssignProducts(
   return { updated };
 }
 
+// Renombrado masivo por código: [{ code, name }]. updateMany por item.
+export async function bulkRenameProducts(items: Array<{ code: string; name: string }>) {
+  let updated = 0;
+  for (const it of items) {
+    if (!it.code || !it.name) continue;
+    const r = await prisma.product.updateMany({ where: { code: it.code }, data: { name: it.name } });
+    updated += r.count;
+  }
+  return { updated };
+}
+
 export async function getProduct(id: string) {
   const p = await prisma.product.findUnique({
     where: { id },
