@@ -317,6 +317,17 @@ export async function linkTn(productId, tnProductId, tnVariantId) {
   return r;
 }
 
+// Vincula un producto CON variantes contra un producto TN con variantes.
+// El backend empareja cada variante (por barcode/código o por valor talle/color/modelo)
+// y devuelve las que no pudo casar (unmatchedLocal / unmatchedTn) para resolver a mano.
+export async function linkTnVariants(productId, tnProductId) {
+  const r = await api('/api/integrations/tiendanube/link-variants', { method: 'POST', body: { productId, tnProductId } });
+  const p = _cache.byId.get(productId);
+  if (p) { p.linked_tn = true; p.tn_product_id = tnProductId; }
+  emit(EV.PRODUCT_UPDATED, { id: productId });
+  return r;
+}
+
 export async function unlinkTn(productId) {
   await api('/api/integrations/tiendanube/unlink', { method: 'POST', body: { productId } });
   const p = _cache.byId.get(productId);

@@ -13,7 +13,7 @@ import { randomId } from '../utils/crypto.js';
 import { confirmSale } from '../services/sales.js';
 import { enqueueSync } from '../sync/queue.js';
 import { getTnClient } from '../tiendanube/client.js';
-import { linkByBarcode, dumpTnCatalog, linkManual, unlinkProduct } from '../tiendanube/link.js';
+import { linkByBarcode, dumpTnCatalog, linkManual, linkManualVariants, unlinkProduct } from '../tiendanube/link.js';
 
 export async function integrationsRoutes(app: FastifyInstance) {
   // Status p\u00fablico (sin auth) para el ping del frontend
@@ -85,6 +85,13 @@ export async function integrationsRoutes(app: FastifyInstance) {
     r.post('/integrations/tiendanube/link-manual', async (req) => {
       const body = z.object({ productId: z.string(), tnProductId: z.string(), tnVariantId: z.string().optional() }).parse(req.body);
       return linkManual(body);
+    });
+    // Vinculación manual de un producto CON variantes ↔ producto TN con variantes.
+    // Empareja cada variante (por barcode/código, o por valor talle/color/modelo)
+    // y devuelve las que quedaron sin casar para resolver a mano.
+    r.post('/integrations/tiendanube/link-variants', async (req) => {
+      const body = z.object({ productId: z.string(), tnProductId: z.string() }).parse(req.body);
+      return linkManualVariants(body);
     });
     r.post('/integrations/tiendanube/unlink', async (req) => {
       const body = z.object({ productId: z.string() }).parse(req.body);

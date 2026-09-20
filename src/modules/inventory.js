@@ -1168,8 +1168,20 @@ async function openTnLinkModal(product, container) {
           </button>`).join('') : '<div class="p-4 text-center text-[#7d6c5c]">Sin resultados</div>';
         listEl.querySelectorAll('[data-tnp]').forEach(btn => btn.addEventListener('click', async () => {
           try {
-            await P.linkTn(product.id, btn.dataset.tnp, btn.dataset.tnv);
-            toast('Vinculado a Tienda Nube', 'success'); close(true); renderProducts(container);
+            if (product.has_variants) {
+              // Producto con variantes: emparejar variante↔variante en el backend.
+              const rep = await P.linkTnVariants(product.id, btn.dataset.tnp);
+              const nl = (rep.unmatchedLocal || []).length, nt = (rep.unmatchedTn || []).length;
+              if (nl || nt) {
+                toast(`Vinculadas ${rep.linked} variante(s). Sin casar: ${nl} del sistema, ${nt} de TN (revisar).`, 'info');
+              } else {
+                toast(`Vinculadas ${rep.linked} variante(s) con Tienda Nube`, 'success');
+              }
+            } else {
+              await P.linkTn(product.id, btn.dataset.tnp, btn.dataset.tnv);
+              toast('Vinculado a Tienda Nube', 'success');
+            }
+            close(true); renderProducts(container);
           } catch (e) { toast('No se pudo vincular: ' + (e.message || ''), 'error'); }
         }));
       };
