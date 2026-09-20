@@ -57,11 +57,13 @@ async function chooseDeleteScope(product) {
 const state = {
   tab: 'products',
   selected: new Set(),
+  page: 0,
   filters: { search: '', category: '', brand: '', supplier: '', onlyMeli: false, variant: '' },
   visibleCols: new Set(['code', 'name', 'category', 'brand', 'supplier', 'cost', 'price', 'margin', 'stock_lomas', 'stock_banfield', 'total', 'meli']),
   // Caché de datos: se carga una sola vez y los filtros operan sobre él
   cache: null, // { products, stocks, categories, brands, suppliers, branches, subcats }
 };
+const PAGE_SIZE = 100;
 
 export async function mount(el) {
   render(el);
@@ -200,6 +202,13 @@ async function renderProducts(container, forceReload = false) {
     return true;
   });
 
+  // Paginado: dibujar 15k filas de una vez es muy lento. Mostramos de a PAGE_SIZE
+  // y el buscador/filtros operan sobre TODA la lista.
+  const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  if (!Number.isInteger(state.page) || state.page < 0 || state.page >= totalPages) state.page = 0;
+  const pageStart = state.page * PAGE_SIZE;
+  const pageRows = list.slice(pageStart, pageStart + PAGE_SIZE);
+
   const cols = [
     { id: 'code', label: 'Código', render: p => `<span class="font-mono text-xs text-[#7d6c5c]">${p.code}</span>` },
     { id: 'name', label: 'Nombre', render: p => `<span class="font-bold">${p.name}</span>${p.has_variants ? `<span class="ml-2 px-1.5 py-0.5 rounded-full bg-[#fff1e6] text-[#d82f1e] text-[10px] font-black align-middle">${(p.variants||[]).length} ${p.variant_type || 'var'}</span>` : ''}`, editable: 'text' },
@@ -292,7 +301,7 @@ async function renderProducts(container, forceReload = false) {
         </thead>
         <tbody>
           ${list.length === 0 ? `<tr><td colspan="${visibleCols.length+2}" class="text-center py-8 text-[#7d6c5c]">Sin productos que coincidan</td></tr>` :
-            list.map(p => `
+            pageRows.map(p => `
             <tr data-id="${p.id}" class="group">
               <td><input type="checkbox" class="row-check rounded text-[#d82f1e] focus:ring-[#d82f1e]" ${state.selected.has(p.id)?'checked':''} /></td>
               ${visibleCols.map(c => `<td class="${c.align==='right'?'text-right':c.align==='center'?'text-center':''}" ${c.editable?`data-editable="${c.editable}" data-field="${c.field||c.id}"`:''}>${c.render(p)}</td>`).join('')}
@@ -306,17 +315,27 @@ async function renderProducts(container, forceReload = false) {
         </tbody>
       </table>
     </div>
-    <p class="text-xs text-[#7d6c5c] mt-3">${list.length} producto(s) · doble-click para editar celdas editables (Nombre, Costo, %Margen, Precio)</p>
+    <div class="flex items-center justify-between mt-3 flex-wrap gap-2">
+      <p class="text-xs text-[#7d6c5c]">${list.length} producto(s)${list.length > PAGE_SIZE ? ` · mostrando ${pageStart+1}-${Math.min(pageStart+PAGE_SIZE, list.length)}` : ''} · doble-click para editar (Nombre, Costo, %Margen, Precio)</p>
+      ${totalPages > 1 ? `
+      <div class="flex items-center gap-2">
+        <button id="pg-prev" class="ing-btn-secondary text-xs !py-1.5 !px-3" ${state.page===0?'disabled':''}>‹ Anterior</button>
+        <span class="text-xs font-bold text-[#7d6c5c]">Página ${state.page+1} de ${totalPages}</span>
+        <button id="pg-next" class="ing-btn-secondary text-xs !py-1.5 !px-3" ${state.page>=totalPages-1?'disabled':''}>Siguiente ›</button>
+      </div>` : ''}
+    </div>
   `;
+  container.querySelector('#pg-prev')?.addEventListener('click', () => { if (state.page > 0) { state.page--; renderProducts(container); } });
+  container.querySelector('#pg-next')?.addEventListener('click', () => { state.page++; renderProducts(container); });
 
   // Filtros
-  container.querySelector('#f-search').addEventListener('input', e => { state.filters.search = e.target.value; renderProducts(container); });
-  container.querySelector('#f-category').addEventListener('change', e => { state.filters.category = e.target.value; renderProducts(container); });
-  container.querySelector('#f-brand').addEventListener('change', e => { state.filters.brand = e.target.value; renderProducts(container); });
-  container.querySelector('#f-supplier').addEventListener('change', e => { state.filters.supplier = e.target.value; renderProducts(container); });
-  container.querySelector('#f-meli').addEventListener('change', e => { state.filters.onlyMeli = e.target.checked; renderProducts(container); });
-  container.querySelector('#f-variant').addEventListener('input', e => { state.filters.variant = e.target.value; renderProducts(container); });
-  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false, variant:'' }; renderProducts(container); });
+  container.querySelector('#f-search').addEventListener('input', e => { state.filters.search = e.target.value; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-category').addEventListener('change', e => { state.filters.category = e.target.value; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-brand').addEventListener('change', e => { state.filters.brand = e.target.value; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-supplier').addEventListener('change', e => { state.filters.supplier = e.target.value; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-meli').addEventListener('change', e => { state.filters.onlyMeli = e.target.checked; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-variant').addEventListener('input', e => { state.filters.variant = e.target.value; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false, variant:'' }; state.page = 0; renderProducts(container); });
 
   container.querySelector('#btn-new').addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-cols').addEventListener('click', () => openColumnsModal(cols, container));
