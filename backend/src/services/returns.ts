@@ -138,6 +138,28 @@ export async function processReturn(input: ReturnInput) {
           },
         });
       }
+    } else if (difference < 0 && input.refundPayments && input.refundPayments.length > 0) {
+      // Canje a mayor valor: el cliente PAGA la diferencia. La parte en efectivo
+      // ENTRA a la caja (amountIn). Tarjeta/transferencia no mueven la caja.
+      const cashIn = input.refundPayments.reduce(
+        (s, p) => s + ((p.affectsCash ?? isCashMethod(p.methodId)) ? p.amount : 0),
+        0,
+      );
+      if (cashIn > 0) {
+        await tx.cashMovement.create({
+          data: {
+            id: randomId(),
+            datetime: new Date(),
+            branchId: input.branchId,
+            type: 'return_charge',
+            amountIn: cashIn,
+            amountOut: 0,
+            description: `Cambio #${number} (diferencia cobrada)`,
+            refId: rid,
+            userId: input.userId ?? null,
+          },
+        });
+      }
     }
 
     return rid;

@@ -59,7 +59,11 @@ export async function process(payload) {
     takenItems: await mapItems(taken_items),
     refundPayments: (refund_payments || [])
       .filter(p => (Number(p.amount) || 0) !== 0)
-      .map(p => ({ methodId: p.method_id, methodName: methodName(p.method_id), amount: Number(p.amount) || 0 })),
+      .map(p => {
+        const m = methodsCfg.find(x => x.id === p.method_id);
+        return { methodId: p.method_id, methodName: methodName(p.method_id), amount: Number(p.amount) || 0,
+                 affectsCash: m ? !!m.affects_cash : (p.method_id === 'cash' || p.method_id === 'efectivo') };
+      }),
     emitCreditNote: !!emit_credit_note,
     reason: reason || undefined,
   };
