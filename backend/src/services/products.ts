@@ -263,11 +263,16 @@ export async function updateProduct(id: string, data: Partial<ProductInput>, use
   });
 
   // Si est\u00e1 publicado o se acaba de publicar → encolar sync
-  if (updated.publishedTn) {
-    if (!before.publishedTn) {
-      await enqueueSync('push_product_create', { productId: id });
-    } else {
-      await enqueueSync('push_product_update', { productId: id });
+  // Sincronizar a TN si el producto esta PUBLICADO o ya esta ENLAZADO (tiene mapeo).
+  // Enlazado = fuente de verdad: nombre/descripcion por push_product_update, y
+  // precio/costo/codigo de barra por variante (push_variant_update de cada una).
+  const isLinked = !!before.tnMapping;
+  if (updated.publishedTn && !before.publishedTn && !isLinked) {
+    await enqueueSync('push_product_create', { productId: id });
+  } else if (isLinked || updated.publishedTn) {
+    await enqueueSync('push_product_update', { productId: id });
+    for (const v of before.variants) {
+      await enqueueSync('push_variant_update', { variantId: v.id });
     }
   }
 

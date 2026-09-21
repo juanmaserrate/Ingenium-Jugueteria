@@ -54,8 +54,8 @@ export async function createVariant(data: VariantInput, userId?: string) {
     after: variant,
   });
 
-  const product = await prisma.product.findUnique({ where: { id: data.productId } });
-  if (product?.publishedTn) {
+  const product = await prisma.product.findUnique({ where: { id: data.productId }, include: { tnMapping: true } });
+  if (product && (product.publishedTn || product.tnMapping)) {
     await enqueueSync('push_variant_create', { variantId: id });
   }
 
@@ -80,8 +80,8 @@ export async function updateVariant(id: string, data: Partial<VariantInput>, use
 
   await logAudit({ userId, action: AUDIT_ACTIONS.UPDATE, entity: 'variant', entityId: id, before, after: updated });
 
-  const product = await prisma.product.findUnique({ where: { id: before.productId } });
-  if (product?.publishedTn) {
+  const product = await prisma.product.findUnique({ where: { id: before.productId }, include: { tnMapping: true } });
+  if (product && (product.publishedTn || product.tnMapping)) {
     await enqueueSync('push_variant_update', { variantId: id });
   }
   return updated;
