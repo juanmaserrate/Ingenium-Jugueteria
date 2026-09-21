@@ -195,11 +195,20 @@ export async function integrationsRoutes(app: FastifyInstance) {
         customerId = c?.id ?? null;
       }
 
+      // Las órdenes de TN incluyen envío (y a veces descuentos de cupón) que NO son ítems.
+      // El pago total (pending.total) trae eso incluido, así que la diferencia contra el
+      // subtotal de productos se pasa como recargo (envío) o descuento global para que el
+      // total cuadre con el pago y no salte "Total de pagos no coincide".
+      const itemsSubtotal = saleItems.reduce((s, it) => s + it.qty * it.unitPrice, 0);
+      const diff = Math.round((pending.total - itemsSubtotal) * 100) / 100;
+
       const sale = await confirmSale(
         {
           branchId: body.branchId,
           customerId,
           items: saleItems,
+          surchargeGlobalFixed: diff > 0 ? diff : undefined,
+          discountGlobalFixed: diff < 0 ? -diff : undefined,
           payments: [{ methodId: 'tiendanube', methodName: 'Tienda Nube', amount: pending.total }],
           source: 'tn',
           tnOrderId: pending.tnOrderId,
