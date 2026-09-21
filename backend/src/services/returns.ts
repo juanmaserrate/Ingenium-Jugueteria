@@ -8,13 +8,18 @@ import { ValidationError } from '../utils/errors.js';
 
 export type ReturnItemInput = { variantId: string; qty: number; unitPrice: number };
 
+// Mismo criterio que ventas/gastos: un reintegro impacta la caja solo si es efectivo.
+function isCashMethod(methodId: string) {
+  return ['cash', 'efectivo', 'efvo'].includes((methodId || '').toLowerCase());
+}
+
 export type ReturnInput = {
   branchId: string;
   originalSaleId?: string | null;
   customerId?: string | null;
   returnedItems: ReturnItemInput[];
   takenItems: ReturnItemInput[];
-  refundPayments?: Array<{ methodId: string; methodName: string; amount: number }>;
+  refundPayments?: Array<{ methodId: string; methodName: string; amount: number; affectsCash?: boolean }>;
   emitCreditNote?: boolean;
   reason?: string;
   userId?: string;
@@ -111,9 +116,13 @@ export async function processReturn(input: ReturnInput) {
       },
     });
 
-    // Cash movement for refund if in cash
+    // Cash movement for refund: SOLO la parte reintegrada en efectivo sale del cajón.
+    // Un reintegro por tarjeta/transferencia NO mueve la caja (mismo criterio que ventas).
     if (difference > 0 && input.refundPayments && input.refundPayments.length > 0) {
-      const cash = input.refundPayments.reduce((s, p) => s + p.amount, 0);
+      const cash = input.refundPayments.reduce(
+        (s, p) => s + ((p.affectsCash ?? isCashMethod(p.methodId)) ? p.amount : 0),
+        0,
+      );
       if (cash > 0) {
         await tx.cashMovement.create({
           data: {

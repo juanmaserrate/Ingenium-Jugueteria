@@ -125,6 +125,8 @@ export const syncHandlers = {
       where: { variantId: variant.id },
       data: { lastPushAt: new Date() },
     });
+    // Reafirmar el stock real (por si el update tocó algo): push_stock setea el absoluto.
+    await syncHandlers.push_stock({ variantId: variant.id });
     return { ok: true };
   },
 

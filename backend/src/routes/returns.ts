@@ -18,6 +18,7 @@ const schema = z.object({
     methodId: z.string(),
     methodName: z.string(),
     amount: z.number(),
+    affectsCash: z.boolean().optional(),
   })).optional(),
   emitCreditNote: z.boolean().optional(),
   reason: z.string().optional(),

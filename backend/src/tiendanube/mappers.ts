@@ -57,9 +57,11 @@ export function productToTn(product: Product & { variants: Variant[] }) {
 
 export function variantToTn(variant: Variant, fallbackPrice: number, fallbackCost: number) {
   return {
+    // OJO: NO mandar `stock` acá. El stock se sincroniza SIEMPRE aparte con
+    // push_stock (valor absoluto). Si mandáramos stock:0 en un update de variante,
+    // pisaríamos el stock real de TN a 0 hasta el próximo push_stock.
     price: (variant.priceOverride ?? fallbackPrice).toString(),
     stock_management: true,
-    stock: 0,
     sku: variant.code ?? null,
     barcode: variant.barcode ?? null,
     cost: (variant.costOverride ?? fallbackCost).toString(),

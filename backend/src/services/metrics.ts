@@ -202,7 +202,8 @@ export async function getBalance(params: { branchId?: string; from: string; to: 
   ]);
   const facturado = agg._sum.total ?? 0;
   const count = agg._count ?? 0;
-  const devuelto = returns.reduce((s, r) => s + Math.max(0, -(r.difference || 0)), 0);
+  // difference = returnedTotal - takenTotal; positivo = plata reintegrada al cliente.
+  const devuelto = returns.reduce((s, r) => s + Math.max(0, r.difference || 0), 0);
   return {
     facturado, devuelto, neto: facturado - devuelto, count,
     avgTicket: count ? facturado / count : 0,
@@ -234,7 +235,7 @@ export async function getProfits(params: { branchId?: string; month: string }) {
   const gananciaBruta = ventasBrutas - cogs;
   const gastos = expAgg._sum.amount ?? 0;
   const cheques = checks.reduce((s, c) => s + (c.amount || 0), 0);
-  const devueltoCliente = returns.reduce((s, r) => s + Math.max(0, -(r.difference || 0)), 0);
+  const devueltoCliente = returns.reduce((s, r) => s + Math.max(0, r.difference || 0), 0);
   const gananciaNeta = gananciaBruta - gastos - cheques - devueltoCliente;
 
   // Por categoría
