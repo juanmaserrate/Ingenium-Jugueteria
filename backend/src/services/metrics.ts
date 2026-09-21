@@ -83,6 +83,7 @@ export async function getDashboard(params: { branchId?: string; month: string; t
     invValueCost += s.qty * (p.cost || 0);
     invValueSale += s.qty * (p.price || 0);
     if (s.qty === 0) outOfStock++;
+    else if (s.qty <= 3) lowStock++; // stock bajo: 1 a 3 unidades
   }
 
   // Cheques pendientes

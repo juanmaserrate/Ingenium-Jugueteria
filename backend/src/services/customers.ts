@@ -25,7 +25,9 @@ export async function getCustomer(id: string) {
 }
 
 export async function findOrCreateByEmail(email: string, data: CustomerInput) {
-  const existing = await prisma.customer.findFirst({ where: { email } });
+  // Sin email no se puede deduplicar: buscar {email: ''} matchearía a cualquier
+  // cliente sin email. En ese caso siempre creamos uno nuevo.
+  const existing = email ? await prisma.customer.findFirst({ where: { email } }) : null;
   if (existing) {
     // Vinculaci\u00f3n autom\u00e1tica si no ten\u00eda tnCustomerId
     if (data.tnCustomerId && !existing.tnCustomerId) {

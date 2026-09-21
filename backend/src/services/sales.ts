@@ -88,6 +88,13 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
   if (!input.items || input.items.length === 0) throw new ValidationError('La venta no tiene items');
   if (!input.payments || input.payments.length === 0) throw new ValidationError('La venta no tiene pagos');
 
+  // Idempotencia: si el front reintenta una venta offline con el mismo offlineId,
+  // no la duplicamos (devolvemos la que ya se creó).
+  if (input.offlineId) {
+    const dup = await prisma.sale.findFirst({ where: { offlineId: input.offlineId } });
+    if (dup) return getSale(dup.id);
+  }
+
   const itemsSubtotal = round2(input.items.reduce((s, it) => s + computeItemSubtotal(it), 0));
   const discountGlobal = round2(
     (input.discountGlobalPct ? (itemsSubtotal * input.discountGlobalPct) / 100 : 0) +
@@ -125,7 +132,7 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
     });
     const vmap = new Map(variants.map((v) => [v.id, v]));
 
-    const number = await nextCounter(`sale_${input.branchId}_${new Date().getFullYear()}`);
+    const number = await nextCounter(`sale_${input.branchId}_${new Date().getFullYear()}`, tx);
     const saleId = input.id ?? randomId();
     const datetime = input.datetime ?? new Date();
 
@@ -170,10 +177,11 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
           subtotal: computeItemSubtotal(it),
         },
       });
-      // Decrement stock
+      // Decrement stock (atómico + guarda contra oversell por concurrencia)
       await adjustStock(it.variantId, input.branchId, -it.qty, {
         skipTnSync: true,
         tx,
+        noNegative: !opts.allowNegative,
         reason: `Sale ${saleId}`,
       });
     }

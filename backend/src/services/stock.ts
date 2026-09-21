@@ -63,18 +63,23 @@ export async function adjustStock(
   variantId: string,
   branchId: string,
   delta: number,
-  opts: { userId?: string; reason?: string; skipTnSync?: boolean; tx?: Prisma.TransactionClient } = {},
+  opts: { userId?: string; reason?: string; skipTnSync?: boolean; noNegative?: boolean; tx?: Prisma.TransactionClient } = {},
 ) {
   const client = opts.tx ?? prisma;
   const id = `${variantId}|${branchId}`;
   const current = await client.stock.findUnique({ where: { id } });
-  const newQty = (current?.qty ?? 0) + delta;
 
+  // Increment ATÓMICO en la base (no set desde un read viejo): dos decrementos
+  // concurrentes del último ítem se serializan y el segundo ve el valor real.
   const after = await client.stock.upsert({
     where: { id },
-    update: { qty: newQty },
-    create: { id, variantId, branchId, qty: newQty },
+    update: { qty: { increment: delta } },
+    create: { id, variantId, branchId, qty: (current?.qty ?? 0) + delta },
   });
+  // Freno de oversell: si no se permite negativo y quedó por debajo de 0, se revierte.
+  if (opts.noNegative && after.qty < 0) {
+    throw new StockInsufficientError(variantId, branchId, (current?.qty ?? 0), -delta);
+  }
 
   if (!opts.tx) {
     await logAudit({
@@ -123,7 +128,7 @@ export async function transferStock(input: {
 }) {
   const { variantId, fromBranch, toBranch, qty, userId } = input;
   return prisma.$transaction(async (tx) => {
-    await adjustStock(variantId, fromBranch, -qty, { userId, reason: `Transfer to ${toBranch}`, skipTnSync: true, tx });
+    await adjustStock(variantId, fromBranch, -qty, { userId, reason: `Transfer to ${toBranch}`, skipTnSync: true, noNegative: true, tx });
     await adjustStock(variantId, toBranch, qty, { userId, reason: `Transfer from ${fromBranch}`, skipTnSync: true, tx });
     await enqueueSync('push_stock', { variantId });
   });

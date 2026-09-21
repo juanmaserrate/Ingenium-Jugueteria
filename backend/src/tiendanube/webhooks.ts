@@ -152,16 +152,18 @@ export async function handleProductUpdated(event: any) {
   if (!tn) throw new Error('TN not connected');
   const tnProduct = await tn.getProduct(tnProductId);
 
-  // Last-write-wins: si la modificaci\u00f3n de TN es posterior a la local, actualizamos
+  // Last-write-wins: si la modificaci\u00f3n de TN es posterior a la local, actualizamos.
+  // Si la fecha de TN es inv\u00e1lida, NO tocamos nada (no arriesgamos pisar lo local).
   const tnUpdated = new Date(tnProduct.updated_at);
-  if (mapping.product.updatedAt > tnUpdated) {
-    return { skipped: 'local newer' };
+  if (Number.isNaN(tnUpdated.getTime()) || mapping.product.updatedAt > tnUpdated) {
+    return { skipped: 'local newer or invalid date' };
   }
   await prisma.product.update({
     where: { id: mapping.productId },
     data: {
       name: tnProduct.name?.es ?? mapping.product.name,
-      description: tnProduct.description?.es ?? null,
+      // No pisar la descripci\u00f3n local con null si TN no la trae.
+      description: tnProduct.description?.es ?? mapping.product.description,
       price: tnProduct.variants?.[0] ? parseFloat(tnProduct.variants[0].price) : mapping.product.price,
     },
   });
@@ -176,7 +178,19 @@ export async function handleProductDeleted(event: any) {
   const tnProductId = String(event.id);
   const mapping = await prisma.productTnMapping.findUnique({ where: { tnProductId } });
   if (!mapping) return { skipped: 'unknown' };
-  await prisma.product.delete({ where: { id: mapping.productId } });
+  // Si el producto tiene historial de ventas/compras, un hard-delete viola las FK de
+  // SaleItem/PurchaseItem y el webhook tira 500 → TN reintenta en loop. Soft-delete.
+  const variants = await prisma.variant.findMany({ where: { productId: mapping.productId }, select: { id: true } });
+  const variantIds = variants.map((v) => v.id);
+  const [sales, purchases] = await Promise.all([
+    prisma.saleItem.count({ where: { variantId: { in: variantIds } } }),
+    prisma.purchaseItem.count({ where: { variantId: { in: variantIds } } }),
+  ]);
+  if (sales > 0 || purchases > 0) {
+    await prisma.product.update({ where: { id: mapping.productId }, data: { active: false } });
+  } else {
+    await prisma.product.delete({ where: { id: mapping.productId } });
+  }
   return { ok: true };
 }
 

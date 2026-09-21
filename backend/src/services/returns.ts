@@ -56,7 +56,7 @@ export async function processReturn(input: ReturnInput) {
 
   const returnId = await prisma.$transaction(async (tx) => {
     const rid = randomId();
-    const number = await nextCounter(`return_${input.branchId}_${new Date().getFullYear()}`);
+    const number = await nextCounter(`return_${input.branchId}_${new Date().getFullYear()}`, tx);
 
     // Restore stock of returned items
     for (const it of input.returnedItems) {
