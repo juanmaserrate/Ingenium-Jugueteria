@@ -181,11 +181,12 @@ export async function integrationsRoutes(app: FastifyInstance) {
         return { error: 'unmapped_items', missing };
       }
 
-      // Crear venta
+      // Crear venta. Ojo: en los items de la orden TN, qty/unitPrice pueden venir como
+      // string ("1") en el JSON guardado → Prisma espera Int/Float y tira 500. Se castean.
       const saleItems = items.map((i) => ({
         variantId: mapByTn.get(i.tnVariantId)!,
-        qty: i.qty,
-        unitPrice: i.unitPrice,
+        qty: Math.round(Number(i.qty)) || 0,
+        unitPrice: Number(i.unitPrice) || 0,
       }));
 
       // Buscar cliente por email
