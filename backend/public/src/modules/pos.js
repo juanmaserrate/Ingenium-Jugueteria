@@ -742,6 +742,14 @@ async function showSaleReceipt(rec) {
         <div class="mt-2 font-black text-2xl text-[#241a0d]">${money(rec.total)}</div>
         <div class="text-sm text-[#7d6c5c]">${rec.items.length} items · ${rec.payments.length} pago(s)</div>
       </div>
+      <div class="bg-white border border-[#fff1e6] rounded-xl p-3 text-sm mb-2 max-h-52 overflow-y-auto">
+        <div class="text-xs font-bold text-[#7d6c5c] uppercase tracking-wide mb-1">Detalle</div>
+        ${(rec.items || []).map(it => `
+          <div class="flex justify-between gap-2 py-0.5 border-b border-[#fff8f4] last:border-0">
+            <span class="text-[#241a0d]"><span class="font-bold">${it.qty}×</span> ${escapeHtml(it.name)}</span>
+            <span class="text-[#7d6c5c] whitespace-nowrap">${money(it.subtotal || 0)}</span>
+          </div>`).join('')}
+      </div>
       <div class="bg-[#fff8f4] rounded-xl p-3 text-sm space-y-1">
         <div class="flex justify-between"><span class="text-[#7d6c5c]">Subtotal items</span><span>${money(rec.items_subtotal || 0)}</span></div>
         ${rec.discount_total > 0 ? `<div class="flex justify-between text-green-700"><span>Descuento</span><span>− ${money(rec.discount_total)}</span></div>` : ''}

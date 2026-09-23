@@ -353,6 +353,23 @@ export async function integrationsRoutes(app: FastifyInstance) {
       return { ok: true };
     });
 
+    // --- Reconciliación de stock a Tienda Nube ---
+    // Encola un push_stock (SET absoluto = stock local) por cada variante de un
+    // producto ENLAZADO. Corrige desincronizaciones (p.ej. tras una recarga masiva
+    // donde el stock local quedó distinto al de TN). Idempotente: push_stock fija
+    // el valor absoluto, no descuenta, así que correrlo varias veces es seguro.
+    r.post('/resync-stock', async (req) => {
+      const linkedProducts = await prisma.product.findMany({
+        where: { tnMapping: { isNot: null }, active: true },
+        select: { variants: { select: { id: true } } },
+      });
+      const variantIds = linkedProducts.flatMap((p) => p.variants.map((v) => v.id));
+      for (const vid of variantIds) {
+        await enqueueSync('push_stock', { variantId: vid });
+      }
+      return { ok: true, enqueued: variantIds.length, products: linkedProducts.length };
+    });
+
     // --- Sync Log ---
     r.get('/sync/log', async (req) => {
       const q = req.query as { limit?: string; status?: string };
