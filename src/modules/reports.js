@@ -1,6 +1,7 @@
 // Reportes — exportaciones XLSX de todos los dominios.
 
 import { getAll } from '../core/db.js';
+import { api } from '../core/api.js';
 import { money, fmtDateTime, fmtDate, monthKey, hoursBetween, hoursDecimal } from '../core/format.js';
 import { activeBranchId } from '../core/auth.js';
 import { exportToXLSX } from '../core/xlsx.js';
@@ -66,26 +67,37 @@ async function runReport(id) {
 }
 
 async function repSales() {
-  const [sales, customers, employees, products, methodsCfg] = await Promise.all([
-    getAll('sales'), getAll('customers'), getAll('employees'), getAll('products'), (await import('../core/db.js')).get('config', 'payment_methods'),
+  // Las ventas viven en el backend (todo-online). Traemos confirmadas con sus items.
+  const [sales, employees, products, categories, branches] = await Promise.all([
+    api('/api/sales?status=confirmed&limit=100000'),
+    getAll('employees'), getAll('products'), getAll('categories'), getAll('branches'),
   ]);
-  const cuMap = Object.fromEntries(customers.map(c => [c.id, `${c.name} ${c.lastname||''}`]));
-  const emMap = Object.fromEntries(employees.map(e => [e.id, `${e.name} ${e.lastname||''}`]));
-  const prMap = Object.fromEntries(products.map(p => [p.id, p]));
-  const methods = methodsCfg?.value || [];
-  const header = sales.map(s => ({
-    Numero: s.number, Fecha: fmtDateTime(s.datetime), Sucursal: s.branch_id,
-    Cliente: cuMap[s.customer_id] || '', Vendedor: emMap[s.seller_id] || '',
+  const emMap = Object.fromEntries((employees || []).map(e => [e.id, `${e.name} ${e.lastname||''}`.trim()]));
+  const catMap = Object.fromEntries((categories || []).map(c => [c.id, c.name]));
+  const brMap = Object.fromEntries((branches || []).map(b => [b.id, b.name]));
+  // variantId -> { code, category } resolviendo desde el catálogo local.
+  const vMap = {};
+  for (const p of (products || [])) {
+    for (const v of (p.variants || [])) {
+      vMap[v.id] = { code: v.code || p.code || '', category: catMap[p.category_id] || p.category_id || '' };
+    }
+  }
+  const header = (sales || []).map(s => ({
+    Numero: s.number, Fecha: fmtDateTime(s.datetime), Sucursal: brMap[s.branchId] || s.branchId,
+    Cliente: s.customer?.name || '', Vendedor: emMap[s.sellerId] || '',
+    Origen: s.source === 'tn' ? 'Tienda Nube' : 'POS',
     Items: s.items?.length || 0, Total: s.total,
-    Pagos: (s.payments || []).map(p => `${methods.find(m => m.id === p.method_id)?.name || p.method_id}: ${p.amount}`).join(' · '),
+    Pagos: (s.payments || []).map(p => `${p.methodName || p.methodId}: ${p.amount}`).join(' · '),
   }));
   const details = [];
-  for (const s of sales) {
+  for (const s of (sales || [])) {
     for (const it of (s.items || [])) {
+      const info = vMap[it.variantId] || {};
+      const variante = it.variantNameSnap && it.variantNameSnap !== 'default' ? ` (${it.variantNameSnap})` : '';
       details.push({
-        Numero: s.number, Fecha: fmtDate(s.datetime), Producto: it.name, Codigo: it.code,
-        Categoria: prMap[it.product_id]?.category_id || '', Cantidad: it.qty,
-        Precio: it.unit_price, Costo: it.cost_snapshot, Subtotal: it.subtotal,
+        Numero: s.number, Fecha: fmtDate(s.datetime), Producto: `${it.productNameSnap}${variante}`,
+        Codigo: info.code || '', Categoria: info.category || '', Cantidad: it.qty,
+        Precio: it.unitPrice, Costo: it.costSnapshot, Subtotal: it.subtotal,
       });
     }
   }
