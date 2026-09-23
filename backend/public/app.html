@@ -79,6 +79,7 @@
     // Registrar rutas (lazy import de cada módulo)
     registerRoute('/dashboard',    () => import('./src/modules/dashboard.js'));
     registerRoute('/pos',          () => import('./src/modules/pos.js'));
+    registerRoute('/ventas',       () => import('./src/modules/ventas.js'));
     registerRoute('/returns',      () => import('./src/modules/returns.js'));
     registerRoute('/cash',         () => import('./src/modules/cash.js'));
     registerRoute('/inventory',    () => import('./src/modules/inventory.js'));

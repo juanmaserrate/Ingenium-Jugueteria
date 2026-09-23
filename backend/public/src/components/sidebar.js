@@ -3,7 +3,8 @@
 const NAV = [
   { section: 'Operación' },
   { path: '/dashboard',    label: 'Panel',            icon: 'dashboard' },
-  { path: '/pos',          label: 'Ventas',           icon: 'point_of_sale' },
+  { path: '/pos',          label: 'POS',              icon: 'point_of_sale' },
+  { path: '/ventas',       label: 'Ventas',           icon: 'receipt_long' },
   { path: '/returns',      label: 'Devoluciones',     icon: 'assignment_return' },
   { path: '/cash',         label: 'Caja',             icon: 'account_balance_wallet' },
 
