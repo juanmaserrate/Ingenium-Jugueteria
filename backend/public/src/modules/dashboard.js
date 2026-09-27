@@ -48,10 +48,10 @@ function kpiCard(id, label, icon, color) {
         <div class="flex-1 min-w-0">
           <div class="text-[0.625rem] font-black text-[#7d6c5c] uppercase tracking-[0.2em]">${label}</div>
           <div class="flex items-baseline gap-2 mt-2">
-            <div class="text-3xl font-black truncate kpi-value" style="color:${color}">—</div>
+            <div class="text-3xl font-black break-words kpi-value" style="color:${color}">—</div>
             <span class="kpi-delta"></span>
           </div>
-          <div class="text-xs text-[#7d6c5c] mt-1 truncate kpi-hint">Cargando…</div>
+          <div class="text-xs text-[#7d6c5c] mt-1 break-words kpi-hint">Cargando…</div>
         </div>
         <span class="material-symbols-outlined text-3xl opacity-70 shrink-0 kpi-icon" style="color:${color}">${icon}</span>
       </div>
@@ -65,8 +65,8 @@ function alertKpiCard(id, label, icon, href, color) {
       <div class="flex justify-between items-start">
         <div class="flex-1 min-w-0">
           <div class="text-[0.625rem] font-black text-[#7d6c5c] uppercase tracking-[0.2em]">${label}</div>
-          <div class="text-2xl font-black mt-2 truncate kpi-value" style="color:${color}">—</div>
-          <div class="text-xs text-[#7d6c5c] mt-1 truncate kpi-hint">Cargando…</div>
+          <div class="text-2xl font-black mt-2 break-words kpi-value" style="color:${color}">—</div>
+          <div class="text-xs text-[#7d6c5c] mt-1 break-words kpi-hint">Cargando…</div>
         </div>
         <span class="material-symbols-outlined text-2xl opacity-70 shrink-0 kpi-icon" style="color:${color}">${icon}</span>
       </div>
@@ -388,8 +388,8 @@ function renderActivity(el, recent) {
             <span class="material-symbols-outlined text-base" style="color:${f.color}">${f.icon}</span>
           </div>
           <div class="flex-1 min-w-0">
-            <div class="font-bold text-sm text-[#241a0d] truncate">${f.title}</div>
-            <div class="text-xs text-[#7d6c5c] truncate">${f.sub}</div>
+            <div class="font-bold text-sm text-[#241a0d] break-words leading-tight">${f.title}</div>
+            <div class="text-xs text-[#7d6c5c] break-words leading-tight">${f.sub}</div>
           </div>
           <div class="text-right shrink-0">
             <div class="font-black text-sm" style="color:${f.amount >= 0 ? '#16a34a' : '#dc2626'}">${f.amount >= 0 ? '+' : ''}${money(f.amount)}</div>

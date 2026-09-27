@@ -1329,7 +1329,7 @@ async function openTnLinkModal(product, container) {
         rows = rows.slice(0, 60);
         listEl.innerHTML = rows.length ? rows.map(r => `
           <button data-tnp="${r.tnProductId}" data-tnv="${r.tnVariantId}" class="w-full flex items-center justify-between gap-3 px-3 py-2 hover:bg-[#fff8f4] text-left">
-            <div class="min-w-0"><div class="font-bold text-sm truncate">${escapeAttr(r.name)}</div><div class="text-xs text-[#7d6c5c] font-mono">${escapeAttr(r.barcode || r.sku || '')}${r.isVariant ? ' · (con variantes)' : ''}</div></div>
+            <div class="min-w-0"><div class="font-bold text-sm break-words leading-tight">${escapeAttr(r.name)}</div><div class="text-xs text-[#7d6c5c] font-mono">${escapeAttr(r.barcode || r.sku || '')}${r.isVariant ? ' · (con variantes)' : ''}</div></div>
             <div class="font-bold text-[#d82f1e] whitespace-nowrap">${r.price ? ('$' + r.price) : ''}</div>
           </button>`).join('') : '<div class="p-4 text-center text-[#7d6c5c]">Sin resultados</div>';
         listEl.querySelectorAll('[data-tnp]').forEach(btn => btn.addEventListener('click', async () => {

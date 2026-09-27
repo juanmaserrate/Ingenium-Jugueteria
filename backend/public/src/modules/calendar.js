@@ -83,22 +83,22 @@ async function render(el) {
         ${['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'].map(d => `<div>${d}</div>`).join('')}
       </div>
       <div class="grid grid-cols-7 gap-1">
-        ${Array.from({length: dayOffset}).map(() => `<div class="h-28 bg-[#fff8f4]/30 rounded-lg"></div>`).join('')}
+        ${Array.from({length: dayOffset}).map(() => `<div class="min-h-[7rem] bg-[#fff8f4]/30 rounded-lg"></div>`).join('')}
         ${Array.from({length: daysInMonth}, (_, i) => {
           const day = i + 1;
           const key = `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
           const evs = byDay[key] || [];
           const today = new Date().toISOString().slice(0, 10) === key;
           return `
-            <div data-day="${key}" class="h-28 rounded-lg p-1.5 cursor-pointer border hover:border-[#d82f1e] ${today ? 'bg-[#fff1e6] border-[#d82f1e]' : 'bg-white border-[#fff1e6]'}">
+            <div data-day="${key}" class="min-h-[7rem] rounded-lg p-1.5 cursor-pointer border hover:border-[#d82f1e] ${today ? 'bg-[#fff1e6] border-[#d82f1e]' : 'bg-white border-[#fff1e6]'}">
               <div class="flex justify-between items-center">
                 <div class="text-xs font-bold ${today ? 'text-[#d82f1e]' : 'text-[#241a0d]'}">${day}</div>
                 ${evs.length ? `<div class="text-[9px] bg-[#d82f1e] text-white rounded-full px-1.5 font-bold">${evs.length}</div>` : ''}
               </div>
-              <div class="mt-1 space-y-0.5 overflow-hidden">
+              <div class="mt-1 space-y-0.5">
                 ${evs.slice(0, 3).map(e => {
                   const bg = { birthday: 'bg-pink-100 text-pink-700', check: 'bg-red-100 text-red-700', holiday: 'bg-blue-100 text-blue-700', season: 'bg-amber-100 text-amber-700', event: 'bg-green-100 text-green-700' }[e.category] || 'bg-gray-100';
-                  return `<div class="text-[10px] px-1 py-0.5 rounded truncate ${bg}">${e.title}</div>`;
+                  return `<div class="text-[10px] px-1 py-0.5 rounded break-words leading-tight ${bg}">${e.title}</div>`;
                 }).join('')}
                 ${evs.length > 3 ? `<div class="text-[9px] text-[#7d6c5c] font-bold">+${evs.length - 3}</div>` : ''}
               </div>

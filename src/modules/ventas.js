@@ -280,7 +280,7 @@ function rowHTML(e) {
         <span class="material-symbols-outlined text-[#7d6c5c] transition-transform ${open ? 'rotate-90' : ''}" data-chev="${e.id}">chevron_right</span>
         <span class="min-w-0">
           <span class="block font-bold text-[#241a0d] dark:text-[#fff1e6]">${fecha} <span class="text-[#7d6c5c] font-semibold">${hora}</span></span>
-          <span class="block text-xs text-[#7d6c5c] truncate">#${String(e.number).padStart(6, '0')} · ${tag}${e.customerName ? ' · ' + escapeHtml(e.customerName) : ''}</span>
+          <span class="block text-xs text-[#7d6c5c] break-words leading-tight">#${String(e.number).padStart(6, '0')} · ${tag}${e.customerName ? ' · ' + escapeHtml(e.customerName) : ''}</span>
         </span>
         <span class="hidden md:block text-sm text-[#241a0d] dark:text-[#fff1e6]">${escapeHtml(payLabel(e))}${combinado}</span>
         ${amountHTML}
@@ -297,7 +297,7 @@ function lineItem(it, badge) {
   return `
     <div class="flex justify-between items-start gap-3 py-1.5 border-b border-[#fff8f4] dark:border-[#241a0d] last:border-0">
       <div class="min-w-0">
-        <div class="text-sm text-[#241a0d] dark:text-[#fff1e6] truncate">${b}${escapeHtml(it.name || '')}</div>
+        <div class="text-sm text-[#241a0d] dark:text-[#fff1e6] break-words leading-tight">${b}${escapeHtml(it.name || '')}</div>
         <div class="text-xs text-[#7d6c5c]">${it.qty} × ${money(it.unitPrice)} c/u</div>
       </div>
       <div class="text-sm font-bold text-[#241a0d] dark:text-[#fff1e6] whitespace-nowrap">${money(it.subtotal != null ? it.subtotal : it.qty * it.unitPrice)}</div>

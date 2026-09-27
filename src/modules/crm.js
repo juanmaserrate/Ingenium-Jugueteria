@@ -202,7 +202,7 @@ async function viewCustomer(root, c, sales, creditNotes) {
         <div class="border border-[#fff1e6] rounded-xl overflow-hidden mb-4">
           ${topProducts.map(([name, v]) => `
             <div class="flex justify-between items-center px-3 py-2 border-b border-[#fff1e6] last:border-0">
-              <div class="truncate flex-1">${name}</div>
+              <div class="break-words leading-tight flex-1">${name}</div>
               <div class="flex gap-4 shrink-0">
                 <span class="text-xs text-[#7d6c5c]">${v.qty} u.</span>
                 <span class="font-bold">${money(v.spent)}</span>
