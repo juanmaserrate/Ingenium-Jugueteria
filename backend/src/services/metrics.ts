@@ -55,11 +55,22 @@ export async function getDashboard(params: { branchId?: string; month: string; t
   const sumTotal = (where: Prisma.SaleWhereInput) =>
     prisma.sale.aggregate({ _sum: { total: true }, _count: true, where: { ...bw, ...confirmed, ...where } });
 
-  const [todayAgg, yesterdayAgg, monthAggR, prevMonthAggR] = await Promise.all([
+  // Señas usadas como pago: NO computan en lo facturado. Se restan de los totales.
+  const senaSum = async (where: Prisma.SaleWhereInput) => {
+    const r = await prisma.salePayment.aggregate({
+      _sum: { amount: true },
+      where: { methodId: 'sena', sale: { ...bw, ...confirmed, ...where } },
+    });
+    return r._sum.amount ?? 0;
+  };
+
+  const [todayAgg, yesterdayAgg, monthAggR, prevMonthAggR, todaySena, monthSena] = await Promise.all([
     sumTotal({ datetime: { gte: tr.gte, lt: tr.lt } }),
     sumTotal({ datetime: { gte: yr.gte, lt: yr.lt } }),
     sumTotal({ datetime: { gte: mr.gte, lt: mr.lt } }),
     sumTotal({ datetime: { gte: pm.gte, lt: pm.lt } }),
+    senaSum({ datetime: { gte: tr.gte, lt: tr.lt } }),
+    senaSum({ datetime: { gte: mr.gte, lt: mr.lt } }),
   ]);
 
   // Caja: saldo acumulado (todos los movimientos hasta hoy)
@@ -167,10 +178,10 @@ export async function getDashboard(params: { branchId?: string; month: string; t
     select: { number: true, datetime: true, total: true, branchId: true },
   });
 
-  const monthTotal = monthAggR._sum.total ?? 0;
+  const monthTotal = (monthAggR._sum.total ?? 0) - monthSena;
   const monthCount = monthAggR._count ?? 0;
   return {
-    today: { total: todayAgg._sum.total ?? 0, count: todayAgg._count ?? 0 },
+    today: { total: (todayAgg._sum.total ?? 0) - todaySena, count: todayAgg._count ?? 0 },
     yesterday: { total: yesterdayAgg._sum.total ?? 0 },
     month: { total: monthTotal, count: monthCount, avgTicket: monthCount ? monthTotal / monthCount : 0 },
     prevMonth: { total: prevMonthAggR._sum.total ?? 0, count: prevMonthAggR._count ?? 0 },
@@ -201,7 +212,10 @@ export async function getBalance(params: { branchId?: string; from: string; to: 
       orderBy: { datetime: 'desc' }, take: 1000,
       select: { id: true, number: true, datetime: true, returnedTotal: true, takenTotal: true, difference: true } }),
   ]);
-  const facturado = agg._sum.total ?? 0;
+  // Las SEÑAS usadas como pago NO computan en lo facturado (la plata ya entró al
+  // crear la seña). Se descuenta del total facturado el monto pagado con seña.
+  const senaPaid = payments.filter((p) => p.methodId === 'sena').reduce((s, p) => s + (p._sum.amount ?? 0), 0);
+  const facturado = (agg._sum.total ?? 0) - senaPaid;
   const count = agg._count ?? 0;
   // difference = returnedTotal - takenTotal; positivo = plata reintegrada al cliente.
   const devuelto = returns.reduce((s, r) => s + Math.max(0, r.difference || 0), 0);

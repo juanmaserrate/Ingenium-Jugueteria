@@ -450,11 +450,38 @@ model Customer {
   sales       Sale[]
   returns     Return[]
   creditNotes CreditNote[]
+  senas       Sena[]
 
   @@index([email])
   @@index([birthday])
   @@index([tnCustomerId])
   @@map("customers")
+}
+
+// Seña = reserva de un producto con un anticipo de dinero. Se crea asignada a un
+// cliente; si se pagó en efectivo, entra a la caja al crearse. Luego se usa como
+// medio de pago en una venta (NO vuelve a mover la caja ni suma a lo facturado).
+model Sena {
+  id             String    @id
+  number         Int
+  customerId     String    @map("customer_id")
+  amount         Float
+  status         String    @default("active") // active | redeemed | cancelled
+  note           String? // producto/reserva
+  branchId       String    @map("branch_id")
+  methodId       String?   @map("method_id")
+  methodName     String?   @map("method_name")
+  affectsCash    Boolean   @default(true) @map("affects_cash")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  redeemedAt     DateTime? @map("redeemed_at")
+  redeemedSaleId String?   @map("redeemed_sale_id")
+  userId         String?   @map("user_id")
+
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([customerId])
+  @@index([status])
+  @@map("senas")
 }
 
 model Employee {

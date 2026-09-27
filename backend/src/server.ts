@@ -14,6 +14,7 @@ import { salesRoutes } from './routes/sales.js';
 import { returnsRoutes } from './routes/returns.js';
 import { cashRoutes } from './routes/cash.js';
 import { customersRoutes } from './routes/customers.js';
+import { senasRoutes } from './routes/senas.js';
 import { integrationsRoutes } from './routes/integrations.js';
 import { webhooksRoutes } from './routes/webhooks.js';
 import { syncRoutes } from './routes/sync.js';
@@ -125,6 +126,7 @@ async function main() {
   await app.register(returnsRoutes, { prefix: '/api' });
   await app.register(cashRoutes, { prefix: '/api' });
   await app.register(customersRoutes, { prefix: '/api' });
+  await app.register(senasRoutes, { prefix: '/api' });
   await app.register(integrationsRoutes, { prefix: '/api' });
   await app.register(imagesRoutes, { prefix: '/api' });
   await app.register(purchasesRoutes, { prefix: '/api' });

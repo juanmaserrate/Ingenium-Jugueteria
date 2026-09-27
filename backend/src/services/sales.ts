@@ -6,6 +6,7 @@ import { randomId } from '../utils/crypto.js';
 import { nextCounter } from './counters.js';
 import { adjustStock, releaseReserved } from './stock.js';
 import { enqueueSync } from '../sync/queue.js';
+import { redeemSena } from './senas.js';
 
 export type SalePaymentInput = {
   methodId: string;
@@ -13,6 +14,9 @@ export type SalePaymentInput = {
   amount: number;
   // ¿Este medio de pago impacta la caja (efectivo)? Lo decide la config del front.
   affectsCash?: boolean;
+  // Si el pago es con una SEÑA, su id. La seña ya entró a la caja al crearse, así
+  // que este pago NO mueve la caja (affectsCash=false) ni suma a lo facturado.
+  senaId?: string | null;
 };
 
 // Fallback cuando el front no manda affectsCash: tratamos efectivo por id conocido.
@@ -197,6 +201,8 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
           amount: p.amount,
         },
       });
+      // Pago con seña → marcarla como usada y vincularla a esta venta.
+      if (p.senaId) await redeemSena(p.senaId, saleId, tx);
     }
 
     // Movimiento de caja: SOLO los pagos que afectan caja (efectivo) entran al cajón.
