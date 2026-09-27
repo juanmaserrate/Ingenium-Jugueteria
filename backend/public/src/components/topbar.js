@@ -7,7 +7,8 @@ import { on, EV, emit } from '../core/events.js';
 
 const PAGE_LABELS = {
   '/dashboard': 'Panel',
-  '/pos': 'Ventas',
+  '/pos': 'POS',
+  '/ventas': 'Ventas',
   '/returns': 'Devoluciones',
   '/cash': 'Caja',
   '/inventory': 'Inventario',
