@@ -264,8 +264,8 @@ function renderSearchResults(root) {
         const qty = st?.qty || 0;
         return `<button data-pid="${p.id}" class="w-full flex items-center justify-between gap-3 px-3 py-2 hover:bg-[#fff8f4] text-left">
           <div class="flex-1 min-w-0">
-            <div class="font-bold text-sm text-[#241a0d] truncate">${p.name}</div>
-            <div class="text-xs text-[#7d6c5c] font-mono">${p.code} · Stock: <span class="${qty <= 0 ? 'text-red-600 font-bold' : ''}">${qty}</span></div>
+            <div class="font-bold text-sm text-[#241a0d] break-words leading-tight">${p.name}</div>
+            <div class="text-xs text-[#7d6c5c] font-mono break-all">${p.code} · Stock: <span class="${qty <= 0 ? 'text-red-600 font-bold' : ''}">${qty}</span></div>
           </div>
           <div class="text-right">
             <div class="font-bold text-[#d82f1e] whitespace-nowrap">${money(p.price)}</div>
@@ -388,8 +388,8 @@ function cartRow(it, i) {
     <div class="grid grid-cols-[48px_1fr_80px_110px_90px_110px_40px] gap-3 px-4 py-2 items-center hover:bg-[#fff8f4]">
       <div class="text-xs font-bold text-[#7d6c5c]">${i + 1}</div>
       <div class="min-w-0">
-        <div class="font-bold text-sm text-[#241a0d] truncate">${it.name}</div>
-        <div class="text-[10px] text-[#7d6c5c] font-mono">${it.code || ''}</div>
+        <div class="font-bold text-sm text-[#241a0d] break-words leading-tight">${it.name}</div>
+        <div class="text-[10px] text-[#7d6c5c] font-mono break-all">${it.code || ''}</div>
       </div>
       <div class="flex items-center justify-center gap-1">
         <button data-item-qty-minus="${i}" class="w-6 h-6 rounded-md bg-[#fff1e6] text-[#7d6c5c] hover:bg-[#d82f1e] hover:text-white flex items-center justify-center font-bold">−</button>
@@ -832,7 +832,7 @@ function customerBoxHTML(sale) {
   if (c) {
     return `<div class="flex items-center justify-between gap-2 bg-[#fff8f4] rounded-xl px-3 py-2">
       <div class="min-w-0">
-        <div class="font-bold text-sm text-[#241a0d] truncate">${escapeHtml(c.name)}${c.lastname ? ' ' + escapeHtml(c.lastname) : ''}</div>
+        <div class="font-bold text-sm text-[#241a0d] break-words leading-tight">${escapeHtml(c.name)}${c.lastname ? ' ' + escapeHtml(c.lastname) : ''}</div>
         <div class="text-xs text-[#7d6c5c]">${c.documentNumber ? 'Doc ' + escapeHtml(c.documentNumber) : 'sin documento'}</div>
       </div>
       <div class="flex gap-1 shrink-0">
@@ -974,8 +974,8 @@ async function openCatalogPicker(root) {
           const st = state.stocks.find(s => s.product_id === p.id && s.branch_id === br);
           const qty = st?.qty || 0;
           return `<button data-pid="${p.id}" class="text-left border border-[#fff1e6] rounded-xl p-3 hover:border-[#d82f1e] transition-all">
-            <div class="font-bold text-sm truncate">${p.name}</div>
-            <div class="text-xs text-[#7d6c5c] font-mono">${p.code}</div>
+            <div class="font-bold text-sm break-words leading-tight">${p.name}</div>
+            <div class="text-xs text-[#7d6c5c] font-mono break-all">${p.code}</div>
             <div class="flex justify-between items-end mt-2">
               <div class="text-xs ${qty <= 0 ? 'text-red-600 font-bold' : 'text-[#7d6c5c]'}">Stock: ${qty}</div>
               <div class="font-black text-[#d82f1e]">${money(p.price)}</div>
