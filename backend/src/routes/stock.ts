@@ -52,4 +52,36 @@ export async function stockRoutes(app: FastifyInstance) {
     await transferStock({ ...body, userId: req.user.userId });
     return reply.send({ ok: true });
   });
+
+  // Descuento masivo de stock (histórico) SIN sincronizar a Tienda Nube.
+  // Uso puntual: cargar ventas que ya fueron descontadas en TN, para que el
+  // stock local coincida sin volver a descontarlas online. Clampa en 0.
+  app.post('/stock/bulk-discount', async (req) => {
+    const body = z.object({
+      reason: z.string().optional(),
+      items: z.array(z.object({
+        variantId: z.string(),
+        branchId: z.string(),
+        qty: z.number().int().positive(),
+      })).min(1),
+    }).parse(req.body);
+    const results: any[] = [];
+    for (const it of body.items) {
+      try {
+        const cur = await getStock(it.variantId, it.branchId);
+        const before = cur?.qty ?? 0;
+        const applied = Math.min(it.qty, Math.max(0, before)); // no bajar de 0
+        const newQty = Math.max(0, before - it.qty);
+        await setStock(it.variantId, it.branchId, newQty, {
+          userId: req.user.userId,
+          reason: body.reason ?? 'Descuento ventas (histórico, sin push a TN)',
+          skipTnSync: true,
+        });
+        results.push({ variantId: it.variantId, branchId: it.branchId, before, requested: it.qty, applied, newQty, clamped: it.qty > before });
+      } catch (e: any) {
+        results.push({ variantId: it.variantId, branchId: it.branchId, error: e?.message ?? String(e) });
+      }
+    }
+    return { count: results.filter((r) => !r.error).length, results };
+  });
 }
