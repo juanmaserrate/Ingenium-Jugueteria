@@ -37,6 +37,11 @@ function parseNumAR(s) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Redondeo de precio a la decena ($10). El usuario puede editarlo manualmente.
+function roundPrice(x) { return Math.round((Number(x) || 0) / 10) * 10; }
+// Margen (% de utilidad) real, derivado de costo y precio.
+function marginOf(p) { return (p && p.cost > 0) ? ((p.price / p.cost - 1) * 100) : 0; }
+
 // Debounce del re-render al tipear en filtros: evita reconstruir la tabla (100
 // filas + detalles de variantes) en cada tecla y restaura el foco/cursor del
 // input tras el render (antes se sentía "cortado" al escribir/borrar).
@@ -297,7 +302,7 @@ async function renderProducts(container, forceReload = false) {
     { id: 'brand', label: 'Marca', render: p => brMap[p.brand_id] || '-' },
     { id: 'supplier', label: 'Proveedor', render: p => spMap[p.supplier_id] || '-' },
     { id: 'cost', label: 'Costo', render: p => money(p.cost), align: 'right', editable: 'number', field: 'cost' },
-    { id: 'margin', label: '% Margen', render: p => `${p.margin_pct}%`, align: 'right', editable: 'number', field: 'margin_pct' },
+    { id: 'margin', label: '% Margen', render: p => (p.cost > 0 ? `${marginOf(p).toFixed(1)}%` : '—'), align: 'right', editable: 'number', field: 'margin_pct' },
     { id: 'price', label: 'Precio', render: p => `<span class="font-bold">${money(p.price)}</span>`, align: 'right', editable: 'number', field: 'price' },
     { id: 'stock_lomas', label: `Stock ${lomas?.name || 'Lomas'}`, render: p => stockCell(stockOf(p.id, 'br_lomas')), align: 'center' },
     { id: 'stock_banfield', label: `Stock ${banf?.name || 'Banfield'}`, render: p => stockCell(stockOf(p.id, 'br_banfield')), align: 'center' },
@@ -557,7 +562,9 @@ async function editInline(td, list, container) {
   if (!p) return;
   const field = td.dataset.field;
   const type = td.dataset.editable;
-  const current = p[field] ?? '';
+  // El margen se edita a partir del valor REAL (derivado de costo y precio),
+  // no del guardado (que puede estar desactualizado).
+  const current = field === 'margin_pct' ? +marginOf(p).toFixed(2) : (p[field] ?? '');
   const input = document.createElement('input');
   // Números: type=text + inputmode decimal para aceptar formato argentino
   // (1.234,56). Un <input type=number> descarta esos valores y guardaba 0.
@@ -576,14 +583,23 @@ async function editInline(td, list, container) {
     } else {
       v = input.value;
     }
-    if (v === p[field]) { renderProducts(container); return; }
-    p[field] = v;
-    // Si cambió costo o %, recalcular precio. Si cambió precio, recalcular %.
-    if (field === 'cost' || field === 'margin_pct') {
-      p.price = +(p.cost * (1 + p.margin_pct / 100)).toFixed(2);
-    } else if (field === 'price' && p.cost > 0) {
-      p.margin_pct = +((p.price / p.cost - 1) * 100).toFixed(2);
+    // Vínculo costo ↔ margen ↔ precio:
+    // - Editar COSTO: mantiene el margen actual y recalcula el precio (redondeado a $10).
+    // - Editar MARGEN %: recalcula el precio (redondeado a $10), costo intacto.
+    // - Editar PRECIO: se toma tal cual (editable libre) y recalcula el margen.
+    if (field === 'cost') {
+      const ratio = p.cost > 0 ? (p.price / p.cost - 1) : 0; // margen actual como fracción
+      p.cost = v;
+      p.price = roundPrice(v * (1 + ratio));
+    } else if (field === 'margin_pct') {
+      p.price = roundPrice(p.cost * (1 + v / 100));
+    } else if (field === 'price') {
+      p.price = v;
+    } else {
+      p[field] = v;
     }
+    // Guardar el margen coherente con costo/precio finales.
+    p.margin_pct = +marginOf(p).toFixed(2);
     await P.save(p);
     // Actualizar el objeto en el caché (optimistic update) para que renderProducts no vaya a la red
     if (state.cache) {
@@ -636,7 +652,7 @@ async function openProductForm(p, container) {
         <input name="cost" type="text" inputmode="decimal" class="ing-input mt-1" required value="${p?.cost || 0}" />
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">% Margen</span>
-        <input name="margin_pct" type="text" inputmode="decimal" class="ing-input mt-1" value="${p?.margin_pct || 0}" />
+        <input name="margin_pct" type="text" inputmode="decimal" class="ing-input mt-1" value="${p && p.cost > 0 ? marginOf(p).toFixed(2) : (p?.margin_pct || 0)}" />
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Precio</span>
         <input name="price" type="text" inputmode="decimal" class="ing-input mt-1" value="${p?.price || 0}" />
@@ -806,7 +822,8 @@ async function openProductForm(p, container) {
       // Live recompute de precio cuando cambia costo o %
       const costIn = form.elements.cost, pctIn = form.elements.margin_pct, priceIn = form.elements.price;
       const nz = (s) => parseNumAR(s) ?? 0; // tolerante a formato AR (1.234,56)
-      const recalcPrice = () => priceIn.value = (nz(costIn.value) * (1 + nz(pctIn.value)/100)).toFixed(2);
+      // Precio calculado se redondea a la decena ($10); el usuario puede editarlo igual.
+      const recalcPrice = () => priceIn.value = roundPrice(nz(costIn.value) * (1 + nz(pctIn.value)/100));
       const recalcPct = () => { if (nz(costIn.value) > 0) pctIn.value = ((nz(priceIn.value)/nz(costIn.value)-1)*100).toFixed(2); };
       costIn.addEventListener('input', recalcPrice);
       pctIn.addEventListener('input', recalcPrice);
