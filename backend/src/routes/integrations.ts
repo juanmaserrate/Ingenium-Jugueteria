@@ -133,6 +133,110 @@ export async function integrationsRoutes(app: FastifyInstance) {
       return { since, count: out.length, warning, products: out };
     });
 
+    // Importa productos de TN al sistema y los enlaza. Para cada tnProductId:
+    // crea producto local + variantes + mappings, carga el stock actual de TN en
+    // `stockBranchId` (0 en las demás sucursales) y opcionalmente asigna el
+    // proveedor deducido del final del nombre ("... - Proveedor"). NO empuja stock
+    // a TN (el stock viene DESDE TN). Idempotente por tnProductId (si ya está
+    // enlazado, lo saltea).
+    r.post('/integrations/tiendanube/import-products', async (req) => {
+      const body = z
+        .object({
+          tnProductIds: z.array(z.string()).min(1),
+          stockBranchId: z.string(),
+          assignSupplierFromName: z.boolean().optional(),
+        })
+        .parse(req.body);
+      const tn = await getTnClient();
+      if (!tn) throw new Error('Tienda Nube no está conectada');
+      const branches = await prisma.branch.findMany();
+      const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+      const suppliers = await prisma.supplier.findMany();
+      const supByName = new Map(suppliers.map((s) => [norm(s.name), s.id]));
+
+      async function resolveSupplier(name: string): Promise<string | null> {
+        if (!body.assignSupplierFromName) return null;
+        const parts = String(name).split(' - ');
+        if (parts.length < 2) return null;
+        const supName = parts[parts.length - 1].trim();
+        if (!supName) return null;
+        const key = norm(supName);
+        if (supByName.has(key)) return supByName.get(key)!;
+        const created = await prisma.supplier.create({ data: { id: randomId(), name: supName } });
+        supByName.set(key, created.id);
+        return created.id;
+      }
+
+      const results: any[] = [];
+      for (const tnId of body.tnProductIds) {
+        try {
+          const existing = await prisma.productTnMapping.findFirst({ where: { tnProductId: String(tnId) } });
+          if (existing) { results.push({ tnProductId: tnId, skipped: 'ya enlazado' }); continue; }
+          const tp = await tn.getProduct(tnId);
+          const name = tp.name?.es ?? tp.name ?? `Producto TN ${tnId}`;
+          const supplierId = await resolveSupplier(name);
+          const variantsTn: any[] = tp.variants ?? [];
+          const productId = randomId();
+          await prisma.$transaction(async (tx) => {
+            await tx.product.create({
+              data: {
+                id: productId,
+                code: variantsTn[0]?.sku || variantsTn[0]?.barcode || `TN-${tnId}`,
+                name,
+                description: tp.description?.es ?? null,
+                cost: 0,
+                price: variantsTn[0] ? parseFloat(variantsTn[0].price) || 0 : 0,
+                publishedTn: true,
+                supplierId: supplierId ?? undefined,
+              },
+            });
+            await tx.productTnMapping.create({
+              data: { productId, tnProductId: String(tnId), lastPullAt: new Date() },
+            });
+            for (const tnV of variantsTn) {
+              const vid = randomId();
+              const attrs: Record<string, string> = {};
+              (tnV.values ?? []).forEach((val: any, idx: number) => {
+                const attrName = tp.attributes?.[idx]?.es ?? `attr${idx + 1}`;
+                attrs[attrName] = val?.es ?? val;
+              });
+              await tx.variant.create({
+                data: {
+                  id: vid,
+                  productId,
+                  name: (tnV.values ?? []).map((v: any) => v?.es ?? v).join(' / ') || 'default',
+                  attributes: attrs as any,
+                  code: tnV.sku || null,
+                  barcode: tnV.barcode || null,
+                  priceOverride: parseFloat(tnV.price) || null,
+                  costOverride: null,
+                  isDefault: variantsTn.length === 1,
+                },
+              });
+              await tx.variantTnMapping.create({
+                data: { variantId: vid, tnProductId: String(tnId), tnVariantId: String(tnV.id), lastPullAt: new Date() },
+              });
+              const tnStock = Math.max(0, Number(tnV.stock) || 0);
+              for (const b of branches) {
+                await tx.stock.create({
+                  data: {
+                    id: `${vid}|${b.id}`,
+                    variantId: vid,
+                    branchId: b.id,
+                    qty: b.id === body.stockBranchId ? tnStock : 0,
+                  },
+                });
+              }
+            }
+          });
+          results.push({ tnProductId: tnId, productId, name, variants: variantsTn.length, supplierId: supplierId ?? null });
+        } catch (e: any) {
+          results.push({ tnProductId: tnId, error: e?.message ?? String(e) });
+        }
+      }
+      return { imported: results.filter((r) => r.productId).length, results };
+    });
+
     // Lista los mapeos producto local ↔ producto TN (código local + tnProductId).
     r.get('/integrations/tiendanube/mappings', async () => {
       const maps = await prisma.productTnMapping.findMany({
