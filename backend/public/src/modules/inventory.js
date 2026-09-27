@@ -19,6 +19,53 @@ function escapeAttr(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Recalcula el stock agregado por sucursal (p._stocks) a partir de las variantes.
+function recomputeProductStocks(p) {
+  const byBranch = {};
+  for (const v of (p.variants || [])) {
+    for (const [bid, s] of Object.entries(v.stocks || {})) {
+      const e = byBranch[bid] || { qty: 0, reserved_qty: 0 };
+      e.qty += s.qty || 0; e.reserved_qty += s.reserved || 0;
+      byBranch[bid] = e;
+    }
+  }
+  p._stocks = Object.entries(byBranch).map(([branch_id, e]) => ({ product_id: p.id, branch_id, qty: e.qty, reserved_qty: e.reserved_qty }));
+}
+
+// Fila expandible con el detalle de variantes (valor, código, precio y stock
+// editable por sucursal). El stock se guarda al salir de la celda y sincroniza a TN.
+function variantDetailRow(p, nCols) {
+  const rows = (p.variants || []).map(v => {
+    const val = Object.values(v.attributes || {})[0] || (v.name && v.name !== 'default' ? v.name : '—');
+    const qL = v.stocks?.br_lomas?.qty ?? 0;
+    const qB = v.stocks?.br_banfield?.qty ?? 0;
+    const resv = (v.stocks?.br_lomas?.reserved ?? 0) + (v.stocks?.br_banfield?.reserved ?? 0);
+    const stkInput = (branch, val) => `<input type="number" min="0" step="1" value="${val}" data-vstock="${v.id}" data-vbranch="${branch}" data-pid="${p.id}" class="w-16 text-center border border-[#e3ceba] rounded-md py-0.5 focus:border-[#d82f1e] focus:ring-1 focus:ring-[#d82f1e]" />`;
+    return `<tr>
+      <td class="py-1 pr-4 font-bold text-[#241a0d]">${escapeAttr(val)}</td>
+      <td class="py-1 pr-4 font-mono text-xs text-[#7d6c5c]">${escapeAttr(v.code || '')}</td>
+      <td class="py-1 pr-4 text-right">${money(v.price_override ?? p.price)}</td>
+      <td class="py-1 pr-2 text-center">${stkInput('br_lomas', qL)}</td>
+      <td class="py-1 pr-2 text-center">${stkInput('br_banfield', qB)}</td>
+      <td class="py-1 pr-4 text-center font-black">${qL + qB}</td>
+      <td class="py-1 text-center text-xs text-[#7d6c5c]">${resv > 0 ? resv : ''}</td>
+    </tr>`;
+  }).join('');
+  return `<tr data-vdetail="${p.id}" class="${state.expandedVariants.has(p.id) ? '' : 'hidden'}">
+    <td colspan="${nCols + 2}" class="bg-[#fffdfb] px-6 py-3 border-b border-[#fff1e6]">
+      <div class="text-[11px] font-black uppercase tracking-wider text-[#7d6c5c] mb-2">Variantes${p.variant_type ? ' · ' + escapeAttr(p.variant_type) : ''}</div>
+      <table class="w-auto text-sm">
+        <thead><tr class="text-[10px] uppercase text-[#7d6c5c] border-b border-[#fff1e6]">
+          <th class="text-left pr-4 pb-1">Valor</th><th class="text-left pr-4 pb-1">Código</th><th class="text-right pr-4 pb-1">Precio</th>
+          <th class="pr-2 pb-1">Stock Lomas</th><th class="pr-2 pb-1">Stock Banfield</th><th class="pr-4 pb-1">Total</th><th class="pb-1">Reserv.</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="text-[10px] text-[#7d6c5c] mt-2">Editá el stock y salí de la celda para guardar · sincroniza a Tienda Nube.</div>
+    </td>
+  </tr>`;
+}
+
 // Pregunta al usuario cómo borrar un producto. Si está publicado en TN ofrece
 // 3 opciones: cancelar / solo POS / POS + TN. Si no está en TN, confirm simple.
 // Devuelve 'cancel' | 'local' | 'both'.
@@ -59,7 +106,10 @@ const state = {
   selected: new Set(),
   page: 0,
   filters: { search: '', category: '', brand: '', supplier: '', onlyMeli: false, variant: '' },
+  expandedVariants: new Set(), // productos con el detalle de variantes desplegado
   visibleCols: new Set(['code', 'name', 'category', 'brand', 'supplier', 'cost', 'price', 'margin', 'stock_lomas', 'stock_banfield', 'total', 'meli']),
+  // Caché de datos: se carga una sola vez y los filtros operan sobre él
+  cache: null, // { products, stocks, categories, brands, suppliers, branches, subcats }
 };
 const PAGE_SIZE = 100;
 
@@ -109,33 +159,76 @@ function tabBtn(id, label, icon) {
 }
 
 // ==================== PRODUCTOS ====================
-async function renderProducts(container) {
-  let products, stocks;
+
+// Carga (o recarga) todos los datos del inventario desde la API y los guarda en state.cache.
+// Solo se llama al montar el módulo o al presionar "Actualizar".
+async function loadProductsData(container) {
+  container.innerHTML = `
+    <div class="ing-card p-8 text-center">
+      <span class="material-symbols-outlined text-4xl text-[#d82f1e] animate-spin">autorenew</span>
+      <p class="mt-3 font-bold text-[#241a0d]">Cargando inventario...</p>
+    </div>`;
   try {
-    products = await P.list();
-    stocks = products.flatMap(p => p._stocks || []);
+    const products = await P.list();
+    const [categories, brands, suppliers, branches, subcats] = await Promise.all([
+      Categories.list().catch(() => []),
+      Brands.list().catch(() => []),
+      Suppliers.list().catch(() => []),
+      getAll('branches').catch(() => []),
+      Subcategories.list().catch(() => []),
+    ]);
+    // P.list() ya devuelve la lista procesada por toFront(), donde p._stocks es la lista plana.
+    const stocks = (products || []).flatMap(p => p._stocks || []);
+    state.cache = {
+      products: products || [],
+      stocks,
+      categories: categories || [],
+      brands: brands || [],
+      suppliers: suppliers || [],
+      branches: branches || [],
+      subcats: subcats || [],
+    };
+    return true;
   } catch (e) {
-    if (e?.status === 0) {
-      container.innerHTML = `<div class="ing-card p-6 text-center"><span class="material-symbols-outlined text-4xl text-amber-500">cloud_off</span>
-        <p class="mt-2 font-bold">Sin conexión</p><p class="text-sm text-[#7d6c5c]">El inventario necesita internet para operar.</p></div>`;
-      return;
-    }
-    throw e;
+    console.error('Error cargando datos de inventario:', e);
+    const isOffline = e?.status === 0;
+    container.innerHTML = `
+      <div class="ing-card p-6 text-center">
+        <span class="material-symbols-outlined text-4xl ${isOffline ? 'text-amber-500' : 'text-red-500'}">
+          ${isOffline ? 'cloud_off' : 'error'}
+        </span>
+        <p class="mt-2 font-bold text-[#241a0d]">${isOffline ? 'Sin conexión' : 'Error al cargar inventario'}</p>
+        <p class="text-sm text-[#7d6c5c] mb-4">${isOffline ? 'El inventario necesita internet para operar.' : (e.message || 'Ocurrió un error inesperado.')}</p>
+        <button id="btn-retry-load" class="ing-btn-primary text-sm inline-flex items-center gap-1">
+          <span class="material-symbols-outlined text-base">refresh</span> Reintentar
+        </button>
+      </div>`;
+    container.querySelector('#btn-retry-load')?.addEventListener('click', () => renderProducts(container, true));
+    return false;
   }
-  const [categories, brands, suppliers, branches, subcats] = await Promise.all([
-    Categories.list(), Brands.list(), Suppliers.list(), getAll('branches'), Subcategories.list(),
-  ]);
-  const catMap = Object.fromEntries(categories.map(c => [c.id, c.name]));
-  const brMap  = Object.fromEntries(brands.map(b => [b.id, b.name]));
-  const spMap  = Object.fromEntries(suppliers.map(s => [s.id, s.name]));
+}
+
+async function renderProducts(container, forceReload = false) {
+  // Si no hay caché o se pide recarga, cargar desde la API
+  if (!state.cache || forceReload) {
+    const ok = await loadProductsData(container);
+    if (!ok) return;
+  }
+
+  const { products, stocks, categories, brands, suppliers, branches } = state.cache;
+
+  // Maps y helpers derivados del caché (O(n) lookup → O(1) map)
+  const catMap = Object.fromEntries((categories || []).map(c => [c.id, c.name]));
+  const brMap  = Object.fromEntries((brands || []).map(b => [b.id, b.name]));
+  const spMap  = Object.fromEntries((suppliers || []).map(s => [s.id, s.name]));
   // Índice O(1) de stock por producto+sucursal (antes era un .find lineal sobre
   // ~30k stocks llamado por cada producto×sucursal → O(n²) que congelaba el render
-  // con muchos productos y dejaba el inventario en blanco).
+  // con muchos productos).
   const _stockMap = new Map();
   for (const s of (stocks || [])) _stockMap.set(`${s.product_id}|${s.branch_id}`, s);
   const stockOf = (pid, bid) => _stockMap.get(`${pid}|${bid}`) || { qty: 0, reserved_qty: 0 };
-  const lomas = branches.find(b => b.id === 'br_lomas');
-  const banf = branches.find(b => b.id === 'br_banfield');
+  const lomas = (branches || []).find(b => b.id === 'br_lomas');
+  const banf  = (branches || []).find(b => b.id === 'br_banfield');
 
   const f = state.filters;
   let list = products.filter(p => {
@@ -226,6 +319,9 @@ async function renderProducts(container) {
         <button id="btn-export" class="ing-btn-secondary text-sm">
           <span class="material-symbols-outlined align-middle text-base">download</span> XLSX
         </button>
+        <button id="btn-refresh" class="ing-btn-secondary text-sm" title="Actualizar datos desde el servidor">
+          <span class="material-symbols-outlined align-middle text-base">sync</span>
+        </button>
         <button id="btn-new" class="ing-btn-primary text-sm">
           <span class="material-symbols-outlined align-middle text-base">add</span> Nuevo
         </button>
@@ -255,7 +351,7 @@ async function renderProducts(container) {
           ${list.length === 0 ? `<tr><td colspan="${visibleCols.length+2}" class="text-center py-8 text-[#7d6c5c]">Sin productos que coincidan</td></tr>` :
             pageRows.map(p => `
             <tr data-id="${p.id}" class="group">
-              <td><input type="checkbox" class="row-check rounded text-[#d82f1e] focus:ring-[#d82f1e]" ${state.selected.has(p.id)?'checked':''} /></td>
+              <td class="whitespace-nowrap"><input type="checkbox" class="row-check rounded text-[#d82f1e] focus:ring-[#d82f1e]" ${state.selected.has(p.id)?'checked':''} />${p.has_variants ? `<button data-vexp="${p.id}" title="Ver variantes" class="ml-1 align-middle"><span class="material-symbols-outlined text-base text-[#7d6c5c] hover:text-[#d82f1e] transition-transform ${state.expandedVariants.has(p.id)?'rotate-90':''}" data-vchev="${p.id}">chevron_right</span></button>` : ''}</td>
               ${visibleCols.map(c => `<td class="${c.align==='right'?'text-right':c.align==='center'?'text-center':''}" ${c.editable?`data-editable="${c.editable}" data-field="${c.field||c.id}"`:''}>${c.render(p)}</td>`).join('')}
               <td class="text-right">
                 <button data-tnlink="${p.id}" title="${p.linked_tn ? 'Vinculado a Tienda Nube (click para desvincular)' : 'Vincular con Tienda Nube'}" class="${p.linked_tn ? '' : 'opacity-0 group-hover:opacity-100'} p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base ${p.linked_tn ? 'text-green-600' : 'text-[#7d6c5c]'}">${p.linked_tn ? 'link' : 'add_link'}</span></button>
@@ -263,6 +359,7 @@ async function renderProducts(container) {
                 <button data-del="${p.id}"  class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 rounded-full transition-all"><span class="material-symbols-outlined text-base text-red-500">delete</span></button>
               </td>
             </tr>
+            ${p.has_variants ? variantDetailRow(p, visibleCols.length) : ''}
           `).join('')}
         </tbody>
       </table>
@@ -291,6 +388,10 @@ async function renderProducts(container) {
 
   container.querySelector('#btn-new').addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-cols').addEventListener('click', () => openColumnsModal(cols, container));
+  container.querySelector('#btn-refresh').addEventListener('click', async () => {
+    state.cache = null; // Invalida caché para forzar recarga desde el servidor
+    await renderProducts(container);
+  });
   container.querySelector('#btn-export').addEventListener('click', () => {
     const rows = list.map(p => ({
       Codigo: p.code, Nombre: p.name,
@@ -327,6 +428,36 @@ async function renderProducts(container) {
     const p = list.find(x => x.id === b.dataset.edit);
     openProductForm(p, container);
   }));
+  // Desplegar/plegar el detalle de variantes (chevron)
+  container.querySelectorAll('[data-vexp]').forEach(b => b.addEventListener('click', () => {
+    const pid = b.dataset.vexp;
+    const open = state.expandedVariants.has(pid) ? (state.expandedVariants.delete(pid), false) : (state.expandedVariants.add(pid), true);
+    const dr = container.querySelector(`[data-vdetail="${CSS.escape(pid)}"]`);
+    const ch = container.querySelector(`[data-vchev="${CSS.escape(pid)}"]`);
+    if (dr) dr.classList.toggle('hidden', !open);
+    if (ch) ch.classList.toggle('rotate-90', open);
+  }));
+  // Edición inline del stock de cada variante por sucursal (sincroniza a Tienda Nube)
+  container.querySelectorAll('[data-vstock]').forEach(inp => inp.addEventListener('change', async () => {
+    const variantId = inp.dataset.vstock, branchId = inp.dataset.vbranch, pid = inp.dataset.pid;
+    const qty = Math.max(0, Math.trunc(Number(inp.value) || 0));
+    inp.disabled = true;
+    try {
+      await P.setStock(pid, branchId, { variantId, qty, reason: 'Ajuste de variante (inventario)' });
+      const p = state.cache.products.find(x => x.id === pid);
+      if (p) {
+        const v = (p.variants || []).find(x => x.id === variantId);
+        if (v) { v.stocks = v.stocks || {}; v.stocks[branchId] = { qty, reserved: v.stocks[branchId]?.reserved || 0 }; }
+        recomputeProductStocks(p);
+        state.cache.stocks = state.cache.products.flatMap(x => x._stocks || []);
+      }
+      toast('Stock actualizado', 'success');
+      renderProducts(container);
+    } catch (e) {
+      toast('Error: ' + (e.message || ''), 'error');
+      inp.disabled = false;
+    }
+  }));
   container.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     const p = list.find(x => x.id === b.dataset.del);
     if (!p) return;
@@ -335,6 +466,8 @@ async function renderProducts(container) {
     try {
       // 'local' = solo del POS (queda en TN) · 'both' = también de Tienda Nube.
       await P.remove(p.id, { keepTn: choice === 'local' });
+      // Quitar del caché en memoria (optimistic remove) para que renderProducts sea instantáneo
+      if (state.cache) state.cache.products = state.cache.products.filter(x => x.id !== p.id);
       toast(choice === 'both' ? 'Eliminado del POS y Tienda Nube' : 'Eliminado del POS', 'success');
       renderProducts(container);
     } catch (e) {
@@ -411,6 +544,11 @@ async function editInline(td, list, container) {
       p.margin_pct = +((p.price / p.cost - 1) * 100).toFixed(2);
     }
     await P.save(p);
+    // Actualizar el objeto en el caché (optimistic update) para que renderProducts no vaya a la red
+    if (state.cache) {
+      const idx = state.cache.products.findIndex(x => x.id === p.id);
+      if (idx !== -1) state.cache.products[idx] = { ...state.cache.products[idx], ...p };
+    }
     toast('Actualizado', 'success');
     renderProducts(container);
   };
