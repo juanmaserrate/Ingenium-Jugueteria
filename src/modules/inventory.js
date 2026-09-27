@@ -19,6 +19,21 @@ function escapeAttr(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Debounce del re-render al tipear en filtros: evita reconstruir la tabla (100
+// filas + detalles de variantes) en cada tecla y restaura el foco/cursor del
+// input tras el render (antes se sentía "cortado" al escribir/borrar).
+let _filterRenderTimer = null;
+function scheduleFilterRender(container, focusId) {
+  clearTimeout(_filterRenderTimer);
+  _filterRenderTimer = setTimeout(() => {
+    renderProducts(container);
+    if (focusId) {
+      const el = container.querySelector('#' + focusId);
+      if (el) { el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch { /* noop */ } }
+    }
+  }, 250);
+}
+
 // Recalcula el stock agregado por sucursal (p._stocks) a partir de las variantes.
 function recomputeProductStocks(p) {
   const byBranch = {};
@@ -378,12 +393,12 @@ async function renderProducts(container, forceReload = false) {
   container.querySelector('#pg-next')?.addEventListener('click', () => { state.page++; renderProducts(container); });
 
   // Filtros
-  container.querySelector('#f-search').addEventListener('input', e => { state.filters.search = e.target.value; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-search').addEventListener('input', e => { state.filters.search = e.target.value; state.page = 0; scheduleFilterRender(container, 'f-search'); });
   container.querySelector('#f-category').addEventListener('change', e => { state.filters.category = e.target.value; state.page = 0; renderProducts(container); });
   container.querySelector('#f-brand').addEventListener('change', e => { state.filters.brand = e.target.value; state.page = 0; renderProducts(container); });
   container.querySelector('#f-supplier').addEventListener('change', e => { state.filters.supplier = e.target.value; state.page = 0; renderProducts(container); });
   container.querySelector('#f-meli').addEventListener('change', e => { state.filters.onlyMeli = e.target.checked; state.page = 0; renderProducts(container); });
-  container.querySelector('#f-variant').addEventListener('input', e => { state.filters.variant = e.target.value; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-variant').addEventListener('input', e => { state.filters.variant = e.target.value; state.page = 0; scheduleFilterRender(container, 'f-variant'); });
   container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false, variant:'' }; state.page = 0; renderProducts(container); });
 
   container.querySelector('#btn-new').addEventListener('click', () => openProductForm(null, container));
