@@ -40,10 +40,10 @@ export async function salesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate);
 
   app.get('/sales', async (req) => {
-    const q = req.query as { branchId?: string; limit?: string; from?: string; to?: string; status?: string; source?: string };
+    const q = req.query as { branchId?: string; limit?: string; from?: string; to?: string; status?: string; source?: string; customerId?: string };
     return listSales({
       branchId: q.branchId, limit: q.limit ? parseInt(q.limit) : undefined,
-      from: q.from, to: q.to, status: q.status, source: q.source,
+      from: q.from, to: q.to, status: q.status, source: q.source, customerId: q.customerId,
     });
   });
 
@@ -59,8 +59,8 @@ export async function salesRoutes(app: FastifyInstance) {
 
   app.post('/sales/:id/cancel', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const body = z.object({ reason: z.string().optional() }).parse(req.body ?? {});
-    await cancelSale(id, { userId: req.user.userId, reason: body.reason });
+    const body = z.object({ reason: z.string().optional(), returnToTn: z.boolean().optional() }).parse(req.body ?? {});
+    await cancelSale(id, { userId: req.user.userId, reason: body.reason, returnToTn: body.returnToTn });
     return reply.send({ ok: true });
   });
 

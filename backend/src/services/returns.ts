@@ -6,7 +6,7 @@ import { adjustStock } from './stock.js';
 import { enqueueSync } from '../sync/queue.js';
 import { ValidationError } from '../utils/errors.js';
 
-export type ReturnItemInput = { variantId: string; qty: number; unitPrice: number };
+export type ReturnItemInput = { variantId: string; qty: number; unitPrice: number; returnToTn?: boolean };
 
 // Mismo criterio que ventas/gastos: un reintegro impacta la caja solo si es efectivo.
 function isCashMethod(methodId: string) {
@@ -173,11 +173,19 @@ export async function processReturn(input: ReturnInput) {
     description: input.reason,
   });
 
-  const variantsAffected = [
-    ...input.returnedItems.map((i) => i.variantId),
-    ...input.takenItems.map((i) => i.variantId),
-  ];
-  for (const vid of [...new Set(variantsAffected)]) {
+  // Sincronización de stock a Tienda Nube:
+  // - Items DEVUELTOS: sólo se re-empujan a TN los que el operador marcó para
+  //   volver a la tienda online (returnToTn !== false). Un producto devuelto
+  //   defectuoso puede restaurarse en el stock local sin re-listarlo en TN.
+  // - Items LLEVADOS (canje): salieron del local, siempre se sincronizan.
+  const variantsToSync = new Set<string>();
+  for (const i of input.returnedItems) {
+    if (i.returnToTn !== false) variantsToSync.add(i.variantId);
+  }
+  for (const i of input.takenItems) {
+    variantsToSync.add(i.variantId);
+  }
+  for (const vid of variantsToSync) {
     await enqueueSync('push_stock', { variantId: vid });
   }
 

@@ -1,6 +1,20 @@
 import { prisma } from '../db.js';
 import { randomId } from '../utils/crypto.js';
 import { logAudit, AUDIT_ACTIONS } from '../utils/audit.js';
+import { ValidationError } from '../utils/errors.js';
+
+// Normaliza el documento: sólo dígitos/letras, sin espacios ni puntos.
+export function normalizeDoc(doc?: string | null): string | null {
+  if (!doc) return null;
+  const clean = String(doc).replace(/[^0-9a-zA-Z]/g, '').trim();
+  return clean || null;
+}
+
+export async function findByDocument(documentNumber: string) {
+  const doc = normalizeDoc(documentNumber);
+  if (!doc) return null;
+  return prisma.customer.findFirst({ where: { documentNumber: doc } });
+}
 
 export type CustomerInput = {
   id?: string;
@@ -43,6 +57,12 @@ export async function findOrCreateByEmail(email: string, data: CustomerInput) {
 
 export async function createCustomer(data: CustomerInput, userId?: string) {
   const id = data.id ?? randomId();
+  // Identificador principal: el número de documento no se puede duplicar.
+  const doc = normalizeDoc(data.documentNumber);
+  if (doc) {
+    const dup = await prisma.customer.findFirst({ where: { documentNumber: doc } });
+    if (dup) throw new ValidationError(`Ya existe un cliente con el documento ${doc}: ${dup.name}`);
+  }
   const created = await prisma.customer.create({
     data: {
       id,
@@ -51,7 +71,7 @@ export async function createCustomer(data: CustomerInput, userId?: string) {
       email: data.email ?? null,
       birthday: data.birthday ?? null,
       documentType: data.documentType ?? null,
-      documentNumber: data.documentNumber ?? null,
+      documentNumber: doc,
       address: data.address ?? null,
       city: data.city ?? null,
       notes: data.notes ?? null,
@@ -64,6 +84,15 @@ export async function createCustomer(data: CustomerInput, userId?: string) {
 
 export async function updateCustomer(id: string, data: Partial<CustomerInput>, userId?: string) {
   const before = await prisma.customer.findUnique({ where: { id } });
+  // Si cambia el documento, normalizar y verificar que no colisione con otro cliente.
+  let docUpdate: string | null | undefined = undefined;
+  if (data.documentNumber !== undefined) {
+    docUpdate = normalizeDoc(data.documentNumber);
+    if (docUpdate) {
+      const dup = await prisma.customer.findFirst({ where: { documentNumber: docUpdate, id: { not: id } } });
+      if (dup) throw new ValidationError(`Ya existe un cliente con el documento ${docUpdate}: ${dup.name}`);
+    }
+  }
   const updated = await prisma.customer.update({
     where: { id },
     data: {
@@ -72,7 +101,7 @@ export async function updateCustomer(id: string, data: Partial<CustomerInput>, u
       email: data.email ?? undefined,
       birthday: data.birthday ?? undefined,
       documentType: data.documentType ?? undefined,
-      documentNumber: data.documentNumber ?? undefined,
+      documentNumber: docUpdate,
       address: data.address ?? undefined,
       city: data.city ?? undefined,
       notes: data.notes ?? undefined,

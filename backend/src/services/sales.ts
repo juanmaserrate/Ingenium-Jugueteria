@@ -50,11 +50,12 @@ export type SaleInput = {
   datetime?: Date;
 };
 
-export async function listSales(opts: { branchId?: string; limit?: number; from?: string; to?: string; status?: string; source?: string } = {}) {
+export async function listSales(opts: { branchId?: string; limit?: number; from?: string; to?: string; status?: string; source?: string; customerId?: string } = {}) {
   const where: any = {};
   if (opts.branchId) where.branchId = opts.branchId;
   if (opts.status) where.status = opts.status;
   if (opts.source) where.source = opts.source;
+  if (opts.customerId) where.customerId = opts.customerId;
   if (opts.from || opts.to) {
     where.datetime = {};
     if (opts.from) where.datetime.gte = new Date(opts.from);
@@ -245,9 +246,16 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
   return getSale(sale);
 }
 
-export async function cancelSale(id: string, opts: { userId?: string; reason?: string } = {}) {
+export async function cancelSale(
+  id: string,
+  opts: { userId?: string; reason?: string; returnToTn?: boolean } = {},
+) {
   const sale = await getSale(id);
   if (sale.status !== 'confirmed') throw new ValidationError('Solo se pueden cancelar ventas confirmadas');
+  // Por defecto se devuelven los productos a Tienda Nube (se re-empuja el stock
+  // restaurado). Si returnToTn === false, el stock local se restaura igual pero
+  // NO se sincroniza a TN (el operador decidió no reponer online).
+  const returnToTn = opts.returnToTn !== false;
 
   await prisma.$transaction(async (tx) => {
     // Restore stock
@@ -291,7 +299,9 @@ export async function cancelSale(id: string, opts: { userId?: string; reason?: s
     description: opts.reason,
   });
 
-  for (const it of sale.items) {
-    await enqueueSync('push_stock', { variantId: it.variantId });
+  if (returnToTn) {
+    for (const it of sale.items) {
+      await enqueueSync('push_stock', { variantId: it.variantId });
+    }
   }
 }

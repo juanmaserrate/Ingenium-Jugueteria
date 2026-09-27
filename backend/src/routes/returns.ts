@@ -6,6 +6,7 @@ const itemSchema = z.object({
   variantId: z.string(),
   qty: z.number().int().positive(),
   unitPrice: z.number().nonnegative(),
+  returnToTn: z.boolean().optional(), // sólo aplica a returnedItems
 });
 
 const schema = z.object({

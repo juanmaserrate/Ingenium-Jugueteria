@@ -175,8 +175,8 @@ async function render(el) {
   }));
   const d = el.querySelector('#sb-date');
   if (d) d.addEventListener('change', (ev) => { state.date = state.period === 'year' ? `${ev.target.value}-01-01` : state.period === 'month' ? `${ev.target.value}-01` : ev.target.value; R(); });
-  const from = el.querySelector('#sb-from'); if (from) from.addEventListener('change', ev => { state.customFrom = ev.target.value; R(); });
-  const to = el.querySelector('#sb-to'); if (to) to.addEventListener('change', ev => { state.customTo = ev.target.value; R(); });
+  const fromInp = el.querySelector('#sb-from'); if (fromInp) fromInp.addEventListener('change', ev => { state.customFrom = ev.target.value; R(); });
+  const toInp = el.querySelector('#sb-to'); if (toInp) toInp.addEventListener('change', ev => { state.customTo = ev.target.value; R(); });
 
   el.querySelector('#f-method').addEventListener('change', ev => { f.method = ev.target.value; R(); });
   el.querySelector('#f-min').addEventListener('change', ev => { f.minAmount = Number(ev.target.value) || 0; R(); });

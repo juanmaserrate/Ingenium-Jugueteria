@@ -5,7 +5,9 @@ import {
   getCustomer,
   createCustomer,
   updateCustomer,
+  findByDocument,
 } from '../services/customers.js';
+import { listSales } from '../services/sales.js';
 
 const schema = z.object({
   id: z.string().optional(),
@@ -25,9 +27,22 @@ export async function customersRoutes(app: FastifyInstance) {
 
   app.get('/customers', async () => listCustomers());
 
+  // Búsqueda por número de documento (identificador principal). Devuelve el
+  // cliente o null. Debe ir ANTES de /customers/:id para no capturarla como id.
+  app.get('/customers/by-document/:doc', async (req) => {
+    const { doc } = req.params as { doc: string };
+    return (await findByDocument(doc)) ?? null;
+  });
+
   app.get('/customers/:id', async (req) => {
     const { id } = req.params as { id: string };
     return getCustomer(id);
+  });
+
+  // Compras (ventas confirmadas) de un cliente.
+  app.get('/customers/:id/sales', async (req) => {
+    const { id } = req.params as { id: string };
+    return listSales({ customerId: id, status: 'confirmed', limit: 500 });
   });
 
   app.post('/customers', async (req) => {
