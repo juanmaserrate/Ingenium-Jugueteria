@@ -19,6 +19,24 @@ function escapeAttr(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Parseo de número tolerante al formato argentino (1.234,56) y al plano (1234.56).
+// Devuelve null si no es un número válido (para NO guardar 0 por error de formato).
+function parseNumAR(s) {
+  s = String(s ?? '').trim();
+  if (!s) return null;
+  if (s.includes(',')) {
+    // Formato AR: el punto es separador de miles y la coma, decimal.
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else if (s.includes('.')) {
+    // Sin coma: un punto seguido de 3 dígitos (o varios puntos) son miles (1.500 → 1500);
+    // si son 1-2 dígitos, es decimal (1500.50 → 1500.50).
+    const parts = s.split('.');
+    if (parts.length > 2 || parts[parts.length - 1].length === 3) s = s.replace(/\./g, '');
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
 // Debounce del re-render al tipear en filtros: evita reconstruir la tabla (100
 // filas + detalles de variantes) en cada tecla y restaura el foco/cursor del
 // input tras el render (antes se sentía "cortado" al escribir/borrar).
@@ -541,15 +559,23 @@ async function editInline(td, list, container) {
   const type = td.dataset.editable;
   const current = p[field] ?? '';
   const input = document.createElement('input');
-  input.type = type === 'number' ? 'number' : 'text';
-  input.step = '0.01';
+  // Números: type=text + inputmode decimal para aceptar formato argentino
+  // (1.234,56). Un <input type=number> descarta esos valores y guardaba 0.
+  input.type = 'text';
+  if (type === 'number') input.inputMode = 'decimal';
   input.value = current;
   input.className = 'w-full p-1 border-2 border-[#d82f1e] rounded bg-white text-sm font-bold';
   td.innerHTML = '';
   td.appendChild(input);
   input.focus(); input.select();
   const save = async () => {
-    let v = type === 'number' ? Number(input.value) : input.value;
+    let v;
+    if (type === 'number') {
+      v = parseNumAR(input.value);
+      if (v === null) { toast('Número inválido — no se guardó', 'warn'); renderProducts(container); return; }
+    } else {
+      v = input.value;
+    }
     if (v === p[field]) { renderProducts(container); return; }
     p[field] = v;
     // Si cambió costo o %, recalcular precio. Si cambió precio, recalcular %.
