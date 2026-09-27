@@ -8,6 +8,13 @@ export const money = (n, withSymbol = true) => {
   return withSymbol ? `$\u00A0${s}` : s;
 };
 
+// Monto redondeado, SIN centavos (ej: $\u00A01.234.568). Para el dashboard.
+export const money0 = (n, withSymbol = true) => {
+  const v = Math.round(Number(n || 0));
+  const s = v.toLocaleString('es-AR', { maximumFractionDigits: 0 });
+  return withSymbol ? `$\u00A0${s}` : s;
+};
+
 export const pct = (n, d = 2) => `${Number(n || 0).toFixed(d)}%`;
 
 export const fmtDate = (d) => {

@@ -1,10 +1,17 @@
 // Formatos consistentes (moneda AR, fechas, horas).
 
-export const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+export const round2 = (n) => Math.round(((Number(n) || 0) + Number.EPSILON) * 100) / 100;
 
 export const money = (n, withSymbol = true) => {
   const v = Number(n || 0);
   const s = v.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return withSymbol ? `$\u00A0${s}` : s;
+};
+
+// Monto redondeado, SIN centavos (ej: $\u00A01.234.568). Para el dashboard.
+export const money0 = (n, withSymbol = true) => {
+  const v = Math.round(Number(n || 0));
+  const s = v.toLocaleString('es-AR', { maximumFractionDigits: 0 });
   return withSymbol ? `$\u00A0${s}` : s;
 };
 
@@ -61,11 +68,12 @@ export const hoursDecimal = (checkIn, checkOut) => {
 };
 
 // Aplica descuento/recargo. rule = { pct?: n, fixed?: n } (pct sobre el base)
+// El resultado se redondea a 2 decimales para evitar acumulación de errores de coma flotante.
 export const applyDiscount = (base, pct = 0, fixed = 0) => {
   const afterPct = base * (1 - pct / 100);
-  return Math.max(0, afterPct - fixed);
+  return round2(Math.max(0, afterPct - fixed));
 };
 export const applySurcharge = (base, pct = 0, fixed = 0) => {
   const afterPct = base * (1 + pct / 100);
-  return afterPct + fixed;
+  return round2(afterPct + fixed);
 };

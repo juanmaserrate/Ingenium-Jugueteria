@@ -3,7 +3,7 @@
 // (consolidado o por sucursal). El POS y la caja siguen offline aparte.
 
 import { api, ApiError } from '../core/api.js';
-import { money, fmtDate, fmtDateTime, monthKey, todayKey } from '../core/format.js';
+import { money, money0, fmtDate, fmtDateTime, monthKey, todayKey } from '../core/format.js';
 import { activeBranchId, currentSession } from '../core/auth.js';
 import { on, EV } from '../core/events.js';
 
@@ -237,14 +237,14 @@ async function refreshAll(el) {
   const prevAvgTicket = d.prevMonth.count ? d.prevMonth.total / d.prevMonth.count : 0;
   const ticketDelta = pctDelta(d.month.avgTicket, prevAvgTicket);
 
-  setKpi(el, 'kpi-today', money(d.today.total), `${d.today.count} ticket${d.today.count !== 1 ? 's' : ''} · ayer ${money(d.yesterday.total)}`, todayDelta);
-  setKpi(el, 'kpi-month', money(d.month.total), `${d.month.count} ventas · ticket ${money(d.month.avgTicket)} (${fmtDeltaInline(ticketDelta)})`, monthDelta);
-  setKpi(el, 'kpi-cash', money(d.cash.balance), `${d.cash.movements} movimientos`);
+  setKpi(el, 'kpi-today', money0(d.today.total), `${d.today.count} ticket${d.today.count !== 1 ? 's' : ''} · ayer ${money0(d.yesterday.total)}`, todayDelta);
+  setKpi(el, 'kpi-month', money0(d.month.total), `${d.month.count} ventas · ticket ${money0(d.month.avgTicket)} (${fmtDeltaInline(ticketDelta)})`, monthDelta);
+  setKpi(el, 'kpi-cash', money0(d.cash.balance), `${d.cash.movements} movimientos`);
   setCardColor(el, 'kpi-cash', d.cash.balance >= 0 ? '#16a34a' : '#dc2626');
-  setKpi(el, 'kpi-inv', money(d.inventory.valueCost), `${d.inventory.units} unidades · valor venta ${money(d.inventory.valueSale)}`);
+  setKpi(el, 'kpi-inv', money0(d.inventory.valueCost), `${d.inventory.units} unidades · valor venta ${money0(d.inventory.valueSale)}`);
   setKpi(el, 'kpi-stock', d.inventory.outOfStock, `${d.inventory.outOfStock} sin stock`);
-  setKpi(el, 'kpi-checks', d.checks.count, `${money(d.checks.sum)} · ${d.checks.overdue} vencidos · ${d.checks.soon} esta semana`);
-  setKpi(el, 'kpi-expenses', money(d.expensesMonth), `Devoluciones: ${money(d.returnsMonth)}`);
+  setKpi(el, 'kpi-checks', d.checks.count, `${money0(d.checks.sum)} · ${d.checks.overdue} vencidos · ${d.checks.soon} esta semana`);
+  setKpi(el, 'kpi-expenses', money0(d.expensesMonth), `Devoluciones: ${money0(d.returnsMonth)}`);
   setKpi(el, 'kpi-birthdays', d.birthdays, `cumpleaños este mes`);
 
   renderSalesChart(el, d.serie30 || []);
@@ -392,7 +392,7 @@ function renderActivity(el, recent) {
             <div class="text-xs text-[#7d6c5c] break-words leading-tight">${f.sub}</div>
           </div>
           <div class="text-right shrink-0">
-            <div class="font-black text-sm" style="color:${f.amount >= 0 ? '#16a34a' : '#dc2626'}">${f.amount >= 0 ? '+' : ''}${money(f.amount)}</div>
+            <div class="font-black text-sm" style="color:${f.amount >= 0 ? '#16a34a' : '#dc2626'}">${f.amount >= 0 ? '+' : ''}${money0(f.amount)}</div>
             <div class="text-[10px] text-[#7d6c5c]">${fmtDateTime(f.t)}</div>
           </div>
         </div>
