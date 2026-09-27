@@ -129,7 +129,7 @@ function renderMoves(container, moves) {
             moves.map(m => `
               <tr>
                 <td class="text-xs">${fmtDateTime(m.datetime)}</td>
-                <td class="text-xs"><span class="px-2 py-1 rounded-full font-bold uppercase text-[10px] ${typeColor(m.type)}">${m.type}</span></td>
+                <td class="text-xs"><span class="px-2 py-1 rounded-full font-bold uppercase text-[10px] ${typeColor(m.type)}">${typeLabel(m.type)}</span></td>
                 <td class="text-sm">${m.description || '-'}</td>
                 <td class="text-right font-bold text-green-700">${m.amount_in ? money(m.amount_in) : '-'}</td>
                 <td class="text-right font-bold text-red-600">${m.amount_out ? money(m.amount_out) : '-'}</td>
@@ -144,14 +144,34 @@ function renderMoves(container, moves) {
 
 function typeColor(t) {
   const map = {
-    opening: 'bg-blue-100 text-blue-700',
-    closing: 'bg-purple-100 text-purple-700',
+    opening: 'bg-blue-100 text-blue-700', open: 'bg-blue-100 text-blue-700',
+    closing: 'bg-purple-100 text-purple-700', close: 'bg-purple-100 text-purple-700',
     sale: 'bg-green-100 text-green-700',
     return: 'bg-orange-100 text-orange-700',
+    return_charge: 'bg-teal-100 text-teal-700',
     expense: 'bg-red-100 text-red-700',
+    adjustment: 'bg-amber-100 text-amber-700',
     manual: 'bg-gray-100 text-gray-700',
+    sena: 'bg-indigo-100 text-indigo-700', deposit: 'bg-indigo-100 text-indigo-700',
   };
   return map[t] || 'bg-[#fff1e6] text-[#7d6c5c]';
+}
+
+// Traduce el tipo de movimiento de caja al español.
+function typeLabel(t) {
+  const map = {
+    opening: 'Apertura', open: 'Apertura',
+    closing: 'Cierre', close: 'Cierre',
+    sale: 'Venta',
+    return: 'Devolución',
+    return_charge: 'Cobro de cambio',
+    expense: 'Gasto',
+    adjustment: 'Ajuste',
+    manual: 'Manual',
+    transfer: 'Transferencia',
+    sena: 'Seña', deposit: 'Seña',
+  };
+  return map[t] || t;
 }
 
 function renderExpenses(container, expenses) {
@@ -308,7 +328,7 @@ async function manualMoveModal(el) {
 function exportMoves(moves) {
   const rows = moves.map(m => ({
     Fecha: fmtDateTime(m.datetime),
-    Tipo: m.type,
+    Tipo: typeLabel(m.type),
     Descripcion: m.description,
     Entra: m.amount_in || 0,
     Sale: m.amount_out || 0,
