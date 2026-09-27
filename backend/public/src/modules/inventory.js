@@ -633,13 +633,13 @@ async function openProductForm(p, container) {
         <input name="name" class="ing-input mt-1" required value="${p?.name || ''}" />
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Costo *</span>
-        <input name="cost" type="number" step="0.01" class="ing-input mt-1" required value="${p?.cost || 0}" />
+        <input name="cost" type="text" inputmode="decimal" class="ing-input mt-1" required value="${p?.cost || 0}" />
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">% Margen</span>
-        <input name="margin_pct" type="number" step="0.01" class="ing-input mt-1" value="${p?.margin_pct || 0}" />
+        <input name="margin_pct" type="text" inputmode="decimal" class="ing-input mt-1" value="${p?.margin_pct || 0}" />
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Precio</span>
-        <input name="price" type="number" step="0.01" class="ing-input mt-1" value="${p?.price || 0}" />
+        <input name="price" type="text" inputmode="decimal" class="ing-input mt-1" value="${p?.price || 0}" />
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Categoría</span>
         <select name="category_id" class="ing-input mt-1">
@@ -722,7 +722,7 @@ async function openProductForm(p, container) {
 
         <div class="grid grid-cols-4 gap-3">
           <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Precio promo $</span>
-            <input name="promotional_price" type="number" step="0.01" min="0" class="ing-input mt-1" value="${p?.promotional_price ?? ''}" placeholder="opcional" />
+            <input name="promotional_price" type="text" inputmode="decimal" class="ing-input mt-1" value="${p?.promotional_price ?? ''}" placeholder="opcional" />
           </label>
           <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Peso (kg)</span>
             <input name="weight" type="number" step="0.001" min="0" class="ing-input mt-1" value="${p?.weight ?? ''}" placeholder="0.5" />
@@ -805,8 +805,9 @@ async function openProductForm(p, container) {
       const form = el.querySelector('#prod-form');
       // Live recompute de precio cuando cambia costo o %
       const costIn = form.elements.cost, pctIn = form.elements.margin_pct, priceIn = form.elements.price;
-      const recalcPrice = () => priceIn.value = (Number(costIn.value) * (1 + Number(pctIn.value)/100)).toFixed(2);
-      const recalcPct = () => { if (Number(costIn.value) > 0) pctIn.value = ((Number(priceIn.value)/Number(costIn.value)-1)*100).toFixed(2); };
+      const nz = (s) => parseNumAR(s) ?? 0; // tolerante a formato AR (1.234,56)
+      const recalcPrice = () => priceIn.value = (nz(costIn.value) * (1 + nz(pctIn.value)/100)).toFixed(2);
+      const recalcPct = () => { if (nz(costIn.value) > 0) pctIn.value = ((nz(priceIn.value)/nz(costIn.value)-1)*100).toFixed(2); };
       costIn.addEventListener('input', recalcPrice);
       pctIn.addEventListener('input', recalcPrice);
       priceIn.addEventListener('input', recalcPct);
@@ -838,7 +839,7 @@ async function openProductForm(p, container) {
             <input data-vk="valor" list="variant-values-dl" class="ing-input !py-1" value="${escapeAttr(r.valor)}" placeholder="M" />
             <input data-vk="code" class="ing-input !py-1" value="${escapeAttr(r.code)}" />
             <input data-vk="barcode" class="ing-input !py-1" value="${escapeAttr(r.barcode)}" />
-            <input data-vk="price" type="number" step="0.01" class="ing-input !py-1" value="${r.price}" placeholder="opc" />
+            <input data-vk="price" type="text" inputmode="decimal" class="ing-input !py-1" value="${r.price}" placeholder="opc" />
             <input data-vk="lomas" type="number" min="0" step="1" class="ing-input !py-1 text-center" value="${r.lomas}" />
             <input data-vk="banf" type="number" min="0" step="1" class="ing-input !py-1 text-center" value="${r.banf}" />
             <button type="button" data-vrm="${i}" class="text-red-500 font-bold">✕</button>
@@ -1062,8 +1063,12 @@ async function openProductForm(p, container) {
         const d = Object.fromEntries(new FormData(form).entries());
         d.published_meli = form.elements.published_meli.checked;
         d.published_tn = form.elements.published_tn.checked;
-        const qtyLomas = Math.max(0, Number(d.stock_lomas) || 0);
-        const qtyBanf  = Math.max(0, Number(d.stock_banfield) || 0);
+        // Campos de dinero: parsear tolerando formato argentino (1.234,56).
+        for (const k of ['cost', 'price', 'margin_pct', 'promotional_price']) {
+          if (d[k] !== undefined && d[k] !== '') d[k] = parseNumAR(d[k]) ?? 0;
+        }
+        const qtyLomas = Math.max(0, parseNumAR(d.stock_lomas) ?? 0);
+        const qtyBanf  = Math.max(0, parseNumAR(d.stock_banfield) ?? 0);
         delete d.stock_lomas; delete d.stock_banfield;
         // Categorías TN seleccionadas (sólo importan si va a TN)
         const tnCatIds = Array.from(el.querySelectorAll('#tn-cats-box input[data-tn-cat]:checked'))
@@ -1115,7 +1120,7 @@ async function openProductForm(p, container) {
             // Alta: createProduct con variants[] (cada una con su stock por sucursal).
             const saved = await P.save({ ...d, variants: variants.map((v) => ({
               name: v.valor, attributes: { [v.type]: v.valor }, code: v.code, barcode: v.barcode,
-              price_override: v.price, stocks: { br_lomas: v.lomas, br_banfield: v.banf },
+              price_override: parseNumAR(v.price), stocks: { br_lomas: v.lomas, br_banfield: v.banf },
             })) });
             await drainImages(saved);
             return saved;
@@ -1133,9 +1138,9 @@ async function openProductForm(p, container) {
             const attrs = { [v.type]: v.valor };
             let vid = v.id;
             if (vid) {
-              await P.updateVariant(vid, { name: v.valor, attributes: attrs, code: v.code, barcode: v.barcode, priceOverride: v.price });
+              await P.updateVariant(vid, { name: v.valor, attributes: attrs, code: v.code, barcode: v.barcode, priceOverride: parseNumAR(v.price) });
             } else {
-              const nv = await P.createVariant({ productId: saved.id, name: v.valor, attributes: attrs, code: v.code, barcode: v.barcode, priceOverride: v.price });
+              const nv = await P.createVariant({ productId: saved.id, name: v.valor, attributes: attrs, code: v.code, barcode: v.barcode, priceOverride: parseNumAR(v.price) });
               vid = nv?.id;
             }
             if (vid) {

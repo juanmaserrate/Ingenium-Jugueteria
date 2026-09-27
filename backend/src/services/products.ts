@@ -266,6 +266,25 @@ export async function updateProduct(id: string, data: Partial<ProductInput>, use
   // Sincronizar a TN si el producto esta PUBLICADO o ya esta ENLAZADO (tiene mapeo).
   // Enlazado = fuente de verdad: nombre/descripcion por push_product_update, y
   // precio/costo/codigo de barra por variante (push_variant_update de cada una).
+  // PRODUCTO SIMPLE (una sola variante default): el precio/costo editado a nivel
+  // producto debe reflejarse en la variante, porque a TN el precio se empuja POR
+  // VARIANTE (push_variant_update usa priceOverride/costOverride). Sin esto, editar
+  // el precio de un producto importado (cuya variante quedó con override) no
+  // impactaba en Tienda Nube.
+  if (before.variants.length === 1 && before.variants[0].isDefault) {
+    const priceChanged = updated.price !== before.price;
+    const costChanged = updated.cost !== before.cost;
+    if (priceChanged || costChanged) {
+      await prisma.variant.update({
+        where: { id: before.variants[0].id },
+        data: {
+          priceOverride: priceChanged ? updated.price : undefined,
+          costOverride: costChanged ? updated.cost : undefined,
+        },
+      });
+    }
+  }
+
   const isLinked = !!before.tnMapping;
   if (updated.publishedTn && !before.publishedTn && !isLinked) {
     await enqueueSync('push_product_create', { productId: id });
