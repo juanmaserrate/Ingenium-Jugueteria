@@ -7,7 +7,7 @@ import * as P from '../repos/products.js';
 import { getAll, get } from '../core/db.js';
 import { api, ApiError } from '../core/api.js';
 import { Categories, Brands } from '../repos/catalog.js';
-import { money, round2 } from '../core/format.js';
+import { money, round2, fmtDateTime } from '../core/format.js';
 import { openModal, confirmModal } from '../components/modal.js';
 import { toast } from '../core/notifications.js';
 import { activeBranchId, currentSession } from '../core/auth.js';
@@ -43,8 +43,17 @@ export async function mount(el) {
   render(el);
 
   // Reactividad: al tocar stock/producto actualizar datos
-  const offStock = on(EV.STOCK_CHANGED, async () => { await refreshData(); renderCart(el); });
-  const offProd = on(EV.PRODUCT_UPDATED, async () => { await refreshData(); renderCart(el); });
+  // Las guardas evitan errores si el elemento ya no está en el DOM (el usuario cambió de módulo)
+  const offStock = on(EV.STOCK_CHANGED, async () => {
+    if (!el || !el.isConnected) { offStock(); return; }
+    await refreshData();
+    if (el.isConnected) renderCart(el);
+  });
+  const offProd = on(EV.PRODUCT_UPDATED, async () => {
+    if (!el || !el.isConnected) { offProd(); return; }
+    await refreshData();
+    if (el.isConnected) renderCart(el);
+  });
 
   // U-1: atajos de teclado para caja sin mouse
   const keyHandler = (ev) => {
@@ -202,7 +211,9 @@ function render(el) {
 }
 
 function renderTabs(root) {
+  if (!root || !root.isConnected) return;
   const container = root.querySelector('#pos-tabs');
+  if (!container) return;
   container.innerHTML = state.tabs.map(t => {
     const active = t.id === state.activeTab;
     const items = t.sale.items.length;
@@ -434,21 +445,19 @@ async function editItemPrice(root, i) {
 
 // ===== Panel lateral: cliente, vendedor, totales, pagos =====
 function renderSide(root, totals) {
+  if (!root || !root.isConnected) return;
   const sale = activeSale();
+  if (!sale) return;
   const side = root.querySelector('#pos-side');
-  const paid = (sale.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
-  const pending = totals.total - paid;
+  if (!side) return;
+  const paid = round2((sale.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0));
+  const pending = round2(totals.total - paid);
 
   side.innerHTML = `
     <div class="ing-card p-4 space-y-4 sticky top-4">
       <div>
         <div class="text-xs font-bold text-[#7d6c5c] uppercase mb-1">Cliente</div>
-        <div class="flex gap-2">
-          <select id="pos-customer" class="ing-input flex-1">
-            <option value="">— Consumidor final —</option>
-            ${state.customers.map(c => `<option value="${c.id}" ${sale.customer_id===c.id?'selected':''}>${c.name}${c.lastname?' '+c.lastname:''}</option>`).join('')}
-          </select>
-        </div>
+        <div id="pos-cust-box">${customerBoxHTML(sale)}</div>
       </div>
 
       <div>
@@ -516,7 +525,7 @@ function renderSide(root, totals) {
     </div>
   `;
 
-  side.querySelector('#pos-customer').addEventListener('change', (ev) => { sale.customer_id = ev.target.value || null; persistDraft(); });
+  wireCustomerBox(root, side, sale, totals);
   side.querySelector('#pos-seller').addEventListener('change', (ev) => { sale.seller_id = ev.target.value || null; persistDraft(); });
   ['dpct', 'dfix', 'spct', 'sfix'].forEach(k => {
     const map = { dpct: 'discount_global_pct', dfix: 'discount_global_fixed', spct: 'surcharge_global_pct', sfix: 'surcharge_global_fixed' };
@@ -811,6 +820,122 @@ function printTicket(rec) {
 
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ===== Cliente por número de documento =====
+function currentCustomer(sale) {
+  return sale.customer_id ? (state.customers.find(c => c.id === sale.customer_id) || null) : null;
+}
+
+function customerBoxHTML(sale) {
+  const c = currentCustomer(sale);
+  if (c) {
+    return `<div class="flex items-center justify-between gap-2 bg-[#fff8f4] rounded-xl px-3 py-2">
+      <div class="min-w-0">
+        <div class="font-bold text-sm text-[#241a0d] truncate">${escapeHtml(c.name)}${c.lastname ? ' ' + escapeHtml(c.lastname) : ''}</div>
+        <div class="text-xs text-[#7d6c5c]">${c.documentNumber ? 'Doc ' + escapeHtml(c.documentNumber) : 'sin documento'}</div>
+      </div>
+      <div class="flex gap-1 shrink-0">
+        <button id="cust-buys" title="Ver compras" class="ing-btn-secondary !px-2 !py-1"><span class="material-symbols-outlined text-base">receipt_long</span></button>
+        <button id="cust-clear" title="Quitar" class="ing-btn-secondary !px-2 !py-1"><span class="material-symbols-outlined text-base">close</span></button>
+      </div>
+    </div>`;
+  }
+  return `<div class="flex gap-2">
+      <input id="cust-doc" class="ing-input flex-1" placeholder="N° de documento…" inputmode="numeric" />
+      <button id="cust-find" class="ing-btn-secondary !px-3">Buscar</button>
+    </div>
+    <div class="text-[11px] text-[#7d6c5c] mt-1">Consumidor final · buscá o creá el cliente por documento</div>`;
+}
+
+function wireCustomerBox(root, side, sale, totals) {
+  const box = side.querySelector('#pos-cust-box');
+  if (!box) return;
+  const refresh = () => { box.innerHTML = customerBoxHTML(sale); wireCustomerBox(root, side, sale, totals); };
+  box.querySelector('#cust-clear')?.addEventListener('click', () => { sale.customer_id = null; persistDraft(); refresh(); });
+  box.querySelector('#cust-buys')?.addEventListener('click', () => openCustomerPurchases(currentCustomer(sale)));
+  const doc = box.querySelector('#cust-doc');
+  const doFind = async () => {
+    const v = (doc.value || '').trim();
+    if (!v) { toast('Ingresá un número de documento', 'warn'); return; }
+    try {
+      const found = await api(`/api/customers/by-document/${encodeURIComponent(v)}`);
+      if (found) {
+        if (!state.customers.find(c => c.id === found.id)) state.customers.push(found);
+        sale.customer_id = found.id; persistDraft(); refresh();
+        toast(`Cliente: ${found.name}`, 'success');
+      } else {
+        openCreateCustomer(v, (created) => { state.customers.push(created); sale.customer_id = created.id; persistDraft(); refresh(); });
+      }
+    } catch (e) { toast('Error buscando: ' + (e.message || ''), 'error'); }
+  };
+  box.querySelector('#cust-find')?.addEventListener('click', doFind);
+  doc?.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); doFind(); } });
+}
+
+async function openCreateCustomer(doc, onCreated) {
+  await openModal({
+    title: 'Nuevo cliente',
+    size: 'sm',
+    bodyHTML: `
+      <label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1">Nombre y apellido *</label>
+      <input id="nc-name" class="ing-input w-full mb-3" placeholder="Nombre" />
+      <div class="grid grid-cols-3 gap-2 mb-3">
+        <div class="col-span-1"><label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1">Tipo</label>
+          <select id="nc-dtype" class="ing-input w-full"><option>DNI</option><option>CUIT</option><option>CUIL</option><option>Pasaporte</option></select></div>
+        <div class="col-span-2"><label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1">Documento *</label>
+          <input id="nc-doc" class="ing-input w-full" value="${escapeHtml(doc)}" /></div>
+      </div>
+      <label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1">Teléfono</label>
+      <input id="nc-phone" class="ing-input w-full" placeholder="Opcional" />
+    `,
+    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="ok">Crear cliente</button>`,
+    onOpen: (el, close) => {
+      setTimeout(() => el.querySelector('#nc-name')?.focus(), 50);
+      el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
+      el.querySelector('[data-act="ok"]').addEventListener('click', async () => {
+        const name = el.querySelector('#nc-name').value.trim();
+        const documentNumber = el.querySelector('#nc-doc').value.trim();
+        const documentType = el.querySelector('#nc-dtype').value;
+        const phone = el.querySelector('#nc-phone').value.trim() || null;
+        if (!name) { toast('El nombre es obligatorio', 'warn'); return; }
+        if (!documentNumber) { toast('El documento es obligatorio', 'warn'); return; }
+        try {
+          const created = await api('/api/customers', { method: 'POST', body: { name, documentNumber, documentType, phone } });
+          close(true); toast('Cliente creado', 'success'); onCreated && onCreated(created);
+        } catch (e) { toast('No se pudo crear: ' + (e.message || ''), 'error'); }
+      });
+    },
+  });
+}
+
+async function openCustomerPurchases(cust) {
+  if (!cust) return;
+  await openModal({
+    title: `Compras de ${cust.name}`,
+    size: 'md',
+    bodyHTML: `<div id="cp-list" class="text-sm text-[#7d6c5c]">Cargando…</div>`,
+    footerHTML: `<button class="ing-btn-primary" data-act="ok">Cerrar</button>`,
+    onOpen: async (el, close) => {
+      el.querySelector('[data-act="ok"]').addEventListener('click', () => close(true));
+      try {
+        const sales = await api(`/api/customers/${encodeURIComponent(cust.id)}/sales`);
+        const listEl = el.querySelector('#cp-list');
+        if (!sales || !sales.length) { listEl.innerHTML = 'Sin compras registradas.'; return; }
+        const total = sales.reduce((s, x) => s + (x.total || 0), 0);
+        listEl.innerHTML = `
+          <div class="mb-2 font-bold text-[#241a0d]">${sales.length} compra(s) · Total ${money(total)}</div>
+          <div class="divide-y divide-[#fff1e6] max-h-80 overflow-y-auto">
+          ${sales.map(s => `
+            <div class="py-2">
+              <div class="flex justify-between"><span class="font-bold text-[#241a0d]">#${String(s.number).padStart(6, '0')}</span><span class="font-black text-[#d82f1e]">${money(s.total)}</span></div>
+              <div class="text-xs text-[#7d6c5c]">${fmtDateTime(s.datetime)}</div>
+              <div class="text-xs text-[#241a0d] mt-1">${(s.items || []).map(it => `${it.qty}× ${escapeHtml(it.productNameSnap)}`).join(', ')}</div>
+            </div>`).join('')}
+          </div>`;
+      } catch (e) { el.querySelector('#cp-list').innerHTML = 'Error: ' + escapeHtml(e.message || ''); }
+    },
+  });
 }
 
 // ===== Picker de catálogo (modal) =====

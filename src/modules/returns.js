@@ -116,7 +116,13 @@ function renderNew(container) {
             <button id="add-returned" class="ing-btn-secondary text-sm flex items-center gap-1"><span class="material-symbols-outlined text-base">add</span> Agregar</button>
           </div>
           ${itemsList(state.returned, 'returned')}
-          <div class="text-right text-sm mt-2"><span class="text-[#7d6c5c]">Subtotal devolución:</span> <span class="font-bold">${money(retTotal)}</span></div>
+          ${state.returned.length ? `<div class="flex items-center justify-between mt-2 text-xs">
+            <div class="flex items-center gap-2 text-[#7d6c5c]"><span class="material-symbols-outlined text-sm">cloud_sync</span> Reponer stock en Tienda Nube:
+              <button id="tn-all" class="font-bold text-[#d82f1e] hover:underline">Todos</button>
+              <button id="tn-none" class="font-bold text-[#7d6c5c] hover:underline">Ninguno</button>
+            </div>
+            <div><span class="text-[#7d6c5c]">Subtotal devolución:</span> <span class="font-bold">${money(retTotal)}</span></div>
+          </div>` : `<div class="text-right text-sm mt-2"><span class="text-[#7d6c5c]">Subtotal devolución:</span> <span class="font-bold">${money(retTotal)}</span></div>`}
         </div>
 
         <div class="ing-card p-4">
@@ -256,6 +262,16 @@ function renderNew(container) {
     const i = Number(b.dataset.itemRm); const list = b.dataset.itemList;
     state[list].splice(i, 1); render(container.closest('#main-content') || container.parentElement);
   }));
+  // "Volver a Tienda Nube" por item devuelto (no re-renderiza: sólo muta el estado).
+  container.querySelectorAll('[data-item-tn]').forEach(chk => chk.addEventListener('change', (ev) => {
+    const i = Number(chk.dataset.itemTn); state.returned[i].return_to_tn = ev.target.checked;
+  }));
+  container.querySelector('#tn-all')?.addEventListener('click', () => {
+    state.returned.forEach(it => { it.return_to_tn = true; }); render(container.closest('#main-content') || container.parentElement);
+  });
+  container.querySelector('#tn-none')?.addEventListener('click', () => {
+    state.returned.forEach(it => { it.return_to_tn = false; }); render(container.closest('#main-content') || container.parentElement);
+  });
 
   const cn = container.querySelector('#r-cn');
   if (cn) cn.addEventListener('change', (ev) => { state.emit_credit_note = ev.target.checked; render(container.closest('#main-content') || container.parentElement); });
@@ -281,7 +297,8 @@ function itemsList(list, key) {
       </div>
       ${list.map((it, i) => `
         <div class="grid grid-cols-[1fr_80px_120px_120px_40px] gap-2 px-3 py-2 items-center border-t border-[#fff1e6]">
-          <div class="min-w-0"><div class="font-bold text-sm truncate">${it.name}</div><div class="text-xs text-[#7d6c5c] font-mono">${it.code || ''}</div></div>
+          <div class="min-w-0"><div class="font-bold text-sm truncate">${it.name}</div><div class="text-xs text-[#7d6c5c] font-mono">${it.code || ''}</div>
+            ${key === 'returned' ? `<label class="text-[11px] flex items-center gap-1 mt-1 cursor-pointer text-[#7d6c5c]"><input type="checkbox" data-item-tn="${i}" ${it.return_to_tn === false ? '' : 'checked'} class="w-3 h-3" /> Volver a Tienda Nube</label>` : ''}</div>
           <input data-item-qty="${i}" data-item-list="${key}" type="number" min="1" value="${it.qty}" class="w-full h-8 text-center border border-[#fff1e6] rounded-md text-sm" />
           <input data-item-price="${i}" data-item-list="${key}" type="number" step="0.01" value="${it.unit_price}" class="w-full h-8 text-right border border-[#fff1e6] rounded-md text-sm" />
           <div class="text-right font-bold">${money((it.qty || 0) * (it.unit_price || 0))}</div>

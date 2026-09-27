@@ -27,7 +27,8 @@ async function mapItems(items) {
   for (const it of items || []) {
     const variantId = it.variant_id || (await variantIdOf(it.product_id));
     if (!variantId) throw new Error(`"${it.name || it.product_id}" no está sincronizado con el servidor`);
-    out.push({ variantId, qty: Number(it.qty) || 0, unitPrice: Number(it.unit_price) || 0 });
+    // returnToTn sólo se usa para returnedItems en el backend; en takenItems se ignora.
+    out.push({ variantId, qty: Number(it.qty) || 0, unitPrice: Number(it.unit_price) || 0, returnToTn: it.return_to_tn !== false });
   }
   return out;
 }
