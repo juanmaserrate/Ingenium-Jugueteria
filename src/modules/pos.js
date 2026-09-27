@@ -4,6 +4,7 @@
 
 import * as Sales from '../repos/sales.js';
 import * as P from '../repos/products.js';
+import * as Senas from '../repos/senas.js';
 import { getAll, get } from '../core/db.js';
 import { api, ApiError } from '../core/api.js';
 import { Categories, Brands } from '../repos/catalog.js';
@@ -555,6 +556,17 @@ function renderSide(root, totals) {
 }
 
 function payRow(p, i) {
+  // Pago con SEÑA: medio fijo, monto no editable (es el valor de la seña).
+  if (p.method_id === 'sena') {
+    return `
+    <div class="flex gap-2 items-center">
+      <div class="ing-input flex-1 !bg-indigo-50 !border-indigo-200 text-indigo-700 font-bold text-sm flex items-center">Seña #${p.sena_number}</div>
+      <div class="w-28 text-right font-bold text-sm text-indigo-700">${money(p.amount || 0)}</div>
+      <button data-pay-remove="${i}" title="Quitar seña" class="w-8 h-8 rounded-md text-[#7d6c5c] hover:bg-red-50 hover:text-red-600 flex items-center justify-center">
+        <span class="material-symbols-outlined text-base">close</span>
+      </button>
+    </div>`;
+  }
   return `
     <div class="flex gap-2 items-center">
       <select data-pay-method="${i}" class="ing-input flex-1">
@@ -662,6 +674,10 @@ async function confirmSale(root) {
       priceOverridden: false,
     })),
     payments: (sale.payments || []).map(p => {
+      // Pago con seña: no mueve caja (la plata entró al crearla) y lleva senaId.
+      if (p.method_id === 'sena') {
+        return { methodId: 'sena', methodName: `Seña #${p.sena_number}`, amount: Number(p.amount) || 0, affectsCash: false, senaId: p.sena_id };
+      }
       const m = state.methods.find(x => x.id === p.method_id);
       return {
         methodId: p.method_id,
@@ -717,6 +733,7 @@ async function confirmSale(root) {
       state.activeTab = state.tabs[0].id;
     }
     await refreshData();
+    state.senas = {}; // invalidar cache de señas (alguna pudo quedar usada)
     renderTabs(root); renderCart(root);
     showSaleReceipt(rec);
     // U-8: toast con deshacer durante 8s (reversión: stock + caja + audit).
@@ -827,6 +844,22 @@ function currentCustomer(sale) {
   return sale.customer_id ? (state.customers.find(c => c.id === sale.customer_id) || null) : null;
 }
 
+function senaRowsHTML(sale, c) {
+  state.senas = state.senas || {};
+  const senas = state.senas[c.id];
+  if (senas === undefined) return '<div class="text-[11px] text-[#7d6c5c] mt-1">Buscando señas…</div>';
+  const appliedIds = new Set((sale.payments || []).filter(p => p.method_id === 'sena').map(p => p.sena_id));
+  const avail = senas.filter(s => !appliedIds.has(s.id));
+  if (!avail.length) return '';
+  return `<div class="mt-2 space-y-1">
+    <div class="text-[11px] font-bold text-indigo-700 uppercase">Tiene ${avail.length} seña(s)</div>
+    ${avail.map(s => `<div class="flex items-center justify-between gap-2 bg-indigo-50 border border-indigo-200 rounded-lg px-2 py-1">
+      <div class="text-xs min-w-0"><b class="text-indigo-700">Seña #${s.number}</b> · ${money(s.amount)}${s.note ? ' · ' + escapeHtml(s.note) : ''}</div>
+      <button data-use-sena="${s.id}" class="text-xs font-bold text-indigo-700 hover:underline shrink-0">Usar</button>
+    </div>`).join('')}
+  </div>`;
+}
+
 function customerBoxHTML(sale) {
   const c = currentCustomer(sale);
   if (c) {
@@ -839,7 +872,7 @@ function customerBoxHTML(sale) {
         <button id="cust-buys" title="Ver compras" class="ing-btn-secondary !px-2 !py-1"><span class="material-symbols-outlined text-base">receipt_long</span></button>
         <button id="cust-clear" title="Quitar" class="ing-btn-secondary !px-2 !py-1"><span class="material-symbols-outlined text-base">close</span></button>
       </div>
-    </div>`;
+    </div>${senaRowsHTML(sale, c)}`;
   }
   return `<div class="flex gap-2">
       <input id="cust-doc" class="ing-input flex-1" placeholder="N° de documento…" inputmode="numeric" />
@@ -852,6 +885,22 @@ function wireCustomerBox(root, side, sale, totals) {
   const box = side.querySelector('#pos-cust-box');
   if (!box) return;
   const refresh = () => { box.innerHTML = customerBoxHTML(sale); wireCustomerBox(root, side, sale, totals); };
+  const c = currentCustomer(sale);
+  // Traer señas activas del cliente (una sola vez por cliente) y refrescar el box.
+  state.senas = state.senas || {};
+  if (c && state.senas[c.id] === undefined) {
+    state.senas[c.id] = []; // marca "cargando" para no re-pedir
+    Senas.list(c.id, 'active').then(list => { state.senas[c.id] = list || []; if (side.querySelector('#pos-cust-box')) refresh(); }).catch(() => { state.senas[c.id] = []; });
+  }
+  box.querySelectorAll('[data-use-sena]').forEach(b => b.addEventListener('click', () => {
+    const senaId = b.dataset.useSena;
+    const sena = (state.senas[c?.id] || []).find(s => s.id === senaId);
+    if (!sena) return;
+    sale.payments = sale.payments || [];
+    sale.payments.push({ method_id: 'sena', amount: round2(sena.amount), sena_id: sena.id, sena_number: sena.number });
+    persistDraft(); renderCart(root); // renderCart -> renderSide refresca todo (pagos + box + totales)
+    toast(`Seña #${sena.number} aplicada (${money(sena.amount)})`, 'success');
+  }));
   box.querySelector('#cust-clear')?.addEventListener('click', () => { sale.customer_id = null; persistDraft(); refresh(); });
   box.querySelector('#cust-buys')?.addEventListener('click', () => openCustomerPurchases(currentCustomer(sale)));
   const doc = box.querySelector('#cust-doc');
