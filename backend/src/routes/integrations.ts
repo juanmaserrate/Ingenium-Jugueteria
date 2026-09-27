@@ -81,6 +81,58 @@ export async function integrationsRoutes(app: FastifyInstance) {
       return dumpTnCatalog();
     });
 
+    // Productos creados en TN desde `since` (YYYY-MM-DD, hora Argentina) que NO
+    // están enlazados a un producto del sistema. Solo lectura (para revisar antes
+    // de importar). Devuelve resumen por producto.
+    r.get('/integrations/tiendanube/new-products', async (req) => {
+      const q = req.query as { since?: string };
+      const since = q.since || new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      const tn = await getTnClient();
+      if (!tn) throw new Error('Tienda Nube no está conectada');
+      const createdMin = `${since}T00:00:00-03:00`;
+      const linked = new Set(
+        (await prisma.productTnMapping.findMany({ select: { tnProductId: true } })).map((m) => m.tnProductId),
+      );
+      const out: any[] = [];
+      let page = 1;
+      let warning: string | null = null;
+      for (;;) {
+        let batch: any;
+        try {
+          batch = await tn.listProducts({
+            page,
+            per_page: 200,
+            created_at_min: createdMin,
+            fields: 'id,name,created_at,variants',
+          });
+        } catch (e: any) {
+          const s = e?.response?.status;
+          if (s === 404) break;
+          warning = `Error página ${page}: HTTP ${s ?? ''} ${e?.message ?? e}`;
+          break;
+        }
+        if (!Array.isArray(batch) || batch.length === 0) break;
+        for (const tp of batch) {
+          if (linked.has(String(tp.id))) continue;
+          const vs: any[] = tp.variants ?? [];
+          const v0 = vs[0] ?? {};
+          out.push({
+            tnProductId: String(tp.id),
+            name: tp.name?.es ?? tp.name ?? '',
+            createdAt: tp.created_at ?? null,
+            variantCount: vs.length,
+            sku: v0.sku ?? '',
+            barcode: v0.barcode ?? '',
+            price: v0.price ?? '',
+            stock: vs.reduce((s, v) => s + (Number(v.stock) || 0), 0),
+          });
+        }
+        page++;
+        if (page > 200) break;
+      }
+      return { since, count: out.length, warning, products: out };
+    });
+
     // Lista los mapeos producto local ↔ producto TN (código local + tnProductId).
     r.get('/integrations/tiendanube/mappings', async () => {
       const maps = await prisma.productTnMapping.findMany({
