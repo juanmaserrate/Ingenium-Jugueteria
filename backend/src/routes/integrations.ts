@@ -526,6 +526,47 @@ export async function integrationsRoutes(app: FastifyInstance) {
       return { ok: true, enqueued: variantIds.length, products: linkedProducts.length };
     });
 
+    // Diff de stock para la conciliación: por cada VARIANTE ENLAZADA devuelve el
+    // stock local (el que se empujaría a TN) + su tnProductId/tnVariantId. Solo
+    // lectura. Los productos NO enlazados no aparecen (no tienen mapping).
+    r.get('/resync-stock/diff', async () => {
+      const integration = await prisma.integration.findUnique({ where: { provider: 'tiendanube' } });
+      const mode = integration?.stockMode ?? 'sum';
+      const products = await prisma.product.findMany({
+        where: { tnMapping: { isNot: null }, active: true },
+        select: {
+          variants: {
+            select: {
+              id: true,
+              stocks: { select: { branchId: true, qty: true, reservedQty: true } },
+              tnMapping: { select: { tnProductId: true, tnVariantId: true } },
+            },
+          },
+        },
+      });
+      const out: any[] = [];
+      for (const p of products) {
+        for (const v of p.variants) {
+          if (!v.tnMapping) continue;
+          let local = 0;
+          if (mode === 'sum') local = v.stocks.reduce((s, x) => s + Math.max(0, x.qty - x.reservedQty), 0);
+          else { const t = v.stocks.find((x) => x.branchId === mode); local = t ? Math.max(0, t.qty - t.reservedQty) : 0; }
+          out.push({ variantId: v.id, tnProductId: v.tnMapping.tnProductId, tnVariantId: v.tnMapping.tnVariantId, localQty: local });
+        }
+      }
+      return { count: out.length, items: out };
+    });
+
+    // Empuja stock a TN SOLO para las variantes indicadas (conciliación selectiva,
+    // evita el zeroing accidental). Reusa push_stock: solo toca el número de stock.
+    r.post('/resync-stock/batch', async (req) => {
+      const body = z.object({ variantIds: z.array(z.string()).min(1) }).parse(req.body);
+      for (const vid of body.variantIds) {
+        await enqueueSync('push_stock', { variantId: vid });
+      }
+      return { ok: true, enqueued: body.variantIds.length };
+    });
+
     // --- Sync Log ---
     r.get('/sync/log', async (req) => {
       const q = req.query as { limit?: string; status?: string };
