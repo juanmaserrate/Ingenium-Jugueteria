@@ -9,7 +9,7 @@ const schema = z.object({
   PUBLIC_BASE_URL: z.string().url(),
 
   JWT_SECRET: z.string().min(16),
-  JWT_EXPIRES_IN: z.string().default('12h'),
+  JWT_EXPIRES_IN: z.string().default('30d'),
   ENCRYPTION_KEY: z.string().length(64, 'ENCRYPTION_KEY must be 32 bytes in hex (64 chars)'),
 
   CORS_ORIGINS: z.string().default(''),

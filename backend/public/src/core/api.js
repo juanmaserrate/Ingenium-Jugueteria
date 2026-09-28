@@ -1,5 +1,6 @@
 // HTTP client para llamar al backend Ingenium.
-// Maneja JWT, errores tipados y fallback offline para operaciones cr\u00edticas.
+// Maneja JWT, errores tipados y fallback offline para operaciones críticas.
+import { emit, EV } from './events.js';
 
 // Frontend + backend viven en el mismo origin (Railway sirve ambos).
 // En dev local apuntamos al Fastify local por si corren separados (file:// o 5500).
@@ -38,7 +39,28 @@ export class ApiError extends Error {
   }
 }
 
+// Estado de conexión: se usa para emitir ONLINE_STATUS_CHANGED solo al cambiar
+let _wasOffline = false;
+
+// Token vencido/inválido (401): la sesión persiste 30 días pero el JWT dura menos,
+// así que puede quedar "logueado" con un token muerto y toda llamada fallar en
+// silencio. Ante un 401 limpiamos la sesión y mandamos a re-loguear (una sola vez).
+let _redirecting = false;
+function handleUnauthorized() {
+  if (_redirecting) return;
+  // Evitar bucle si ya estamos en la pantalla de login.
+  if (location.pathname.endsWith('index.html')) return;
+  _redirecting = true;
+  try {
+    localStorage.removeItem('ingenium_jwt');
+    localStorage.removeItem('ingenium_session');
+    localStorage.removeItem('ingenium_last_activity');
+  } catch { /* noop */ }
+  location.href = './index.html?expired=1';
+}
+
 export async function api(path, opts = {}) {
+
   const base = getApiBase();
   const token = getToken();
   const headers = {
@@ -56,14 +78,18 @@ export async function api(path, opts = {}) {
         ? JSON.stringify(opts.body)
         : opts.body,
     });
+    // Si estábamos offline y ahora logramos hacer la petición, notificamos reconexión
+    if (_wasOffline) { _wasOffline = false; emit(EV.ONLINE_STATUS_CHANGED, { online: true }); }
   } catch (err) {
     // Network error → offline
+    if (!_wasOffline) { _wasOffline = true; emit(EV.ONLINE_STATUS_CHANGED, { online: false }); }
     const e = new ApiError(0, { error: 'offline', code: 'OFFLINE' });
     e.networkError = err;
     throw e;
   }
 
   if (res.status === 204) return null;
+  if (res.status === 401) handleUnauthorized();
   const contentType = res.headers.get('content-type') || '';
   const payload = contentType.includes('application/json') ? await res.json() : await res.text();
 
@@ -98,6 +124,7 @@ export async function uploadFile(path, file, { fieldName = 'file', retries = 1 }
       throw lastErr;
     }
     if (res.status === 204) return null;
+    if (res.status === 401) handleUnauthorized();
     const contentType = res.headers.get('content-type') || '';
     const payload = contentType.includes('application/json') ? await res.json() : await res.text();
     if (!res.ok) {
