@@ -19,6 +19,60 @@ function escapeAttr(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Orden alfabético (español, insensible a mayúsculas/acentos) por .name
+function byName(a, b) {
+  return String(a?.name ?? '').localeCompare(String(b?.name ?? ''), 'es', { sensitivity: 'base' });
+}
+
+// Combobox filtrable: input con desplegable que se puede escribir (autocompleta),
+// clickear (despliega todo, en orden alfabético) y crear una opción nueva desde ahí.
+// wrap = contenedor .combo-wrap (input + .combo-menu). onPick(id|'') al elegir/limpiar,
+// onCreate(name) -> Promise<{id,name}> para dar de alta un registro nuevo del catálogo.
+function mountCombo(wrap, { options, selectedId = '', allLabel = 'Todos', onPick, onCreate }) {
+  const input = wrap.querySelector('input');
+  const menu = wrap.querySelector('.combo-menu');
+  if (!input || !menu) return;
+  const sorted = [...(options || [])].sort(byName);
+  const selected = sorted.find((o) => o.id === selectedId) || null;
+  input.value = selected ? selected.name : '';
+
+  const draw = (q = '') => {
+    const needle = q.trim().toLowerCase();
+    const matches = needle ? sorted.filter((o) => (o.name || '').toLowerCase().includes(needle)) : sorted;
+    const exact = sorted.some((o) => (o.name || '').toLowerCase() === needle);
+    const item = (id, label, extra = '') =>
+      `<div class="combo-item px-3 py-2 cursor-pointer hover:bg-[#fff1e6] ${extra}" data-id="${escapeAttr(id)}">${label}</div>`;
+    let html = `<div class="combo-item px-3 py-2 cursor-pointer hover:bg-[#fff1e6] italic text-[#7d6c5c]" data-id="">${allLabel}</div>`;
+    html += matches.map((o) => item(o.id, escapeAttr(o.name))).join('');
+    if (needle && !exact && onCreate) {
+      html += `<div class="combo-item combo-create px-3 py-2 cursor-pointer hover:bg-[#fff1e6] text-[#d82f1e] font-bold" data-create="1">➕ Crear «${escapeAttr(q.trim())}»</div>`;
+    }
+    if (!matches.length && !needle) html += `<div class="px-3 py-2 text-[#7d6c5c] italic">Sin opciones</div>`;
+    menu.innerHTML = html;
+  };
+  const openMenu = (q = '') => { draw(q); menu.classList.remove('hidden'); };
+  const closeMenu = () => menu.classList.add('hidden');
+
+  input.addEventListener('focus', () => { openMenu(''); setTimeout(() => input.select(), 0); });
+  input.addEventListener('input', () => openMenu(input.value));
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeMenu(); input.blur(); } });
+  input.addEventListener('blur', () => setTimeout(() => { if (!wrap.matches(':hover')) closeMenu(); }, 150));
+  menu.addEventListener('mousedown', async (e) => {
+    const it = e.target.closest('.combo-item');
+    if (!it) return;
+    e.preventDefault();
+    if (it.dataset.create && onCreate) {
+      const name = input.value.trim();
+      if (!name) return;
+      try { const created = await onCreate(name); closeMenu(); onPick(created?.id || ''); }
+      catch { /* el repo ya avisa con toast */ }
+      return;
+    }
+    closeMenu();
+    onPick(it.dataset.id || '');
+  });
+}
+
 // Parseo de número tolerante al formato argentino (1.234,56) y al plano (1234.56).
 // Devuelve null si no es un número válido (para NO guardar 0 por error de formato).
 function parseNumAR(s) {
@@ -317,6 +371,21 @@ async function renderProducts(container, forceReload = false) {
   const lowStock = list.filter(p => (stockOf(p.id, 'br_lomas').qty + stockOf(p.id, 'br_banfield').qty) <= 2).length;
   const outStockBoth = list.filter(p => stockOf(p.id, 'br_lomas').qty === 0 && stockOf(p.id, 'br_banfield').qty === 0).length;
 
+  // Barra de paginación reutilizable (se muestra arriba y abajo de la tabla).
+  const pagBar = (pos) => `
+    <div class="flex items-center justify-between mt-3 flex-wrap gap-2">
+      <p class="text-xs text-[#7d6c5c]">${list.length} producto(s)${list.length > PAGE_SIZE ? ` · mostrando ${pageStart+1}-${Math.min(pageStart+PAGE_SIZE, list.length)}` : ''}${pos==='bottom' ? ' · doble-click para editar (Nombre, Costo, %Margen, Precio)' : ''}</p>
+      ${totalPages > 1 ? `
+      <div class="flex items-center gap-2">
+        <button class="pg-first ing-btn-secondary text-xs !py-1.5 !px-3" ${state.page===0?'disabled':''} title="Primera">«</button>
+        <button class="pg-prev ing-btn-secondary text-xs !py-1.5 !px-3" ${state.page===0?'disabled':''}>‹ Anterior</button>
+        <span class="text-xs font-bold text-[#7d6c5c]">Página
+          <input class="pg-input ing-input !w-14 !py-1 text-center inline-block" type="number" min="1" max="${totalPages}" value="${state.page+1}" /> de ${totalPages}</span>
+        <button class="pg-next ing-btn-secondary text-xs !py-1.5 !px-3" ${state.page>=totalPages-1?'disabled':''}>Siguiente ›</button>
+        <button class="pg-last ing-btn-secondary text-xs !py-1.5 !px-3" ${state.page>=totalPages-1?'disabled':''} title="Última">»</button>
+      </div>` : ''}
+    </div>`;
+
   container.innerHTML = `
     <!-- U-6: banner de consolidado cross-sucursal -->
     <div class="grid grid-cols-4 gap-3 mb-4">
@@ -333,18 +402,18 @@ async function renderProducts(container, forceReload = false) {
           <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#d82f1e]">search</span>
           <input id="f-search" class="ing-input pl-10" placeholder="Buscar por nombre o código..." value="${f.search}" />
         </div>
-        <select id="f-category" class="ing-input max-w-[180px]">
-          <option value="">Todas las categorías</option>
-          ${categories.map(c => `<option value="${c.id}" ${f.category===c.id?'selected':''}>${c.name}</option>`).join('')}
-        </select>
-        <select id="f-brand" class="ing-input max-w-[180px]">
-          <option value="">Todas las marcas</option>
-          ${brands.map(b => `<option value="${b.id}" ${f.brand===b.id?'selected':''}>${b.name}</option>`).join('')}
-        </select>
-        <select id="f-supplier" class="ing-input max-w-[180px]">
-          <option value="">Todos los proveedores</option>
-          ${suppliers.map(s => `<option value="${s.id}" ${f.supplier===s.id?'selected':''}>${s.name}</option>`).join('')}
-        </select>
+        <div class="combo-wrap relative w-[180px]" data-combo="category">
+          <input id="f-category" class="ing-input w-full" autocomplete="off" placeholder="Todas las categorías" />
+          <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
+        </div>
+        <div class="combo-wrap relative w-[170px]" data-combo="brand">
+          <input id="f-brand" class="ing-input w-full" autocomplete="off" placeholder="Todas las marcas" />
+          <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
+        </div>
+        <div class="combo-wrap relative w-[180px]" data-combo="supplier">
+          <input id="f-supplier" class="ing-input w-full" autocomplete="off" placeholder="Todos los proveedores" />
+          <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
+        </div>
         <input id="f-variant" class="ing-input max-w-[160px]" placeholder="Variante (talle…)" value="${escapeAttr(f.variant || '')}" />
         <label class="flex items-center gap-2 text-sm font-bold cursor-pointer">
           <input id="f-meli" type="checkbox" ${f.onlyMeli?'checked':''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" /> Sólo MELI
@@ -368,6 +437,7 @@ async function renderProducts(container, forceReload = false) {
       <!-- Bulk actions bar -->
       <div id="bulk-bar" class="hidden mt-4 p-3 bg-[#fff1e6] rounded-2xl flex items-center gap-3 border border-[#e3ceba]">
         <span id="bulk-count" class="text-sm font-black text-[#d82f1e]"></span>
+        <button id="bulk-edit" class="text-xs ing-btn-primary !py-1.5 !px-3"><span class="material-symbols-outlined align-middle text-sm">edit_note</span> Editar campos</button>
         <button id="bulk-meli-on" class="text-xs ing-btn-secondary !py-1.5 !px-3">Publicar en MELI</button>
         <button id="bulk-meli-off" class="text-xs ing-btn-secondary !py-1.5 !px-3">Despublicar MELI</button>
         <button id="bulk-price-pct" class="text-xs ing-btn-secondary !py-1.5 !px-3">Ajuste % precio</button>
@@ -376,6 +446,7 @@ async function renderProducts(container, forceReload = false) {
       </div>
     </div>
 
+    ${pagBar('top')}
     <div class="ing-card overflow-auto">
       <table class="ing-table w-full text-sm">
         <thead>
@@ -402,24 +473,33 @@ async function renderProducts(container, forceReload = false) {
         </tbody>
       </table>
     </div>
-    <div class="flex items-center justify-between mt-3 flex-wrap gap-2">
-      <p class="text-xs text-[#7d6c5c]">${list.length} producto(s)${list.length > PAGE_SIZE ? ` · mostrando ${pageStart+1}-${Math.min(pageStart+PAGE_SIZE, list.length)}` : ''} · doble-click para editar (Nombre, Costo, %Margen, Precio)</p>
-      ${totalPages > 1 ? `
-      <div class="flex items-center gap-2">
-        <button id="pg-prev" class="ing-btn-secondary text-xs !py-1.5 !px-3" ${state.page===0?'disabled':''}>‹ Anterior</button>
-        <span class="text-xs font-bold text-[#7d6c5c]">Página ${state.page+1} de ${totalPages}</span>
-        <button id="pg-next" class="ing-btn-secondary text-xs !py-1.5 !px-3" ${state.page>=totalPages-1?'disabled':''}>Siguiente ›</button>
-      </div>` : ''}
-    </div>
+    ${pagBar('bottom')}
   `;
-  container.querySelector('#pg-prev')?.addEventListener('click', () => { if (state.page > 0) { state.page--; renderProducts(container); } });
-  container.querySelector('#pg-next')?.addEventListener('click', () => { state.page++; renderProducts(container); });
+  const goPage = (n) => { const t = Math.max(1, Math.ceil(list.length / PAGE_SIZE)); state.page = Math.min(Math.max(0, n), t - 1); renderProducts(container); };
+  container.querySelectorAll('.pg-first').forEach(b => b.addEventListener('click', () => goPage(0)));
+  container.querySelectorAll('.pg-prev').forEach(b => b.addEventListener('click', () => goPage(state.page - 1)));
+  container.querySelectorAll('.pg-next').forEach(b => b.addEventListener('click', () => goPage(state.page + 1)));
+  container.querySelectorAll('.pg-last').forEach(b => b.addEventListener('click', () => goPage(totalPages - 1)));
+  container.querySelectorAll('.pg-input').forEach(inp => inp.addEventListener('change', (e) => { const n = parseInt(e.target.value, 10); if (Number.isFinite(n)) goPage(n - 1); }));
 
   // Filtros
   container.querySelector('#f-search').addEventListener('input', e => { state.filters.search = e.target.value; state.page = 0; scheduleFilterRender(container, 'f-search'); });
-  container.querySelector('#f-category').addEventListener('change', e => { state.filters.category = e.target.value; state.page = 0; renderProducts(container); });
-  container.querySelector('#f-brand').addEventListener('change', e => { state.filters.brand = e.target.value; state.page = 0; renderProducts(container); });
-  container.querySelector('#f-supplier').addEventListener('change', e => { state.filters.supplier = e.target.value; state.page = 0; renderProducts(container); });
+  // Comboboxes filtrables (escribir/autocompletar/desplegar) + crear al vuelo. Alfabéticos.
+  mountCombo(container.querySelector('[data-combo="category"]'), {
+    options: categories, selectedId: f.category, allLabel: 'Todas las categorías',
+    onPick: (id) => { state.filters.category = id; state.page = 0; renderProducts(container); },
+    onCreate: async (name) => { const c = await Categories.save({ name }); if (state.cache) state.cache.categories = [...(state.cache.categories||[]), c]; toast(`Categoría "${name}" creada`, 'success'); return c; },
+  });
+  mountCombo(container.querySelector('[data-combo="brand"]'), {
+    options: brands, selectedId: f.brand, allLabel: 'Todas las marcas',
+    onPick: (id) => { state.filters.brand = id; state.page = 0; renderProducts(container); },
+    onCreate: async (name) => { const b = await Brands.save({ name }); if (state.cache) state.cache.brands = [...(state.cache.brands||[]), b]; toast(`Marca "${name}" creada`, 'success'); return b; },
+  });
+  mountCombo(container.querySelector('[data-combo="supplier"]'), {
+    options: suppliers, selectedId: f.supplier, allLabel: 'Todos los proveedores',
+    onPick: (id) => { state.filters.supplier = id; state.page = 0; renderProducts(container); },
+    onCreate: async (name) => { const s = await Suppliers.save({ name }); if (state.cache) state.cache.suppliers = [...(state.cache.suppliers||[]), s]; toast(`Proveedor "${name}" creado`, 'success'); return s; },
+  });
   container.querySelector('#f-meli').addEventListener('change', e => { state.filters.onlyMeli = e.target.checked; state.page = 0; renderProducts(container); });
   container.querySelector('#f-variant').addEventListener('input', e => { state.filters.variant = e.target.value; state.page = 0; scheduleFilterRender(container, 'f-variant'); });
   container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false, variant:'' }; state.page = 0; renderProducts(container); });
@@ -536,6 +616,7 @@ async function renderProducts(container, forceReload = false) {
   // Bulk buttons
   const bulkBar = container.querySelector('#bulk-bar');
   bulkBar.querySelector('#bulk-clear').addEventListener('click', () => { state.selected.clear(); renderProducts(container); });
+  bulkBar.querySelector('#bulk-edit').addEventListener('click', () => bulkEditFields(container));
   bulkBar.querySelector('#bulk-meli-on').addEventListener('click', () => bulkSetMeli(true, container));
   bulkBar.querySelector('#bulk-meli-off').addEventListener('click', () => bulkSetMeli(false, container));
   bulkBar.querySelector('#bulk-price-pct').addEventListener('click', () => bulkPricePct(container));
@@ -1450,6 +1531,91 @@ async function bulkDelete(container) {
   toast('Productos eliminados', 'success');
   state.selected.clear();
   renderProducts(container);
+}
+
+// Edición masiva de campos: aplica los campos tildados a TODOS los seleccionados.
+async function bulkEditFields(container) {
+  const n = state.selected.size;
+  if (!n) return;
+  const cats = [...(state.cache?.categories || [])].sort(byName);
+  const brs  = [...(state.cache?.brands || [])].sort(byName);
+  const sups = [...(state.cache?.suppliers || [])].sort(byName);
+  const opts = (arr) => arr.map((x) => `<option value="${x.id}">${escapeAttr(x.name)}</option>`).join('');
+  // Cada fila: checkbox "cambiar" + control (deshabilitado hasta tildar).
+  const row = (key, label, controlHTML) => `
+    <div class="flex items-center gap-3 py-2 border-b border-[#fff1e6]">
+      <label class="flex items-center gap-2 w-40 shrink-0 cursor-pointer">
+        <input type="checkbox" data-k="${key}" class="be-chk rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+        <span class="text-sm font-bold text-[#241a0d]">${label}</span>
+      </label>
+      <div class="flex-1">${controlHTML}</div>
+    </div>`;
+  const bodyHTML = `
+    <p class="text-sm text-[#7d6c5c] mb-3">Tildá los campos que querés cambiar en los <b>${n}</b> productos seleccionados. Los que no tildes quedan como están.</p>
+    ${row('category_id', 'Categoría', `<select data-f="category_id" class="ing-input w-full" disabled><option value="">— sin categoría —</option>${opts(cats)}</select>`)}
+    ${row('brand_id', 'Marca', `<select data-f="brand_id" class="ing-input w-full" disabled><option value="">— sin marca —</option>${opts(brs)}</select>`)}
+    ${row('supplier_id', 'Proveedor', `<select data-f="supplier_id" class="ing-input w-full" disabled><option value="">— sin proveedor —</option>${opts(sups)}</select>`)}
+    ${row('cost', 'Costo', `<input data-f="cost" type="text" inputmode="decimal" class="ing-input w-full" placeholder="Ej: 1500" disabled />`)}
+    ${row('price', 'Precio', `<input data-f="price" type="text" inputmode="decimal" class="ing-input w-full" placeholder="Ej: 3000" disabled />`)}
+    ${row('margin_pct', '% Margen', `<input data-f="margin_pct" type="text" inputmode="decimal" class="ing-input w-full" placeholder="Ej: 100 (recalcula el precio)" disabled />`)}
+    ${row('published_meli', 'Publicar en MELI', `<select data-f="published_meli" class="ing-input w-full" disabled><option value="1">Sí</option><option value="0">No</option></select>`)}
+    <div id="be-progress" class="text-sm font-bold text-[#7d6c5c] mt-3 hidden"></div>`;
+  const footerHTML = `
+    <button class="ing-btn-secondary" data-act="cancel">Cancelar</button>
+    <button class="ing-btn-primary" data-act="apply">Aplicar a ${n} productos</button>`;
+
+  await openModal({
+    title: 'Editar campos en masa', size: 'md', bodyHTML, footerHTML,
+    onOpen: (el, close) => {
+      // Habilitar/deshabilitar cada control según su checkbox.
+      el.querySelectorAll('.be-chk').forEach((chk) => {
+        const ctrl = el.querySelector(`[data-f="${chk.dataset.k}"]`);
+        chk.addEventListener('change', () => { ctrl.disabled = !chk.checked; if (chk.checked) ctrl.focus(); });
+      });
+      el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
+      el.querySelector('[data-act="apply"]').addEventListener('click', async (ev) => {
+        // Recolectar los campos tildados.
+        const changes = {};
+        el.querySelectorAll('.be-chk:checked').forEach((chk) => {
+          const k = chk.dataset.k;
+          const ctrl = el.querySelector(`[data-f="${k}"]`);
+          changes[k] = ctrl.value;
+        });
+        if (Object.keys(changes).length === 0) { toast('No tildaste ningún campo', 'warn'); return; }
+
+        const btn = ev.currentTarget; btn.disabled = true;
+        const prog = el.querySelector('#be-progress'); prog.classList.remove('hidden');
+        const ids = [...state.selected];
+        let done = 0, failed = 0;
+        for (const id of ids) {
+          try {
+            const p = await P.byId(id);
+            if (!p) { failed++; continue; }
+            if ('category_id' in changes) p.category_id = changes.category_id || null;
+            if ('brand_id' in changes) p.brand_id = changes.brand_id || null;
+            if ('supplier_id' in changes) p.supplier_id = changes.supplier_id || null;
+            if ('published_meli' in changes) p.published_meli = changes.published_meli === '1';
+            if ('cost' in changes) { const v = parseNumAR(changes.cost); if (v != null) p.cost = v; }
+            // %Margen tiene prioridad: recalcula el precio desde el costo. Si no, precio directo.
+            if ('margin_pct' in changes) {
+              const m = parseNumAR(changes.margin_pct);
+              if (m != null) { p.margin_pct = m; if (p.cost > 0) p.price = roundPrice(p.cost * (1 + m / 100)); }
+            } else if ('price' in changes) {
+              const v = parseNumAR(changes.price);
+              if (v != null) { p.price = v; if (p.cost > 0) p.margin_pct = +((p.price / p.cost - 1) * 100).toFixed(2); }
+            }
+            await P.save(p);
+            done++;
+          } catch { failed++; }
+          prog.textContent = `Actualizando… ${done + failed}/${ids.length}`;
+        }
+        toast(`${done} producto(s) actualizado(s)${failed ? ` · ${failed} con error` : ''}`, failed ? 'warn' : 'success');
+        close(true);
+        state.selected.clear();
+        renderProducts(container);
+      });
+    },
+  });
 }
 
 // ==================== CATÁLOGO (cat/brand/supplier/subcat) ====================

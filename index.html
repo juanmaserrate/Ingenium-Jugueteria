@@ -68,9 +68,6 @@
       </div>
     </div>
 
-    <p class="text-center text-xs text-[#7d6c5c] mt-6">
-      PINs iniciales: Lomas <span class="font-bold">1111</span> · Banfield <span class="font-bold">2222</span> <span class="opacity-60">(cambialos desde Configuración)</span>
-    </p>
   </div>
 
   <script type="module">
@@ -87,6 +84,11 @@
     new MutationObserver(m => m.forEach(x => x.addedNodes.forEach(n => n.nodeType === 1 && markIcons(n)))).observe(document.body, { childList: true, subtree: true });
 
     async function init() {
+      // Si ya hay una sesión activa (login persistente), entrar directo a la app.
+      if (Auth.isLoggedIn()) {
+        location.replace('./app.html');
+        return;
+      }
       if (await isSeedNeeded()) {
         await runSeed();
       }

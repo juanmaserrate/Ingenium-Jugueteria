@@ -1,4 +1,5 @@
-// Sesión local guardada en sessionStorage.
+// Sesión local persistente (localStorage): el usuario queda logueado aunque
+// cierre la pestaña o el navegador, hasta que salga manualmente.
 // Fase 1: PIN numérico (demo). Fase 2: JWT.
 
 import { get, getAll, put } from './db.js';
@@ -8,20 +9,21 @@ import { getApiBase, setToken } from './api.js';
 const SESSION_KEY = 'ingenium_session';
 const LAST_ACTIVITY_KEY = 'ingenium_last_activity';
 
-// Timeout por inactividad (ms). Configurable más adelante desde Settings.
-export const IDLE_TIMEOUT_MS = 30 * 60 * 1000;   // 30 min
-export const IDLE_WARN_MS    = 2 * 60 * 1000;    // avisar 2 min antes
+// Sesión persistente: se mantiene logueado por un período largo. Se cierra sólo
+// manualmente (botón Salir) o tras una inactividad muy prolongada.
+export const IDLE_TIMEOUT_MS = 30 * 24 * 60 * 60 * 1000;  // 30 días
+export const IDLE_WARN_MS    = 2 * 60 * 1000;             // avisar 2 min antes
 
 export function currentSession() {
   try {
-    const raw = sessionStorage.getItem(SESSION_KEY);
+    const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const s = JSON.parse(raw);
     // Expirada por inactividad → limpiar y devolver null
-    const last = Number(sessionStorage.getItem(LAST_ACTIVITY_KEY)) || 0;
+    const last = Number(localStorage.getItem(LAST_ACTIVITY_KEY)) || 0;
     if (last && Date.now() - last > IDLE_TIMEOUT_MS) {
-      sessionStorage.removeItem(SESSION_KEY);
-      sessionStorage.removeItem(LAST_ACTIVITY_KEY);
+      localStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem(LAST_ACTIVITY_KEY);
       return null;
     }
     return s;
@@ -34,12 +36,12 @@ export function isLoggedIn() {
 
 // Bump timestamp de última actividad (llamado por el watcher en app.html).
 export function touchActivity() {
-  sessionStorage.setItem(LAST_ACTIVITY_KEY, String(Date.now()));
+  localStorage.setItem(LAST_ACTIVITY_KEY, String(Date.now()));
 }
 
 // Info de expiración para el watcher: ms restantes hasta logout automático.
 export function millisUntilExpiry() {
-  const last = Number(sessionStorage.getItem(LAST_ACTIVITY_KEY)) || 0;
+  const last = Number(localStorage.getItem(LAST_ACTIVITY_KEY)) || 0;
   if (!last) return IDLE_TIMEOUT_MS;
   return Math.max(0, IDLE_TIMEOUT_MS - (Date.now() - last));
 }
@@ -70,7 +72,7 @@ export async function login(branchId, userId, pin) {
     branch_name: branch.name,
     login_at: new Date().toISOString(),
   };
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   touchActivity();
 
   // Pedir JWT al backend para poder llamar rutas autenticadas (Ventas Web, TN, etc.).
@@ -96,8 +98,8 @@ export async function login(branchId, userId, pin) {
 }
 
 export function logout(reason = 'manual') {
-  sessionStorage.removeItem(SESSION_KEY);
-  sessionStorage.removeItem(LAST_ACTIVITY_KEY);
+  localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(LAST_ACTIVITY_KEY);
   setToken(null);
   if (reason === 'idle') {
     location.href = './index.html?expired=1';
@@ -118,7 +120,7 @@ export function requireAuth() {
 // Por defecto, la sucursal del usuario logueado.
 const ACTIVE_BRANCH_KEY = 'ingenium_active_branch';
 export function activeBranchId() {
-  const explicit = sessionStorage.getItem(ACTIVE_BRANCH_KEY);
+  const explicit = localStorage.getItem(ACTIVE_BRANCH_KEY);
   if (explicit) return explicit;
   return currentSession()?.branch_id;
 }
@@ -131,7 +133,7 @@ export async function setActiveBranch(branchId) {
   if (session && session.role !== 'admin' && session.branch_id !== branchId) {
     throw new Error('No tenés permiso para cambiar de sucursal');
   }
-  sessionStorage.setItem(ACTIVE_BRANCH_KEY, branchId);
+  localStorage.setItem(ACTIVE_BRANCH_KEY, branchId);
   return b;
 }
 
