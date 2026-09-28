@@ -5,7 +5,8 @@
 import * as Sales from '../repos/sales.js';
 import * as P from '../repos/products.js';
 import * as Senas from '../repos/senas.js';
-import { getAll, get } from '../core/db.js';
+import * as Employees from '../repos/employees.js';
+import * as Settings from '../repos/settings.js';
 import { api, ApiError } from '../core/api.js';
 import { Categories, Brands } from '../repos/catalog.js';
 import { money, round2, fmtDateTime } from '../core/format.js';
@@ -99,17 +100,17 @@ async function refreshData() {
       throw e;
     }
   }
-  const [employees, methodsCfg, categories, brands] = await Promise.all([
-    getAll('employees'),
-    get('config', 'payment_methods'),
+  const [employees, methods, categories, brands] = await Promise.all([
+    Employees.list().catch(() => []),
+    Settings.getConfig('payment_methods', []),
     Categories.list().catch(() => []),
     Brands.list().catch(() => []),
   ]);
   state.products = products;
   state.stocks = stocks;
   state.customers = customers || [];
-  state.employees = employees.filter(e => !e.branch_id || e.branch_id === br);
-  state.methods = methodsCfg?.value || [];
+  state.employees = (employees || []).filter(e => e.active !== false && (!e.branchId || e.branchId === br));
+  state.methods = methods || [];
   state.categories = categories;
   state.brands = brands;
 }

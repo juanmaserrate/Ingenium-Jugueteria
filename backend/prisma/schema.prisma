@@ -487,16 +487,17 @@ model Sena {
 model Employee {
   id         String   @id
   name       String
-  lastname   String
-  branchId   String   @map("branch_id")
-  role       String
+  lastname   String?
+  branchId   String?  @map("branch_id")
+  role       String?
   email      String?
   phone      String?
   active     Boolean  @default(true)
   hourlyRate Float?   @map("hourly_rate")
+  hireDate   String?  @map("hire_date")
   createdAt  DateTime @default(now()) @map("created_at")
 
-  branch Branch  @relation(fields: [branchId], references: [id])
+  branch Branch? @relation(fields: [branchId], references: [id])
   shifts Shift[]
 
   @@index([active])
@@ -504,17 +505,17 @@ model Employee {
 }
 
 model Shift {
-  id         String    @id
-  employeeId String    @map("employee_id")
-  date       DateTime
-  checkIn    DateTime? @map("check_in")
-  checkOut   DateTime? @map("check_out")
+  id         String   @id
+  employeeId String   @map("employee_id")
+  date       String   // "YYYY-MM-DD"
+  checkIn    String?  @map("check_in") // "HH:MM"
+  checkOut   String?  @map("check_out") // "HH:MM"
   notes      String?
 
-  employee Employee @relation(fields: [employeeId], references: [id])
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   @@index([employeeId])
-  @@index([date])
+  @@index([employeeId, date])
   @@map("shifts")
 }
 
@@ -835,4 +836,14 @@ model PurchaseDocument {
 
   @@index([purchaseId])
   @@map("purchase_documents")
+}
+
+// Configuración clave/valor (payment_methods, company, credit_note_months, etc.).
+// Reemplaza el store local "config" del navegador para que sea compartido.
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
 }

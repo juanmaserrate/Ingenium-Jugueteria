@@ -22,6 +22,8 @@ import { imagesRoutes } from './routes/images.js';
 import { purchasesRoutes } from './routes/purchases.js';
 import { catalogRoutes } from './routes/catalog.js';
 import { metricsRoutes } from './routes/metrics.js';
+import { settingsRoutes } from './routes/settings.js';
+import { employeesRoutes } from './routes/employees.js';
 import { AppError } from './utils/errors.js';
 import { startSyncWorker } from './sync/worker.js';
 import { runSeed } from './scripts/seed.js';
@@ -145,6 +147,8 @@ async function main() {
   await app.register(cashRoutes, { prefix: '/api' });
   await app.register(customersRoutes, { prefix: '/api' });
   await app.register(senasRoutes, { prefix: '/api' });
+  await app.register(settingsRoutes, { prefix: '/api' });
+  await app.register(employeesRoutes, { prefix: '/api' });
   await app.register(integrationsRoutes, { prefix: '/api' });
   await app.register(imagesRoutes, { prefix: '/api' });
   await app.register(purchasesRoutes, { prefix: '/api' });

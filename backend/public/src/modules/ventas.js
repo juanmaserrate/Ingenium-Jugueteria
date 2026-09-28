@@ -5,7 +5,8 @@
 // Boxes de total facturado / devuelto / neto (estilo dashboard), según el período.
 
 import { api } from '../core/api.js';
-import { getAll, get } from '../core/db.js';
+import { getAll } from '../core/db.js';
+import * as Settings from '../repos/settings.js';
 import { money, fmtDateTime, todayKey } from '../core/format.js';
 import { activeBranchId } from '../core/auth.js';
 import { toast } from '../core/notifications.js';
@@ -69,7 +70,7 @@ async function load(el) {
       api('/api/returns'),
       getAll('products'),
       getAll('branches'),
-      get('config', 'payment_methods'),
+      Settings.getConfig('payment_methods', []),
     ]);
   } catch (e) {
     if (e?.status === 0) {
@@ -82,7 +83,7 @@ async function load(el) {
     return;
   }
 
-  state.methods = methodsCfg?.value || [];
+  state.methods = methodsCfg || [];
   state.brMap = Object.fromEntries((branches || []).map(b => [b.id, b.name]));
   // variantId -> nombre legible (para el detalle de las devoluciones, que sólo guardan variantId)
   state.vName = {};

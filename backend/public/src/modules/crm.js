@@ -3,9 +3,10 @@
 // que usa el POS. Antes este módulo usaba IndexedDB local, por eso un cliente creado
 // acá NO aparecía en el POS (y viceversa).
 
-import { get, getAll, del } from '../core/db.js';
+import { getAll, del } from '../core/db.js';
 import { api } from '../core/api.js';
 import * as Senas from '../repos/senas.js';
+import * as Settings from '../repos/settings.js';
 import { activeBranchId } from '../core/auth.js';
 import { money, fmtDate, fmtDateTime } from '../core/format.js';
 import { openModal, confirmModal } from '../components/modal.js';
@@ -310,7 +311,7 @@ async function viewCustomer(root, c) {
 
 // ===== Nueva seña (reserva con anticipo) =====
 async function newSena(el) {
-  const methodsCfg = ((await get('config', 'payment_methods'))?.value) || [];
+  const methodsCfg = (await Settings.getConfig('payment_methods', [])) || [];
   const methods = methodsCfg.length ? methodsCfg : [
     { id: 'cash', name: 'Efectivo', affects_cash: true },
     { id: 'transfer', name: 'Transferencia', affects_cash: false },

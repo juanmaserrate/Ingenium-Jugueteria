@@ -4,7 +4,7 @@
 
 import * as Returns from '../repos/returns.js';
 import * as P from '../repos/products.js';
-import { get } from '../core/db.js';
+import * as Settings from '../repos/settings.js';
 import { api } from '../core/api.js';
 import { money, round2, fmtDateTime } from '../core/format.js';
 import { openModal, confirmModal } from '../components/modal.js';
@@ -43,7 +43,7 @@ export async function mount(el) {
 async function loadData() {
   const [products, customersRaw, sales, returnsRaw, creditNotesRaw, methodsCfg] = await Promise.all([
     P.list(), api('/api/customers'), api('/api/sales'),
-    Returns.list(), Returns.listCreditNotes(), get('config', 'payment_methods'),
+    Returns.list(), Returns.listCreditNotes(), Settings.getConfig('payment_methods', []),
   ]);
   const stocks = products.flatMap(p => p._stocks || []);
   // El backend devuelve camelCase; mapeamos al shape snake_case que usan los renders.
@@ -59,7 +59,7 @@ async function loadData() {
     issued_at: cn.issuedAt, expires_at: cn.expiresAt, redeemed_at: cn.redeemedAt,
   }));
   const customers = (customersRaw || []).map(c => ({ id: c.id, name: c.name, lastname: '' }));
-  return { products, stocks, customers, sales, returns, creditNotes, methods: methodsCfg?.value || [] };
+  return { products, stocks, customers, sales, returns, creditNotes, methods: methodsCfg || [] };
 }
 
 function render(el) {

@@ -8,6 +8,7 @@ import { logout } from '../core/auth.js';
 import * as Audit from '../core/audit.js';
 import { derivePin } from '../core/crypto.js';
 import { api, ApiError } from '../core/api.js';
+import * as Settings from '../repos/settings.js';
 import { exportBackup, importBackup, markBackupNow, checkBackupReminder } from '../core/backup.js';
 import { verifyChain } from '../core/audit.js';
 
@@ -52,7 +53,7 @@ function tabBtn(id, label, icon) {
 
 // ===== EMPRESA =====
 async function renderCompany(container) {
-  const cfg = (await get('config', 'company'))?.value || { name: '', cuit: '', address: '', phone: '', email: '' };
+  const cfg = (await Settings.getConfig('company', null)) || { name: '', cuit: '', address: '', phone: '', email: '' };
   container.innerHTML = `
     <div class="ing-card p-5 max-w-2xl">
       <div class="grid grid-cols-2 gap-4">
@@ -73,7 +74,7 @@ async function renderCompany(container) {
       phone: container.querySelector('#co-phone').value,
       email: container.querySelector('#co-email').value,
     };
-    await put('config', { key: 'company', value });
+    await Settings.setConfig('company', value);
     await Audit.log({ action: 'update', entity: 'config', entity_id: 'company', after: value, description: 'Datos de empresa actualizados' });
     toast('Guardado', 'success');
   });
@@ -245,9 +246,16 @@ async function editUser(container, existing, branches) {
 
 // ===== PAYMENTS =====
 async function renderPayments(container) {
-  const cfg = await get('config', 'payment_methods');
-  const methods = cfg?.value || [];
+  const methods = (await Settings.getConfig('payment_methods', [])) || [];
+  // Medios de pago que quedaron guardados solo en esta PC (config local, antes del fix).
+  const localMethods = ((await get('config', 'payment_methods'))?.value) || [];
+  const canImportLocal = methods.length === 0 && localMethods.length > 0;
   container.innerHTML = `
+    ${canImportLocal ? `
+    <div class="ing-card p-3 mb-3 border-l-4 border-amber-500 bg-amber-50 flex items-center justify-between gap-3 flex-wrap">
+      <div class="text-sm text-[#241a0d]"><b>${localMethods.length} medio(s) de pago</b> quedaron guardados solo en esta PC. Importalos al servidor para compartirlos entre sucursales.</div>
+      <button id="pm-migrate" class="ing-btn-primary !py-1.5 !px-3 text-sm shrink-0">Importar al servidor</button>
+    </div>` : ''}
     <div class="flex justify-between items-center mb-3">
       <p class="text-sm text-[#7d6c5c]">Los métodos con "afecta caja" impactan el saldo en efectivo al cobrar.</p>
       <button id="pm-new" class="ing-btn-primary flex items-center gap-2"><span class="material-symbols-outlined text-base">add</span> Nuevo método</button>
@@ -273,13 +281,26 @@ async function renderPayments(container) {
       </table>
     </div>
   `;
+  container.querySelector('#pm-migrate')?.addEventListener('click', async (ev) => {
+    ev.currentTarget.disabled = true;
+    try {
+      await Settings.setConfig('payment_methods', localMethods);
+      // Importar también empresa y config de vales si están solo en local.
+      const localCompany = (await get('config', 'company'))?.value;
+      if (localCompany) await Settings.setConfig('company', localCompany);
+      const localCn = (await get('config', 'credit_note_months'))?.value;
+      if (localCn != null) await Settings.setConfig('credit_note_months', localCn);
+      toast('Medios de pago importados al servidor', 'success');
+      renderPayments(container);
+    } catch (e) { toast(e?.message || 'No se pudo importar', 'error'); }
+  });
   container.querySelector('#pm-new').addEventListener('click', () => editMethod(container, methods, null));
   container.querySelectorAll('[data-ed]').forEach(b => b.addEventListener('click', () => editMethod(container, methods, Number(b.dataset.ed))));
   container.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     const ok = await confirmModal({ title: 'Borrar', message: '¿Eliminar método de pago?', danger: true, confirmLabel: 'Borrar' });
     if (!ok) return;
     methods.splice(Number(b.dataset.del), 1);
-    await put('config', { key: 'payment_methods', value: methods });
+    await Settings.setConfig('payment_methods', methods);
     toast('Eliminado', 'success'); renderPayments(container);
   }));
 }
@@ -313,7 +334,7 @@ async function editMethod(container, methods, index) {
         if (!updated.name) { toast('Nombre requerido', 'warn'); return; }
         if (isNew) methods.push(updated);
         else methods[index] = updated;
-        await put('config', { key: 'payment_methods', value: methods });
+        await Settings.setConfig('payment_methods', methods);
         toast('Guardado', 'success'); close(true);
       });
     },
@@ -323,7 +344,7 @@ async function editMethod(container, methods, index) {
 
 // ===== SYSTEM =====
 async function renderSystem(container) {
-  const cnCfg = (await get('config', 'credit_note_months'))?.value || 6;
+  const cnCfg = (await Settings.getConfig('credit_note_months', 6)) || 6;
   const bkp = await checkBackupReminder();
   container.innerHTML = `
     <div class="ing-card p-5 max-w-2xl">
@@ -360,7 +381,7 @@ async function renderSystem(container) {
   `;
   container.querySelector('#sy-save').addEventListener('click', async () => {
     const v = Number(container.querySelector('#sy-cn').value) || 6;
-    await put('config', { key: 'credit_note_months', value: v });
+    await Settings.setConfig('credit_note_months', v);
     toast('Guardado', 'success');
   });
 

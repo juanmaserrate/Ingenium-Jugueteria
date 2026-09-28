@@ -2,7 +2,7 @@
 // Tabs: Movimientos | Gastos | Apertura/Cierre.
 
 import * as Cash from '../repos/cash.js';
-import { getAll, get } from '../core/db.js';
+import * as Settings from '../repos/settings.js';
 import { money, fmtDateTime, todayKey } from '../core/format.js';
 import { activeBranchId, currentSession } from '../core/auth.js';
 import { openModal, confirmModal } from '../components/modal.js';
@@ -35,11 +35,10 @@ async function render(el) {
     }
     throw e;
   }
-  const methodsCfg = await get('config', 'payment_methods');
+  const methods = (await Settings.getConfig('payment_methods', [])) || [];
   // movesAsc viene ascendente (con balance_after correcto); para mostrar, descendente.
   const moves = movesAsc.slice().sort((a, b) => b.datetime.localeCompare(a.datetime));
   const balance = movesAsc.reduce((s, m) => s + (m.amount_in || 0) - (m.amount_out || 0), 0);
-  const methods = methodsCfg?.value || [];
 
   const todayMoves = moves.filter(m => m.datetime.startsWith(todayKey()));
   const todayIn = todayMoves.reduce((s, m) => s + (m.amount_in || 0), 0);
