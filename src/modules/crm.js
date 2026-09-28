@@ -1,16 +1,23 @@
-// CRM — clientes con CRUD, búsqueda, historial de compras, vales y cumpleaños.
+// CRM — clientes con CRUD, búsqueda, historial de compras, señas y cumpleaños.
+// MIGRADO A "TODO ONLINE": clientes viven en el backend (Postgres), la misma base
+// que usa el POS. Antes este módulo usaba IndexedDB local, por eso un cliente creado
+// acá NO aparecía en el POS (y viceversa).
 
-import { getAll, get, put, del, newId } from '../core/db.js';
+import { get } from '../core/db.js';
 import { api } from '../core/api.js';
 import * as Senas from '../repos/senas.js';
 import { activeBranchId } from '../core/auth.js';
 import { money, fmtDate, fmtDateTime } from '../core/format.js';
 import { openModal, confirmModal } from '../components/modal.js';
 import { toast } from '../core/notifications.js';
-import * as Audit from '../core/audit.js';
 import { exportSimple } from '../core/xlsx.js';
 import { emptyRow } from '../components/empty-state.js';
 import { loadFilter, saveFilter } from '../core/filter-state.js';
+
+// Escape para incrustar texto de usuario en innerHTML (nombres, notas, email, etc.).
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 const state = loadFilter('crm', {
   search: '',
@@ -20,33 +27,41 @@ const state = loadFilter('crm', {
 export async function mount(el) { await render(el); }
 
 async function render(el) {
-  const [customers, sales, creditNotes] = await Promise.all([getAll('customers'), getAll('sales'), getAll('credit_notes')]);
+  // Clientes y ventas del backend (fuente de verdad, compartida con el POS).
+  const [customers, sales] = await Promise.all([
+    api('/api/customers').catch(() => []),
+    api('/api/sales?status=confirmed&limit=5000').catch(() => []),
+  ]);
   const q = state.search.toLowerCase();
   const thisMonth = new Date().getMonth() + 1;
-  const list = customers.filter(c => {
-    if (q && !(`${c.name} ${c.lastname || ''}`.toLowerCase().includes(q) || (c.email || '').toLowerCase().includes(q) || (c.phone || '').includes(q))) return false;
+  const list = (customers || []).filter(c => {
+    if (q && !(`${c.name}`.toLowerCase().includes(q) || (c.email || '').toLowerCase().includes(q) || (c.phone || '').includes(q) || (c.documentNumber || '').includes(q))) return false;
     if (state.onlyBirthdayThisMonth) {
       if (!c.birthday) return false;
       const m = new Date(c.birthday).getMonth() + 1;
       if (m !== thisMonth) return false;
     }
     return true;
-  }).sort((a, b) => (a.name + a.lastname).localeCompare(b.name + b.lastname));
+  }).sort((a, b) => String(a.name).localeCompare(String(b.name), 'es', { sensitivity: 'base' }));
 
-  const stats = customers.map(c => {
-    const mySales = sales.filter(s => s.customer_id === c.id);
-    const myVales = creditNotes.filter(v => v.customer_id === c.id && !v.redeemed_at);
-    const spent = mySales.reduce((s, x) => s + (x.total || 0), 0);
-    const valesAmt = myVales.reduce((s, v) => s + (Number(v.amount) || 0), 0);
-    return { id: c.id, salesCount: mySales.length, spent, valesAmt, lastPurchase: mySales.sort((a,b) => b.datetime.localeCompare(a.datetime))[0]?.datetime };
-  });
-  const statsMap = Object.fromEntries(stats.map(s => [s.id, s]));
+  // Estadísticas por cliente derivadas de las ventas reales del backend.
+  const statsMap = {};
+  for (const s of (sales || [])) {
+    const cid = s.customerId;
+    if (!cid) continue;
+    const e = statsMap[cid] || { salesCount: 0, spent: 0, lastPurchase: null };
+    e.salesCount++;
+    e.spent += Number(s.total) || 0;
+    const dt = s.datetime;
+    if (dt && (!e.lastPurchase || String(dt) > String(e.lastPurchase))) e.lastPurchase = dt;
+    statsMap[cid] = e;
+  }
 
   el.innerHTML = `
     <div class="mb-6 flex justify-between items-start gap-4">
       <div>
         <h1 class="text-3xl font-black text-[#241a0d]">Clientes</h1>
-        <p class="text-sm text-[#7d6c5c] mt-1">${customers.length} clientes · ${list.length} visibles</p>
+        <p class="text-sm text-[#7d6c5c] mt-1">${(customers || []).length} clientes · ${list.length} visibles</p>
       </div>
       <div class="flex gap-2">
         <button id="cr-sena" class="ing-btn-secondary flex items-center gap-2"><span class="material-symbols-outlined text-base">savings</span> Nueva seña</button>
@@ -56,7 +71,7 @@ async function render(el) {
     </div>
 
     <div class="ing-card p-3 mb-4 flex gap-3 items-center">
-      <input id="cr-q" placeholder="Buscar por nombre, email o teléfono…" value="${state.search}" class="ing-input flex-1" />
+      <input id="cr-q" placeholder="Buscar por nombre, email, teléfono o documento…" value="${esc(state.search)}" class="ing-input flex-1" />
       <label class="flex items-center gap-2 text-sm cursor-pointer"><input type="checkbox" id="cr-bd" ${state.onlyBirthdayThisMonth?'checked':''} /> Cumpleaños este mes</label>
     </div>
 
@@ -64,8 +79,8 @@ async function render(el) {
       <table class="ing-table w-full">
         <thead>
           <tr>
-            <th>Nombre</th><th>Contacto</th><th>Cumpleaños</th>
-            <th class="text-right">Compras</th><th class="text-right">Gastado</th><th class="text-right">Vales</th>
+            <th>Nombre</th><th>Documento</th><th>Contacto</th><th>Cumpleaños</th>
+            <th class="text-right">Compras</th><th class="text-right">Gastado</th>
             <th>Última compra</th><th></th>
           </tr>
         </thead>
@@ -74,12 +89,12 @@ async function render(el) {
             const s = statsMap[c.id] || {};
             return `
               <tr>
-                <td class="font-bold">${c.name} ${c.lastname || ''}</td>
-                <td class="text-xs">${c.email || '—'}${c.phone ? `<br>${c.phone}`:''}</td>
+                <td class="font-bold">${esc(c.name)}</td>
+                <td class="text-xs">${c.documentNumber ? esc((c.documentType || 'Doc') + ' ' + c.documentNumber) : '—'}</td>
+                <td class="text-xs">${esc(c.email || '—')}${c.phone ? `<br>${esc(c.phone)}`:''}</td>
                 <td class="text-xs">${c.birthday ? fmtDate(c.birthday) : '—'}</td>
                 <td class="text-right">${s.salesCount || 0}</td>
                 <td class="text-right font-bold">${money(s.spent || 0)}</td>
-                <td class="text-right ${s.valesAmt ? 'text-[#d82f1e] font-bold' : 'text-[#7d6c5c]'}">${money(s.valesAmt || 0)}</td>
                 <td class="text-xs">${s.lastPurchase ? fmtDate(s.lastPurchase) : '—'}</td>
                 <td class="text-right">
                   <button data-view="${c.id}" class="text-xs text-[#d82f1e] hover:underline">Ver</button>
@@ -88,7 +103,7 @@ async function render(el) {
                 </td>
               </tr>
             `;
-          }).join('') : emptyRow(8, { icon: 'group_add', title: state.search ? 'Sin resultados' : 'Sin clientes', hint: state.search ? 'Probá con otro término de búsqueda.' : 'Cargá al primer cliente para llevar historial, vales y cumpleaños.', ctaLabel: state.search ? '' : 'Nuevo cliente', ctaAttr: 'data-empty-new="cust"' })}
+          }).join('') : emptyRow(8, { icon: 'group_add', title: state.search ? 'Sin resultados' : 'Sin clientes', hint: state.search ? 'Probá con otro término de búsqueda.' : 'Cargá al primer cliente para llevar historial, señas y cumpleaños.', ctaLabel: state.search ? '' : 'Nuevo cliente', ctaAttr: 'data-empty-new="cust"' })}
         </tbody>
       </table>
     </div>
@@ -101,78 +116,94 @@ async function render(el) {
   el.querySelector('[data-empty-new="cust"]')?.addEventListener('click', () => editCustomer(el, null));
   el.querySelector('#cr-export').addEventListener('click', () => {
     exportSimple(`clientes.xlsx`, list.map(c => ({
-      Nombre: c.name, Apellido: c.lastname || '', Email: c.email || '', Telefono: c.phone || '',
-      Cumpleanos: c.birthday || '', Direccion: c.address || '',
+      Nombre: c.name, TipoDoc: c.documentType || '', Documento: c.documentNumber || '',
+      Email: c.email || '', Telefono: c.phone || '',
+      Cumpleanos: c.birthday ? fmtDate(c.birthday) : '', Direccion: c.address || '',
       Compras: statsMap[c.id]?.salesCount || 0, Gastado: statsMap[c.id]?.spent || 0,
     })), 'Clientes');
   });
-  el.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => { const c = customers.find(x => x.id === b.dataset.view); if (c) viewCustomer(el, c, sales, creditNotes); }));
-  el.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => { const c = customers.find(x => x.id === b.dataset.edit); if (c) editCustomer(el, c); }));
+  el.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => { const c = (customers || []).find(x => x.id === b.dataset.view); if (c) viewCustomer(el, c); }));
+  el.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => { const c = (customers || []).find(x => x.id === b.dataset.edit); if (c) editCustomer(el, c); }));
   el.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     const ok = await confirmModal({ title: 'Borrar', message: '¿Eliminar cliente?', danger: true, confirmLabel: 'Borrar' });
     if (!ok) return;
-    await del('customers', b.dataset.del);
-    await Audit.log({ action: 'delete', entity: 'cliente', entity_id: b.dataset.del, description: 'Cliente eliminado' });
-    toast('Cliente eliminado', 'success'); render(el);
+    try {
+      await api(`/api/customers/${encodeURIComponent(b.dataset.del)}`, { method: 'DELETE' });
+      toast('Cliente eliminado', 'success'); render(el);
+    } catch (e) {
+      toast(e?.message || 'No se pudo eliminar', 'error');
+    }
   }));
 }
 
 async function editCustomer(root, existing) {
   const isNew = !existing;
-  const c = existing || { id: newId('cus'), name: '', lastname: '', email: '', phone: '', address: '', birthday: '', note: '' };
+  const c = existing || { name: '', email: '', phone: '', address: '', birthday: '', notes: '', documentType: 'DNI', documentNumber: '' };
+  const bd = c.birthday ? String(c.birthday).slice(0, 10) : '';
+  const dtypes = ['DNI', 'CUIT', 'CUIL', 'Pasaporte'];
   await openModal({
     title: isNew ? 'Nuevo cliente' : 'Editar cliente',
     size: 'md',
     bodyHTML: `
       <div class="grid grid-cols-2 gap-3">
-        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Nombre *</label><input id="cu-name" value="${c.name||''}" class="ing-input w-full mt-1" /></div>
-        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Apellido</label><input id="cu-last" value="${c.lastname||''}" class="ing-input w-full mt-1" /></div>
-        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Email</label><input id="cu-email" type="email" value="${c.email||''}" class="ing-input w-full mt-1" /></div>
-        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Teléfono</label><input id="cu-phone" value="${c.phone||''}" class="ing-input w-full mt-1" /></div>
-        <div class="col-span-2"><label class="text-xs font-bold text-[#7d6c5c] uppercase">Dirección</label><input id="cu-addr" value="${c.address||''}" class="ing-input w-full mt-1" /></div>
-        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Cumpleaños</label><input id="cu-bd" type="date" value="${c.birthday||''}" class="ing-input w-full mt-1" /></div>
-        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Documento / CUIT</label><input id="cu-doc" value="${c.document||''}" class="ing-input w-full mt-1" /></div>
-        <div class="col-span-2"><label class="text-xs font-bold text-[#7d6c5c] uppercase">Nota</label><textarea id="cu-note" class="ing-input w-full mt-1" rows="2">${c.note||''}</textarea></div>
+        <div class="col-span-2"><label class="text-xs font-bold text-[#7d6c5c] uppercase">Nombre y apellido *</label><input id="cu-name" value="${esc(c.name)}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Tipo doc.</label>
+          <select id="cu-dtype" class="ing-input w-full mt-1">${dtypes.map(t => `<option ${(c.documentType||'DNI')===t?'selected':''}>${t}</option>`).join('')}</select></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Documento</label><input id="cu-doc" value="${esc(c.documentNumber)}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Email</label><input id="cu-email" type="email" value="${esc(c.email)}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Teléfono</label><input id="cu-phone" value="${esc(c.phone)}" class="ing-input w-full mt-1" /></div>
+        <div class="col-span-2"><label class="text-xs font-bold text-[#7d6c5c] uppercase">Dirección</label><input id="cu-addr" value="${esc(c.address)}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Cumpleaños</label><input id="cu-bd" type="date" value="${bd}" class="ing-input w-full mt-1" /></div>
+        <div class="col-span-2"><label class="text-xs font-bold text-[#7d6c5c] uppercase">Nota</label><textarea id="cu-note" class="ing-input w-full mt-1" rows="2">${esc(c.notes)}</textarea></div>
       </div>
     `,
     footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="ok">${isNew?'Crear':'Guardar'}</button>`,
     onOpen: (m, close) => {
       m.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
-      m.querySelector('[data-act="ok"]').addEventListener('click', async () => {
-        c.name = m.querySelector('#cu-name').value.trim();
-        if (!c.name) { toast('Nombre requerido', 'warn'); return; }
-        c.lastname = m.querySelector('#cu-last').value.trim();
-        c.email = m.querySelector('#cu-email').value.trim();
-        c.phone = m.querySelector('#cu-phone').value.trim();
-        c.address = m.querySelector('#cu-addr').value.trim();
-        c.birthday = m.querySelector('#cu-bd').value;
-        c.document = m.querySelector('#cu-doc').value.trim();
-        c.note = m.querySelector('#cu-note').value;
-        if (isNew) c.created_at = new Date().toISOString();
-        await put('customers', c);
-        await Audit.log({ action: isNew?'create':'update', entity: 'cliente', entity_id: c.id, after: c, description: `${c.name} ${c.lastname||''}` });
-        toast(isNew?'Cliente creado':'Actualizado', 'success'); close(true);
+      const okBtn = m.querySelector('[data-act="ok"]');
+      okBtn.addEventListener('click', async () => {
+        const name = m.querySelector('#cu-name').value.trim();
+        if (!name) { toast('Nombre requerido', 'warn'); return; }
+        const body = {
+          name,
+          documentType: m.querySelector('#cu-dtype').value,
+          documentNumber: m.querySelector('#cu-doc').value.trim() || null,
+          email: m.querySelector('#cu-email').value.trim() || null,
+          phone: m.querySelector('#cu-phone').value.trim() || null,
+          address: m.querySelector('#cu-addr').value.trim() || null,
+          birthday: m.querySelector('#cu-bd').value || null,
+          notes: m.querySelector('#cu-note').value.trim() || null,
+        };
+        if (okBtn.disabled) return;
+        okBtn.disabled = true;
+        try {
+          if (isNew) await api('/api/customers', { method: 'POST', body });
+          else await api(`/api/customers/${encodeURIComponent(c.id)}`, { method: 'PUT', body });
+          toast(isNew ? 'Cliente creado' : 'Actualizado', 'success');
+          close(true);
+          render(root);
+        } catch (e) {
+          toast(e?.message || 'No se pudo guardar', 'error');
+          okBtn.disabled = false;
+        }
       });
     },
   });
-  render(root);
 }
 
-async function viewCustomer(root, c, sales, creditNotes) {
-  const mySales = sales.filter(s => s.customer_id === c.id).sort((a,b) => b.datetime.localeCompare(a.datetime));
-  const myVales = creditNotes.filter(v => v.customer_id === c.id);
-  const spent = mySales.reduce((s, x) => s + (x.total || 0), 0);
+async function viewCustomer(root, c) {
+  // Historial real desde el backend.
+  const mySales = (await api(`/api/customers/${encodeURIComponent(c.id)}/sales`).catch(() => [])) || [];
+  const spent = mySales.reduce((s, x) => s + (Number(x.total) || 0), 0);
   const avgTicket = mySales.length ? spent / mySales.length : 0;
   const lastPurchase = mySales[0]?.datetime;
   const daysSinceLast = lastPurchase ? Math.floor((Date.now() - new Date(lastPurchase).getTime()) / 86400000) : null;
-  const valesActivos = myVales.filter(v => !v.redeemed_at);
-  const creditoDisponible = valesActivos.reduce((s, v) => s + (Number(v.amount) || 0), 0);
 
-  // Top productos comprados (U-4)
+  // Top productos comprados (a partir de los items de las ventas).
   const byProduct = {};
   for (const s of mySales) {
     for (const it of (s.items || [])) {
-      const k = it.name || it.product_id;
+      const k = it.productNameSnap || it.variantId || 'Producto';
       if (!byProduct[k]) byProduct[k] = { qty: 0, spent: 0 };
       byProduct[k].qty += Number(it.qty) || 0;
       byProduct[k].spent += Number(it.subtotal) || 0;
@@ -181,7 +212,7 @@ async function viewCustomer(root, c, sales, creditNotes) {
   const topProducts = Object.entries(byProduct).sort((a, b) => b[1].qty - a[1].qty).slice(0, 5);
 
   await openModal({
-    title: `${c.name} ${c.lastname || ''}`,
+    title: `${c.name}`,
     size: 'lg',
     bodyHTML: `
       <div class="grid grid-cols-4 gap-3 mb-4">
@@ -190,24 +221,20 @@ async function viewCustomer(root, c, sales, creditNotes) {
         <div class="ing-card p-3"><div class="text-[10px] font-black uppercase text-[#7d6c5c]">Ticket promedio</div><div class="text-2xl font-black">${money(avgTicket)}</div></div>
         <div class="ing-card p-3"><div class="text-[10px] font-black uppercase text-[#7d6c5c]">Última compra</div><div class="text-lg font-black">${lastPurchase ? fmtDate(lastPurchase) : '—'}</div><div class="text-[10px] text-[#7d6c5c]">${daysSinceLast != null ? `hace ${daysSinceLast} d` : ''}</div></div>
       </div>
-      <div class="grid grid-cols-2 gap-3 mb-4">
-        <div class="ing-card p-3"><div class="text-[10px] font-black uppercase text-[#7d6c5c]">Vales activos</div><div class="text-xl font-black text-green-700">${valesActivos.length}</div></div>
-        <div class="ing-card p-3"><div class="text-[10px] font-black uppercase text-[#7d6c5c]">Crédito disponible</div><div class="text-xl font-black text-green-700">${money(creditoDisponible)}</div></div>
-      </div>
       <div class="space-y-2 text-sm mb-4">
-        ${c.email ? `<div><strong>Email:</strong> ${c.email}</div>` : ''}
-        ${c.phone ? `<div><strong>Tel:</strong> ${c.phone}</div>` : ''}
-        ${c.address ? `<div><strong>Dir:</strong> ${c.address}</div>` : ''}
-        ${c.document ? `<div><strong>Doc:</strong> ${c.document}</div>` : ''}
+        ${c.documentNumber ? `<div><strong>${esc(c.documentType || 'Doc')}:</strong> ${esc(c.documentNumber)}</div>` : ''}
+        ${c.email ? `<div><strong>Email:</strong> ${esc(c.email)}</div>` : ''}
+        ${c.phone ? `<div><strong>Tel:</strong> ${esc(c.phone)}</div>` : ''}
+        ${c.address ? `<div><strong>Dir:</strong> ${esc(c.address)}</div>` : ''}
         ${c.birthday ? `<div><strong>Cumpleaños:</strong> ${fmtDate(c.birthday)}</div>` : ''}
-        ${c.note ? `<div class="p-2 bg-[#fff8f4] rounded">${c.note}</div>` : ''}
+        ${c.notes ? `<div class="p-2 bg-[#fff8f4] rounded">${esc(c.notes)}</div>` : ''}
       </div>
       ${topProducts.length ? `
         <h4 class="font-black mt-4 mb-2">Top productos</h4>
         <div class="border border-[#fff1e6] rounded-xl overflow-hidden mb-4">
           ${topProducts.map(([name, v]) => `
             <div class="flex justify-between items-center px-3 py-2 border-b border-[#fff1e6] last:border-0">
-              <div class="break-words leading-tight flex-1">${name}</div>
+              <div class="break-words leading-tight flex-1">${esc(name)}</div>
               <div class="flex gap-4 shrink-0">
                 <span class="text-xs text-[#7d6c5c]">${v.qty} u.</span>
                 <span class="font-bold">${money(v.spent)}</span>
@@ -225,17 +252,6 @@ async function viewCustomer(root, c, sales, creditNotes) {
           </div>
         `).join('') : '<div class="p-3 text-center text-[#7d6c5c] text-sm">Sin compras</div>'}
       </div>
-      ${myVales.length ? `
-        <h4 class="font-black mt-4 mb-2">Vales</h4>
-        <div class="border border-[#fff1e6] rounded-xl overflow-hidden">
-          ${myVales.map(v => `
-            <div class="flex justify-between items-center px-3 py-2 border-b border-[#fff1e6] last:border-0">
-              <div><span class="font-mono font-bold text-[#d82f1e]">${v.code}</span></div>
-              <div><span class="font-bold">${money(v.amount)}</span> <span class="text-xs ${v.redeemed_at?'text-[#7d6c5c]':'text-green-700'}">${v.redeemed_at?'Canjeado':'Activo'}</span></div>
-            </div>
-          `).join('')}
-        </div>
-      ` : ''}
     `,
     footerHTML: `<button class="ing-btn-primary" data-act="close">Cerrar</button>`,
     onOpen: (m, close) => { m.querySelector('[data-act="close"]').addEventListener('click', () => close(true)); },
@@ -264,7 +280,7 @@ async function newSena(el) {
       <label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1 mt-3">Monto de la seña *</label>
       <input id="sena-amt" type="number" step="0.01" min="0" class="ing-input w-full" placeholder="0" />
       <label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1 mt-3">Medio de pago</label>
-      <select id="sena-method" class="ing-input w-full">${methods.map(m => `<option value="${m.id}" data-cash="${m.affects_cash ? 1 : 0}">${m.name}</option>`).join('')}</select>
+      <select id="sena-method" class="ing-input w-full">${methods.map(m => `<option value="${m.id}" data-cash="${m.affects_cash ? 1 : 0}">${esc(m.name)}</option>`).join('')}</select>
       <div class="text-[11px] text-[#7d6c5c] mt-1">Si es en efectivo, la seña entra a la caja al crearla.</div>
       <label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1 mt-3">Producto / nota</label>
       <input id="sena-note" class="ing-input w-full" placeholder="Qué reserva (opcional)" />

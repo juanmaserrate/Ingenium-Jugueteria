@@ -111,3 +111,21 @@ export async function updateCustomer(id: string, data: Partial<CustomerInput>, u
   await logAudit({ userId, action: AUDIT_ACTIONS.UPDATE, entity: 'customer', entityId: id, before, after: updated });
   return updated;
 }
+
+// Borra un cliente SOLO si no tiene historial (ventas, devoluciones o señas).
+// Si lo tiene, no se puede borrar sin romper las FK: se avisa con un error claro.
+export async function deleteCustomer(id: string, userId?: string) {
+  const before = await prisma.customer.findUnique({ where: { id } });
+  if (!before) throw new ValidationError('Cliente no encontrado');
+  const [sales, returns, senas] = await Promise.all([
+    prisma.sale.count({ where: { customerId: id } }),
+    prisma.return.count({ where: { customerId: id } }),
+    prisma.sena.count({ where: { customerId: id } }),
+  ]);
+  if (sales > 0 || returns > 0 || senas > 0) {
+    throw new ValidationError('No se puede borrar: el cliente tiene ventas, devoluciones o señas asociadas.');
+  }
+  await prisma.customer.delete({ where: { id } });
+  await logAudit({ userId, action: AUDIT_ACTIONS.DELETE, entity: 'customer', entityId: id, before });
+  return { ok: true };
+}

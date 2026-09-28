@@ -5,6 +5,7 @@ import {
   getCustomer,
   createCustomer,
   updateCustomer,
+  deleteCustomer,
   findByDocument,
 } from '../services/customers.js';
 import { listSales } from '../services/sales.js';
@@ -54,5 +55,10 @@ export async function customersRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const body = schema.partial().parse(req.body);
     return updateCustomer(id, body, req.user.userId);
+  });
+
+  app.delete('/customers/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    return deleteCustomer(id, req.user.userId);
   });
 }
