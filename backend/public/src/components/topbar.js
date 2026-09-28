@@ -3,6 +3,10 @@
 import * as Auth from '../core/auth.js';
 import * as Notif from '../core/notifications.js';
 import * as Cash from '../repos/cash.js';
+import * as Products from '../repos/products.js';
+import * as Settings from '../repos/settings.js';
+import { syncCatalog } from '../repos/catalog.js';
+import { navigate } from '../core/router.js';
 import { on, EV, emit } from '../core/events.js';
 
 const PAGE_LABELS = {
@@ -65,6 +69,9 @@ export async function mountTopbar(el) {
           ${cashOpen ? 'Caja abierta' : 'Caja cerrada'}
         </a>
         <div class="flex items-center gap-2">
+          <button id="tb-refresh" title="Actualizar: traer los últimos cambios del servidor" class="p-2.5 text-[#7d6c5c] hover:bg-[#fff1e6] rounded-full transition-all">
+            <span class="material-symbols-outlined">refresh</span>
+          </button>
           <button id="tb-theme" title="Modo oscuro / claro" class="p-2.5 text-[#7d6c5c] hover:bg-[#fff1e6] rounded-full transition-all">
             <span class="material-symbols-outlined">${document.documentElement.classList.contains('dark') ? 'light_mode' : 'dark_mode'}</span>
           </button>
@@ -116,6 +123,30 @@ export async function mountTopbar(el) {
           toast(err.message || 'No se pudo cambiar la sucursal', 'error');
         }
       });
+    });
+    el.querySelector('#tb-refresh').addEventListener('click', async () => {
+      const btn = el.querySelector('#tb-refresh');
+      if (btn.dataset.busy) return;
+      btn.dataset.busy = '1';
+      const icon = btn.querySelector('.material-symbols-outlined');
+      icon.classList.add('animate-spin');
+      try {
+        // 1) Vaciar cachés en memoria (productos, config) y resincronizar el
+        //    catálogo (categorías/marcas/proveedores) desde el servidor.
+        try { Settings.invalidate?.(); } catch {}
+        try { Products.clearCache?.(); } catch {}
+        try { await syncCatalog(); } catch {}
+        // 2) Re-montar el módulo actual limpio → vuelve a leer del servidor.
+        const cur = location.hash.slice(1) || '/dashboard';
+        await navigate(cur);
+        Notif.toast('Datos actualizados', 'success');
+      } catch (e) {
+        Notif.toast('No se pudo actualizar: ' + (e?.message || ''), 'error');
+      } finally {
+        // Re-renderiza el topbar (refresca caja/campana). Reemplaza este nodo,
+        // así que no hace falta limpiar el spinner manualmente.
+        render();
+      }
     });
     el.querySelector('#tb-bell').addEventListener('click', () => openBellPanel());
     el.querySelector('#tb-theme').addEventListener('click', () => {

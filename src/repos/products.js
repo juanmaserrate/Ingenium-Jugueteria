@@ -147,6 +147,13 @@ export async function list() {
   return front;
 }
 
+// Vacía los cachés en memoria (lista/índice + dump de TN). Lo usa el botón
+// global "Actualizar" para forzar que la próxima lectura traiga todo del servidor.
+export function clearCache() {
+  _cache = { list: [], byId: new Map(), at: 0 };
+  _tnCatalog = null;
+}
+
 // Stock plano [{product_id, branch_id, qty, reserved_qty}] derivado de la última lista.
 // Si la cache está vacía, trae primero.
 export async function listStock() {
