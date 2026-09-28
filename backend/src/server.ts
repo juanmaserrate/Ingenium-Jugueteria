@@ -50,12 +50,12 @@ async function main() {
 
   // Rate limiting: límite global amplio + límite estricto por ruta (login) vía
   // `config.rateLimit` en las rutas de auth. Protege contra fuerza bruta.
+  // Rate-limit NO global: solo se aplica donde una ruta lo pide por config
+  // (las de login). Así no throttlea la carga de assets ni el uso normal del POS.
   const rateLimit = (await import('@fastify/rate-limit')).default;
   await app.register(rateLimit, {
-    global: true,
-    max: 600,
+    global: false,
     timeWindow: '1 minute',
-    // Sin token todavía (login) → por IP; con token, por usuario.
     keyGenerator: (req: any) => req.user?.userId || req.ip,
   });
 
