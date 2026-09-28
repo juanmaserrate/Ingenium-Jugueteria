@@ -3,7 +3,7 @@
 // que usa el POS. Antes este módulo usaba IndexedDB local, por eso un cliente creado
 // acá NO aparecía en el POS (y viceversa).
 
-import { get } from '../core/db.js';
+import { get, getAll, del } from '../core/db.js';
 import { api } from '../core/api.js';
 import * as Senas from '../repos/senas.js';
 import { activeBranchId } from '../core/auth.js';
@@ -32,6 +32,9 @@ async function render(el) {
     api('/api/customers').catch(() => []),
     api('/api/sales?status=confirmed&limit=5000').catch(() => []),
   ]);
+  // Clientes que quedaron guardados SOLO en esta PC (creados antes de migrar el
+  // módulo al servidor). Se ofrecen para importar al backend.
+  const localCustomers = (await getAll('customers').catch(() => [])) || [];
   const q = state.search.toLowerCase();
   const thisMonth = new Date().getMonth() + 1;
   const list = (customers || []).filter(c => {
@@ -69,6 +72,12 @@ async function render(el) {
         <button id="cr-export" class="ing-btn-secondary flex items-center gap-2"><span class="material-symbols-outlined text-base">download</span> XLSX</button>
       </div>
     </div>
+
+    ${localCustomers.length ? `
+    <div class="ing-card p-3 mb-4 border-l-4 border-amber-500 bg-amber-50 flex items-center justify-between gap-3 flex-wrap">
+      <div class="text-sm text-[#241a0d]"><b>${localCustomers.length} cliente(s)</b> quedaron guardados solo en esta PC (creados antes de la actualización). Importalos al servidor para que aparezcan en el POS y en las demás PC.</div>
+      <button id="cr-migrate" class="ing-btn-primary !py-1.5 !px-3 text-sm shrink-0">Importar ${localCustomers.length} al servidor</button>
+    </div>` : ''}
 
     <div class="ing-card p-3 mb-4 flex gap-3 items-center">
       <input id="cr-q" placeholder="Buscar por nombre, email, teléfono o documento…" value="${esc(state.search)}" class="ing-input flex-1" />
@@ -113,6 +122,7 @@ async function render(el) {
   el.querySelector('#cr-bd').addEventListener('change', (ev) => { state.onlyBirthdayThisMonth = ev.target.checked; saveFilter('crm', state); render(el); });
   el.querySelector('#cr-new').addEventListener('click', () => editCustomer(el, null));
   el.querySelector('#cr-sena').addEventListener('click', () => newSena(el));
+  el.querySelector('#cr-migrate')?.addEventListener('click', (ev) => migrateLocalCustomers(el, localCustomers, ev.currentTarget));
   el.querySelector('[data-empty-new="cust"]')?.addEventListener('click', () => editCustomer(el, null));
   el.querySelector('#cr-export').addEventListener('click', () => {
     exportSimple(`clientes.xlsx`, list.map(c => ({
@@ -134,6 +144,46 @@ async function render(el) {
       toast(e?.message || 'No se pudo eliminar', 'error');
     }
   }));
+}
+
+// Sube al backend los clientes que quedaron solo en esta PC (IndexedDB), creados
+// antes de migrar el módulo. Idempotente: si el documento ya existe en el servidor
+// lo cuenta como "ya estaba" y borra la copia local igual.
+async function migrateLocalCustomers(root, localCustomers, btn) {
+  if (btn) { if (btn.disabled) return; btn.disabled = true; btn.textContent = 'Importando…'; }
+  let imported = 0, skipped = 0, failed = 0;
+  for (const c of localCustomers) {
+    const name = `${c.name || ''} ${c.lastname || ''}`.trim();
+    if (!name) { // sin nombre no se puede: descartamos la copia local
+      try { await del('customers', c.id); } catch { /* noop */ }
+      skipped++; continue;
+    }
+    const body = {
+      name,
+      documentType: c.documentType || 'DNI',
+      documentNumber: (c.document || c.documentNumber || '').toString().trim() || null,
+      email: c.email || null,
+      phone: c.phone || null,
+      address: c.address || null,
+      birthday: c.birthday || null,
+      notes: c.note || c.notes || null,
+    };
+    try {
+      await api('/api/customers', { method: 'POST', body });
+      imported++;
+      try { await del('customers', c.id); } catch { /* noop */ }
+    } catch (e) {
+      // Documento duplicado = ya está en el servidor → limpiamos la copia local.
+      if (/ya existe/i.test(e?.message || '')) {
+        skipped++;
+        try { await del('customers', c.id); } catch { /* noop */ }
+      } else {
+        failed++;
+      }
+    }
+  }
+  toast(`Importados: ${imported} · ya estaban: ${skipped}${failed ? ` · con error: ${failed}` : ''}`, failed ? 'warn' : 'success');
+  render(root);
 }
 
 async function editCustomer(root, existing) {
