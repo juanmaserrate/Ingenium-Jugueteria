@@ -47,10 +47,9 @@ const userSyncSchema = z
     pinIters: u.pinIters ?? u.pin_iters,
     active: u.active ?? true,
   }))
-  .refine((u) => !!u.branchId, { message: 'branchId required' })
-  .refine((u) => !!u.pinSalt && !!u.pinHash && !!u.pinIters, {
-    message: 'pinSalt/pinHash/pinIters required (usar derivePin en el frontend)',
-  });
+  .refine((u) => !!u.branchId, { message: 'branchId required' });
+  // El PIN es opcional: requerido al crear un usuario nuevo, pero al ACTUALIZAR
+  // uno existente (p. ej. cambiar nombre/rol) se conserva el PIN actual si no viene.
 
 export async function authRoutes(app: FastifyInstance) {
   // Login con PIN (mismo flujo que el frontend actual)
@@ -109,6 +108,11 @@ export async function authRoutes(app: FastifyInstance) {
     const u = userSyncSchema.parse(request.body);
     const branch = await prisma.branch.findUnique({ where: { id: u.branchId } });
     if (!branch) throw new ValidationError(`Sucursal ${u.branchId} no existe`);
+    const hasPin = !!u.pinSalt && !!u.pinHash && !!u.pinIters;
+    const existing = await prisma.user.findUnique({ where: { id: u.id } });
+    if (!existing && !hasPin) throw new ValidationError('PIN requerido para crear el usuario');
+    // Solo tocamos el PIN si vino uno nuevo; al actualizar sin PIN, se conserva.
+    const pinData = hasPin ? { pinSalt: u.pinSalt!, pinHash: u.pinHash!, pinIters: u.pinIters! } : {};
     const saved = await prisma.user.upsert({
       where: { id: u.id },
       create: {
@@ -118,10 +122,8 @@ export async function authRoutes(app: FastifyInstance) {
         lastname: u.lastname,
         role: u.role,
         email: u.email,
-        pinSalt: u.pinSalt!,
-        pinHash: u.pinHash!,
-        pinIters: u.pinIters!,
         active: u.active,
+        ...(pinData as { pinSalt: string; pinHash: string; pinIters: number }),
       },
       update: {
         branchId: u.branchId,
@@ -129,14 +131,22 @@ export async function authRoutes(app: FastifyInstance) {
         lastname: u.lastname,
         role: u.role,
         email: u.email,
-        pinSalt: u.pinSalt!,
-        pinHash: u.pinHash!,
-        pinIters: u.pinIters!,
         active: u.active,
+        ...pinData,
       },
       select: { id: true, branchId: true, name: true, role: true, active: true },
     });
     return { ok: true, user: saved };
+  });
+
+  // Lista de usuarios (para Configuración). Solo admin. Sin datos sensibles (PIN).
+  app.get('/auth/users', { preHandler: [app.authenticate] }, async (request) => {
+    if (request.user.role !== 'admin') throw new UnauthorizedError('Solo admin');
+    return prisma.user.findMany({
+      where: { active: true },
+      select: { id: true, name: true, lastname: true, role: true, branchId: true, email: true, active: true },
+      orderBy: { name: 'asc' },
+    });
   });
 
   app.post('/auth/users/:id/deactivate', { preHandler: [app.authenticate] }, async (request) => {

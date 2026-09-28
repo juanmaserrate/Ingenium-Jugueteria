@@ -138,7 +138,15 @@ async function editBranch(container, existing) {
 
 // ===== USUARIOS =====
 async function renderUsers(container) {
-  const [users, branches] = await Promise.all([getAll('users'), getAll('branches')]);
+  const branches = await getAll('branches');
+  // Usuarios del backend (compartidos entre PC). Fallback local si no hay conexión.
+  let users;
+  try {
+    const be = await api('/auth/users');
+    users = (be || []).map(u => ({ ...u, branch_id: u.branchId ?? u.branch_id }));
+  } catch {
+    users = await getAll('users');
+  }
   const brMap = Object.fromEntries(branches.map(b => [b.id, b.name]));
   container.innerHTML = `
     <div class="flex justify-end mb-3"><button id="us-new" class="ing-btn-primary flex items-center gap-2"><span class="material-symbols-outlined text-base">add</span> Nuevo usuario</button></div>

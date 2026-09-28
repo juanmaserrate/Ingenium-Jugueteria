@@ -47,10 +47,51 @@ export function millisUntilExpiry() {
 }
 
 export async function login(branchId, userId, pin) {
+  // TODO ONLINE: el backend es autoritativo (valida el PIN y entrega el JWT).
+  // Solo si el backend está inalcanzable (offline) se cae al login local.
+  let data = null, unauthorized = false, reachable = true;
+  try {
+    const res = await fetch(`${getApiBase()}/auth/login-pin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branchId, userId, pin: String(pin) }),
+    });
+    if (res.ok) data = await res.json();
+    else if (res.status === 401) unauthorized = true;
+    else reachable = false; // 5xx u otro → intentar local
+  } catch {
+    reachable = false; // error de red → offline
+  }
+
+  if (unauthorized) throw new Error('Usuario, sucursal o PIN incorrectos');
+
+  if (data?.token && data?.user) {
+    setToken(data.token);
+    const branches = await listBranches().catch(() => []);
+    const branch = (branches || []).find(b => b.id === branchId);
+    const session = {
+      user_id: data.user.id,
+      user_name: `${data.user.name} ${data.user.lastname || ''}`.trim(),
+      role: data.user.role,
+      branch_id: branchId,
+      branch_name: branch?.name || branchId,
+      login_at: new Date().toISOString(),
+    };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    touchActivity();
+    return session;
+  }
+
+  // Fallback LOCAL (backend inalcanzable). Sin token: los módulos online avisarán.
+  if (reachable) throw new Error('No se pudo iniciar sesión. Reintentá.');
+  return loginLocal(branchId, userId, pin);
+}
+
+// Validación local contra IndexedDB (solo fallback offline).
+async function loginLocal(branchId, userId, pin) {
   const user = await get('users', userId);
-  if (!user) throw new Error('Usuario no encontrado');
+  if (!user) throw new Error('Sin conexión y el usuario no está en esta PC');
   if (user.branch_id !== branchId) throw new Error('Usuario no pertenece a la sucursal');
-  // Camino nuevo: hash PBKDF2. Migración: si sólo tiene `pin` plano, validar y upgradear.
   if (user.pin_hash && user.pin_salt) {
     const ok = await verifyPin(String(pin), user.pin_salt, user.pin_hash, user.pin_iters);
     if (!ok) throw new Error('PIN incorrecto');
@@ -68,32 +109,13 @@ export async function login(branchId, userId, pin) {
     user_id: user.id,
     user_name: `${user.name} ${user.lastname || ''}`.trim(),
     role: user.role,
-    branch_id: branch.id,
-    branch_name: branch.name,
+    branch_id: branchId,
+    branch_name: branch?.name || branchId,
     login_at: new Date().toISOString(),
   };
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   touchActivity();
-
-  // Pedir JWT al backend para poder llamar rutas autenticadas (Ventas Web, TN, etc.).
-  // Silencioso: si el backend no conoce al usuario, el login local igual es válido
-  // y los módulos offline siguen funcionando.
-  try {
-    const res = await fetch(`${getApiBase()}/auth/login-pin`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ branchId, userId, pin: String(pin) }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data?.token) setToken(data.token);
-    } else {
-      setToken(null);
-    }
-  } catch {
-    setToken(null);
-  }
-
+  setToken(null);
   return session;
 }
 
@@ -137,8 +159,20 @@ export async function setActiveBranch(branchId) {
   return b;
 }
 
-export async function listBranches() { return getAll('branches'); }
+export async function listBranches() {
+  // Backend primero (para que las sucursales sean iguales en todas las PC).
+  try {
+    const res = await fetch(`${getApiBase()}/auth/branches`);
+    if (res.ok) { const b = await res.json(); if (Array.isArray(b) && b.length) return b; }
+  } catch { /* offline → local */ }
+  return getAll('branches');
+}
 export async function listUsersForBranch(branchId) {
+  // Backend primero: así los usuarios creados en cualquier PC aparecen en el login.
+  try {
+    const res = await fetch(`${getApiBase()}/auth/branches/${encodeURIComponent(branchId)}/users`);
+    if (res.ok) { const u = await res.json(); if (Array.isArray(u)) return u.map(x => ({ ...x, branch_id: branchId })); }
+  } catch { /* offline → local */ }
   const all = await getAll('users');
   return all.filter(u => u.branch_id === branchId);
 }
