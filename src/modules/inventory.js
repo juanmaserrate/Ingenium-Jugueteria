@@ -1251,13 +1251,22 @@ async function openProductForm(p, container) {
 
       // Acciones modo "single"
       el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
-      el.querySelector('[data-act="save"]').addEventListener('click', async () => {
-        const payload = readForm();
-        const saved = await persistOne(payload);
-        if (!saved) return;
-        toast(isEdit ? 'Actualizado' : 'Creado', 'success');
-        close(saved);
-        renderProducts(container);
+      el.querySelector('[data-act="save"]').addEventListener('click', async (ev) => {
+        const btn = ev.currentTarget;
+        if (btn.disabled) return;
+        btn.disabled = true;
+        try {
+          const payload = readForm();
+          const saved = await persistOne(payload);
+          if (!saved) return;
+          toast(isEdit ? 'Actualizado' : 'Creado', 'success');
+          close(saved);
+          renderProducts(container);
+        } catch (e) {
+          toast(e?.message || 'No se pudo guardar el producto', 'error');
+        } finally {
+          btn.disabled = false;
+        }
       });
 
       // Acciones modo "batch"
@@ -1267,38 +1276,61 @@ async function openProductForm(p, container) {
           confirmModal({ title: 'Cancelar lote', message: `Ya cargaste ${batch.length} producto(s). ¿Salir sin más cambios? (los ya cargados se mantienen)`, confirmLabel: 'Salir' })
             .then(ok => { if (ok) { close({ batch }); renderProducts(container); } });
         });
-        el.querySelector('[data-act="save-and-continue"]').addEventListener('click', async () => {
-          const payload = readForm();
-          const saved = await persistOne(payload);
-          if (!saved) return;
-          batch.push({
-            id: saved.id, name: saved.name, code: saved.code,
-            cost: saved.cost, price: saved.price,
-            stockLomas: payload.qtyLomas, stockBanf: payload.qtyBanf,
-            tn: !!payload.d.published_tn,
-          });
-          toast(`Agregado al lote (${batch.length})`, 'success');
-          renderBatchList();
-          const keep = el.querySelector('#keep-fields')?.checked ?? true;
-          resetForBatch(keep);
-        });
-        el.querySelector('[data-act="finish-batch"]').addEventListener('click', async () => {
-          // Si el formulario tiene un nombre cargado, intentamos guardarlo también antes de cerrar.
-          if (form.elements.name.value.trim()) {
+        el.querySelector('[data-act="save-and-continue"]').addEventListener('click', async (ev) => {
+          const btn = ev.currentTarget;
+          if (btn.disabled) return;
+          btn.disabled = true;
+          try {
             const payload = readForm();
             const saved = await persistOne(payload);
-            if (saved) {
-              batch.push({
-                id: saved.id, name: saved.name, code: saved.code, price: saved.price,
-                stockLomas: payload.qtyLomas, stockBanf: payload.qtyBanf,
-                tn: !!payload.d.published_tn,
-              });
-            }
+            if (!saved) return;
+            batch.push({
+              id: saved.id, name: saved.name, code: saved.code,
+              cost: saved.cost, price: saved.price,
+              stockLomas: payload.qtyLomas, stockBanf: payload.qtyBanf,
+              tn: !!payload.d.published_tn,
+            });
+            toast(`Agregado al lote (${batch.length})`, 'success');
+            renderBatchList();
+            const keep = el.querySelector('#keep-fields')?.checked ?? true;
+            resetForBatch(keep);
+          } catch (e) {
+            // Sin esto, un error del backend (p. ej. código duplicado) dejaba la UI
+            // "trabada" sin feedback. Mostramos el motivo y liberamos el botón.
+            toast(e?.message || 'No se pudo agregar el producto', 'error');
+          } finally {
+            btn.disabled = false;
           }
-          if (batch.length === 0) { toast('No agregaste ningún producto', 'warn'); return; }
-          toast(`Lote terminado: ${batch.length} producto(s) creado(s)`, 'success');
-          close({ batch });
-          renderProducts(container);
+        });
+        el.querySelector('[data-act="finish-batch"]').addEventListener('click', async (ev) => {
+          const btn = ev.currentTarget;
+          if (btn.disabled) return;
+          btn.disabled = true;
+          try {
+            // Si el formulario tiene un nombre cargado, intentamos guardarlo también antes de cerrar.
+            if (form.elements.name.value.trim()) {
+              const payload = readForm();
+              const saved = await persistOne(payload);
+              if (saved) {
+                batch.push({
+                  id: saved.id, name: saved.name, code: saved.code, price: saved.price,
+                  stockLomas: payload.qtyLomas, stockBanf: payload.qtyBanf,
+                  tn: !!payload.d.published_tn,
+                });
+              } else {
+                // El último producto no se pudo guardar: no cerramos, dejamos que corrija.
+                return;
+              }
+            }
+            if (batch.length === 0) { toast('No agregaste ningún producto', 'warn'); return; }
+            toast(`Lote terminado: ${batch.length} producto(s) creado(s)`, 'success');
+            close({ batch });
+            renderProducts(container);
+          } catch (e) {
+            toast(e?.message || 'No se pudo terminar el lote', 'error');
+          } finally {
+            btn.disabled = false;
+          }
         });
       }
     },

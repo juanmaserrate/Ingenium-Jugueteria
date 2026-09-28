@@ -110,6 +110,24 @@ async function main() {
     if ((error as any).validation) {
       return reply.status(400).send({ error: 'Validation error', details: (error as any).validation });
     }
+    // Errores conocidos de Prisma → mensaje legible (evita el 500 genérico que
+    // dejaba al front sin saber qué pasó, p. ej. un SKU/código de barras repetido).
+    const pcode = (error as any).code;
+    if (pcode === 'P2002') {
+      const target = (error as any).meta?.target;
+      const fields: string[] = Array.isArray(target) ? target : target ? [String(target)] : [];
+      const label = fields
+        .map((f) => (f === 'code' ? 'código (SKU)' : f === 'barcode' ? 'código de barras' : f))
+        .join(' y ') || 'un campo único';
+      return reply.status(409).send({
+        error: `Ya existe otro producto con el mismo ${label}. Cambialo o dejalo vacío (se genera uno automático).`,
+        code: 'DUPLICATE',
+        details: { fields },
+      });
+    }
+    if (pcode === 'P2025') {
+      return reply.status(404).send({ error: 'Registro no encontrado', code: 'NOT_FOUND' });
+    }
     app.log.error(error);
     return reply.status(500).send({ error: 'Internal server error' });
   });

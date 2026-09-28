@@ -185,8 +185,10 @@ export async function createProduct(data: ProductInput, userId?: string) {
           productId: product.id,
           name: v.name ?? 'default',
           attributes: (v.attributes ?? {}) as any,
-          code: v.code ?? null,
-          barcode: v.barcode ?? null,
+          // '' → null: un código/barcode vacío no debe ocupar el índice único
+          // (si no, el segundo producto sin código choca con el primero).
+          code: v.code || null,
+          barcode: v.barcode || null,
           priceOverride: v.priceOverride ?? null,
           costOverride: v.costOverride ?? null,
           isDefault: v.isDefault ?? variants.length === 1,
