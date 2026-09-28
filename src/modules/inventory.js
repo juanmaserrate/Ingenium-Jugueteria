@@ -559,21 +559,42 @@ async function renderProducts(container, forceReload = false) {
   container.querySelectorAll('[data-vstock]').forEach(inp => inp.addEventListener('change', async () => {
     const variantId = inp.dataset.vstock, branchId = inp.dataset.vbranch, pid = inp.dataset.pid;
     const qty = Math.max(0, Math.trunc(Number(inp.value) || 0));
+    if (inp.dataset.saving === '1') return;
+    inp.dataset.saving = '1';
     inp.disabled = true;
     try {
       await P.setStock(pid, branchId, { variantId, qty, reason: 'Ajuste de variante (inventario)' });
+      inp.value = qty; // normaliza lo mostrado
+      // Actualizamos el cache en memoria y SOLO la celda "Total" de esta variante,
+      // SIN re-renderizar toda la tabla: así una edición no pisa la otra celda
+      // (Lomas/Banfield) que el operador puede estar editando en la misma fila.
       const p = state.cache.products.find(x => x.id === pid);
       if (p) {
         const v = (p.variants || []).find(x => x.id === variantId);
-        if (v) { v.stocks = v.stocks || {}; v.stocks[branchId] = { qty, reserved: v.stocks[branchId]?.reserved || 0 }; }
+        if (v) {
+          v.stocks = v.stocks || {};
+          v.stocks[branchId] = { qty, reserved: v.stocks[branchId]?.reserved || 0 };
+          const row = inp.closest('tr');
+          const totalCell = row?.querySelector('td:nth-last-child(2)');
+          const qL = v.stocks?.br_lomas?.qty ?? 0, qB = v.stocks?.br_banfield?.qty ?? 0;
+          if (totalCell) totalCell.textContent = String(qL + qB);
+        }
         recomputeProductStocks(p);
         state.cache.stocks = state.cache.products.flatMap(x => x._stocks || []);
       }
+      // Señal visual breve (sin re-render).
+      inp.style.borderColor = '#16a34a';
+      setTimeout(() => { inp.style.borderColor = ''; }, 900);
       toast('Stock actualizado', 'success');
-      renderProducts(container);
     } catch (e) {
-      toast('Error: ' + (e.message || ''), 'error');
+      toast('No se pudo actualizar el stock: ' + (e.message || ''), 'error');
+      // Revertir al valor guardado en cache para no dejar un número que no se aplicó.
+      const v = state.cache.products.find(x => x.id === pid)?.variants?.find(x => x.id === variantId);
+      if (v) inp.value = v.stocks?.[branchId]?.qty ?? 0;
+    } finally {
+      // SIEMPRE re-habilitar: nunca más queda "tildado"/trabado.
       inp.disabled = false;
+      inp.dataset.saving = '';
     }
   }));
   container.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
