@@ -3,8 +3,9 @@
 // Productos: grilla con filtros, mostrar/ocultar columnas, edición inline (doble-click), bulk actions.
 
 import * as P from '../repos/products.js';
+import { api } from '../core/api.js';
 import { Categories, Brands, Suppliers, Subcategories } from '../repos/catalog.js';
-import { getAll, newId, put, tx, stockId, get } from '../core/db.js';
+import { getAll, newId, put, del, tx, stockId, get } from '../core/db.js';
 import { money } from '../core/format.js';
 import { openModal, confirmModal } from '../components/modal.js';
 import { toast } from '../core/notifications.js';
@@ -1726,15 +1727,36 @@ async function openCatalogForm(item, title, repo, entityLabel, withParentCat, co
 }
 
 // ==================== TRANSFERENCIAS ====================
+// Mapea una transferencia del backend al shape que usan la tabla y el remito.
+function toFrontTransfer(t) {
+  return {
+    id: t.id,
+    remito_number: `R-${String(t.number).padStart(6, '0')}`,
+    datetime: t.datetime,
+    from_branch: t.fromBranch,
+    to_branch: t.toBranch,
+    items: t.items || [],
+    notes: t.notes || null,
+  };
+}
+
 async function renderTransfers(container) {
-  const [transfers, branches, products] = await Promise.all([
-    getAll('transfers'), getAll('branches'), P.list(),
+  const [transfersRaw, branches, products, localTransfers] = await Promise.all([
+    api('/api/transfers').catch(() => []),
+    getAll('branches'), P.list(),
+    getAll('transfers').catch(() => []),
   ]);
+  const transfers = (transfersRaw || []).map(toFrontTransfer);
   const stocks = products.flatMap(p => p._stocks || []);
   const brMap = Object.fromEntries(branches.map(b => [b.id, b.name]));
   const pMap  = Object.fromEntries(products.map(p => [p.id, p]));
 
   container.innerHTML = `
+    ${localTransfers.length ? `
+    <div class="ing-card p-3 mb-4 border-l-4 border-amber-500 bg-amber-50 flex items-center justify-between gap-3 flex-wrap">
+      <div class="text-sm text-[#241a0d]"><b>${localTransfers.length} transferencia(s)</b> quedaron guardadas solo en esta PC (registro). Nota: el stock de esas transferencias ya se movió; esto sube el remito al servidor para el historial compartido.</div>
+      <button id="tr-migrate" class="ing-btn-secondary !py-1.5 !px-3 text-sm shrink-0">Archivar registro local</button>
+    </div>` : ''}
     <div class="flex justify-between items-center mb-4">
       <h2 class="text-xl font-black">Transferencias entre sucursales (${transfers.length})</h2>
       <button id="tr-new" class="ing-btn-primary text-sm"><span class="material-symbols-outlined align-middle text-base">add</span> Nueva transferencia</button>
@@ -1761,6 +1783,23 @@ async function renderTransfers(container) {
     </div>
   `;
   container.querySelector('#tr-new').addEventListener('click', () => openTransferForm(branches, products, stocks, container));
+  container.querySelector('#tr-migrate')?.addEventListener('click', async (ev) => {
+    ev.currentTarget.disabled = true;
+    let done = 0, failed = 0;
+    for (const t of localTransfers) {
+      try {
+        // SOLO el registro (el stock de estas ya se movió). No mueve stock ni toca TN.
+        await api('/api/transfers/import', { method: 'POST', body: {
+          fromBranch: t.from_branch, toBranch: t.to_branch,
+          items: t.items || [], notes: t.notes || null, datetime: t.datetime || null,
+        }});
+        try { await del('transfers', t.id); } catch { /* noop */ }
+        done++;
+      } catch { failed++; }
+    }
+    toast(`Remitos archivados: ${done}${failed ? ` · con error: ${failed}` : ''}`, failed ? 'warn' : 'success');
+    renderTransfers(container);
+  });
   container.querySelectorAll('[data-print]').forEach(b => b.addEventListener('click', () => {
     const t = transfers.find(x => x.id === b.dataset.print);
     printTransfer(t, brMap, pMap);
@@ -1816,12 +1855,12 @@ async function openTransferForm(branches, products, stocks, container) {
       el.querySelector('#tr-add').addEventListener('click', () => { items.push({ product_id:'', qty:1 }); draw(); });
 
       el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
-      el.querySelector('[data-act="save"]').addEventListener('click', async () => {
+      el.querySelector('[data-act="save"]').addEventListener('click', async (ev) => {
         const from = form.elements.from_branch.value;
         const to   = form.elements.to_branch.value;
         if (from === to) { toast('Origen y destino deben ser distintos', 'error'); return; }
         if (items.length === 0 || items.some(i => !i.product_id || i.qty < 1)) { toast('Completá al menos un item', 'error'); return; }
-        // Validar stock
+        // Pre-chequeo de stock (el backend valida de forma atómica igual).
         for (const it of items) {
           const s = stocks.find(x => x.product_id === it.product_id && x.branch_id === from);
           if (!s || s.qty < it.qty) {
@@ -1830,30 +1869,27 @@ async function openTransferForm(branches, products, stocks, container) {
             return;
           }
         }
-        const session = currentSession();
-        const number = await nextCounter('transfer_number');
-        const remito = `R-${String(number).padStart(6, '0')}`;
-        const t = {
-          id: newId('tr'),
-          remito_number: remito,
-          datetime: new Date().toISOString(),
-          from_branch: from, to_branch: to,
-          items, user_id: session?.user_id,
-        };
-        // Ejecutar ajustes de stock
-        for (const it of items) {
-          await P.transferStock({ product_id: it.product_id, from_branch: from, to_branch: to, qty: it.qty });
+        const btn = ev.currentTarget;
+        if (btn.disabled) return;
+        btn.disabled = true;
+        try {
+          // Resolver el variantId de cada producto (el backend mueve stock por variante).
+          const apiItems = [];
+          for (const it of items) {
+            const variantId = await P.variantIdOf(it.product_id);
+            if (!variantId) { toast('Un producto no tiene variante en el servidor', 'error'); btn.disabled = false; return; }
+            apiItems.push({ variantId, product_id: it.product_id, qty: it.qty });
+          }
+          // Una sola llamada: el backend mueve el stock (igual que hoy) y deja el remito.
+          const saved = await api('/api/transfers', { method: 'POST', body: { fromBranch: from, toBranch: to, items: apiItems } });
+          const remito = `R-${String(saved.number).padStart(6, '0')}`;
+          toast(`Transferencia ${remito} confirmada`, 'success');
+          close(true);
+          renderTransfers(container);
+        } catch (e) {
+          toast(e?.message || 'No se pudo confirmar la transferencia', 'error');
+          btn.disabled = false;
         }
-        await put('transfers', t);
-        await Audit.log({
-          action: 'transfer', entity: 'transferencia', entity_id: t.id,
-          after: t, description: `Transferencia ${remito} · ${items.length} items · ${from}→${to}`,
-        });
-        const { push } = await import('../core/notifications.js');
-        await push({ title: 'Transferencia recibida', body: `${remito} desde ${from}`, branch_id: to, type: 'info' });
-        toast(`Transferencia ${remito} confirmada`, 'success');
-        close(true);
-        renderTransfers(container);
       });
     },
   });
