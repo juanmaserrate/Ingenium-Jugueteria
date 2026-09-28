@@ -26,6 +26,7 @@ import { settingsRoutes } from './routes/settings.js';
 import { employeesRoutes } from './routes/employees.js';
 import { transfersRoutes } from './routes/transfers.js';
 import { kvRoutes } from './routes/kv.js';
+import { branchesRoutes } from './routes/branches.js';
 import { AppError } from './utils/errors.js';
 import { startSyncWorker } from './sync/worker.js';
 import { runSeed } from './scripts/seed.js';
@@ -164,6 +165,7 @@ async function main() {
   await app.register(employeesRoutes, { prefix: '/api' });
   await app.register(transfersRoutes, { prefix: '/api' });
   await app.register(kvRoutes, { prefix: '/api' });
+  await app.register(branchesRoutes, { prefix: '/api' });
   await app.register(integrationsRoutes, { prefix: '/api' });
   await app.register(imagesRoutes, { prefix: '/api' });
   await app.register(purchasesRoutes, { prefix: '/api' });

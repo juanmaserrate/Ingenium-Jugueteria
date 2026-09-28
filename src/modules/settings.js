@@ -98,7 +98,10 @@ async function renderCompany(container) {
 
 // ===== SUCURSALES =====
 async function renderBranches(container) {
-  const branches = await getAll('branches');
+  // Sucursales del servidor (compartidas). Fallback local si no hay conexión.
+  let branches;
+  try { branches = await api('/api/branches'); }
+  catch { branches = await getAll('branches'); }
   container.innerHTML = `
     <div class="flex justify-end mb-3"><button id="br-new" class="ing-btn-primary flex items-center gap-2"><span class="material-symbols-outlined text-base">add</span> Nueva sucursal</button></div>
     <div class="ing-card overflow-hidden">
@@ -112,6 +115,7 @@ async function renderBranches(container) {
               <td class="text-sm">${b.phone || '—'}</td>
               <td class="text-right">
                 <button data-ed="${b.id}" class="text-xs text-[#d82f1e] hover:underline">Editar</button>
+                <button data-del="${b.id}" class="text-xs text-[#7d6c5c] hover:text-red-600 ml-1">Borrar</button>
               </td>
             </tr>
           `).join('')}
@@ -121,6 +125,12 @@ async function renderBranches(container) {
   `;
   container.querySelector('#br-new').addEventListener('click', () => editBranch(container, null));
   container.querySelectorAll('[data-ed]').forEach(b => b.addEventListener('click', () => editBranch(container, branches.find(x => x.id === b.dataset.ed))));
+  container.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
+    const ok = await confirmModal({ title: 'Borrar sucursal', message: '¿Eliminar la sucursal? Solo se puede si no tiene datos asociados.', danger: true, confirmLabel: 'Borrar' });
+    if (!ok) return;
+    try { await api(`/api/branches/${encodeURIComponent(b.dataset.del)}`, { method: 'DELETE' }); toast('Sucursal eliminada', 'success'); renderBranches(container); }
+    catch (e) { toast(e?.message || 'No se pudo eliminar', 'error'); }
+  }));
 }
 
 async function editBranch(container, existing) {
@@ -144,8 +154,12 @@ async function editBranch(container, existing) {
         b.address = m.querySelector('#b-addr').value.trim();
         b.phone = m.querySelector('#b-phone').value.trim();
         if (!b.name) { toast('Nombre requerido', 'warn'); return; }
-        await put('branches', b);
-        toast('Guardado', 'success'); close(true);
+        try {
+          const body = { name: b.name, address: b.address || null, phone: b.phone || null };
+          if (isNew) await api('/api/branches', { method: 'POST', body });
+          else await api(`/api/branches/${encodeURIComponent(b.id)}`, { method: 'PUT', body });
+          toast('Guardado', 'success'); close(true);
+        } catch (e) { toast(e?.message || 'No se pudo guardar', 'error'); }
       });
     },
   });
