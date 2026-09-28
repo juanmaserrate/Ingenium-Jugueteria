@@ -212,7 +212,14 @@ export async function save(data) {
 export async function remove(id, { keepTn = false } = {}) {
   // keepTn=true → "solo del POS": el backend NO encola el borrado en Tienda Nube.
   const qs = keepTn ? '?keepTn=1' : '';
-  await api(`/api/products/${encodeURIComponent(id)}${qs}`, { method: 'DELETE' });
+  try {
+    await api(`/api/products/${encodeURIComponent(id)}${qs}`, { method: 'DELETE' });
+  } catch (e) {
+    // 404 = el producto no existe en el servidor (p. ej. un alta local que nunca
+    // llegó a sincronizar y quedó "fantasma" en la vista). Lo tratamos como ya
+    // borrado: limpiamos el cache local igual, sin romper el flujo.
+    if (e?.status !== 404) throw e;
+  }
   _cache.byId.delete(id);
   _cache.list = _cache.list.filter((p) => p.id !== id);
   emit(EV.PRODUCT_UPDATED, { id });
