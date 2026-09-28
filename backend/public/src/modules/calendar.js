@@ -1,6 +1,8 @@
 // Calendario — mensual grande con vencimientos de cheques, cumpleaños, fechas especiales y eventos editables.
 
-import { getAll, put, del, newId } from '../core/db.js';
+import { newId } from '../core/db.js';
+import { api } from '../core/api.js';
+import * as Kv from '../repos/kv.js';
 import { money, fmtDate, monthKey } from '../core/format.js';
 import { openModal, confirmModal } from '../components/modal.js';
 import { toast } from '../core/notifications.js';
@@ -32,7 +34,7 @@ const FIXED_DATES = [
 export async function mount(el) { await render(el); }
 
 async function render(el) {
-  const [events, customers, checks] = await Promise.all([getAll('calendar_events'), getAll('customers'), getAll('checks')]);
+  const [events, customers, checks] = await Promise.all([Kv.list('calendar_events').catch(() => []), api('/api/customers').catch(() => []), Kv.list('checks').catch(() => [])]);
   const y = state.cursor.getFullYear();
   const m = state.cursor.getMonth() + 1;
   const monthLabel = state.cursor.toLocaleDateString('es-AR', { month: 'long', year: 'numeric' });
@@ -144,12 +146,12 @@ async function openDay(root, date, events) {
       m.querySelector('[data-act="close"]').addEventListener('click', () => close(false));
       m.querySelector('#day-add').addEventListener('click', async () => { close(true); editEvent(root, null, date); });
       m.querySelectorAll('[data-ed]').forEach(b => b.addEventListener('click', async () => {
-        const all = await getAll('calendar_events'); const ev = all.find(x => x.id === b.dataset.ed); if (ev) { close(true); editEvent(root, ev); }
+        const all = await Kv.list('calendar_events').catch(() => []); const ev = all.find(x => x.id === b.dataset.ed); if (ev) { close(true); editEvent(root, ev); }
       }));
       m.querySelectorAll('[data-de]').forEach(b => b.addEventListener('click', async () => {
         const ok = await confirmModal({ title: 'Borrar', message: '¿Eliminar evento?', danger: true, confirmLabel: 'Borrar' });
         if (!ok) return;
-        await del('calendar_events', b.dataset.de);
+        await Kv.del('calendar_events', b.dataset.de);
         await Audit.log({ action: 'delete', entity: 'evento', entity_id: b.dataset.de, description: 'Evento eliminado' });
         toast('Eliminado', 'success'); close(true); render(root);
       }));
@@ -182,7 +184,7 @@ async function editEvent(root, existing, defaultDate = null) {
         e.description = m.querySelector('#ev-desc').value;
         e.date_from = m.querySelector('#ev-from').value;
         e.date_to = m.querySelector('#ev-to').value || e.date_from;
-        await put('calendar_events', e);
+        await Kv.put('calendar_events', e);
         await Audit.log({ action: isNew?'create':'update', entity: 'evento', entity_id: e.id, after: e, description: e.title });
         toast(isNew?'Creado':'Guardado', 'success'); close(true);
       });

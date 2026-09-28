@@ -1,6 +1,8 @@
 // Tareas — Kanban Pendiente / En curso / Hecho con drag&drop, prioridad, fecha, asignado.
 
-import { getAll, put, del, newId } from '../core/db.js';
+import { newId } from '../core/db.js';
+import * as Kv from '../repos/kv.js';
+import * as Employees from '../repos/employees.js';
 import { fmtDate } from '../core/format.js';
 import { openModal, confirmModal } from '../components/modal.js';
 import { toast } from '../core/notifications.js';
@@ -16,7 +18,7 @@ const COLUMNS = [
 export async function mount(el) { await render(el); }
 
 async function render(el) {
-  const [tasks, employees] = await Promise.all([getAll('tasks'), getAll('employees')]);
+  const [tasks, employees] = await Promise.all([Kv.list('tasks').catch(() => []), Employees.list().catch(() => [])]);
   const empMap = Object.fromEntries(employees.map(e => [e.id, `${e.name} ${e.lastname || ''}`]));
 
   el.innerHTML = `
@@ -82,7 +84,7 @@ async function render(el) {
         const newOrder = (i + 1) * 10;
         if (t.order !== newOrder || (t === dragged && oldCol !== col)) {
           t.order = newOrder;
-          await put('tasks', t);
+          await Kv.put('tasks', t);
         }
       }
       await Audit.log({
@@ -98,7 +100,7 @@ async function render(el) {
     ev.stopPropagation();
     const ok = await confirmModal({ title: 'Borrar tarea', message: '¿Eliminar esta tarea?', danger: true, confirmLabel: 'Borrar' });
     if (!ok) return;
-    await del('tasks', b.dataset.delTask);
+    await Kv.del('tasks', b.dataset.delTask);
     await Audit.log({ action: 'delete', entity: 'tarea', entity_id: b.dataset.delTask, description: 'Tarea eliminada' });
     render(el);
   }));
@@ -171,7 +173,7 @@ async function editTask(root, existing, employees, defaultCol = 'todo') {
         t.due_date = m.querySelector('#t-due').value;
         t.assignee_id = m.querySelector('#t-ass').value || null;
         t.updated_at = new Date().toISOString();
-        await put('tasks', t);
+        await Kv.put('tasks', t);
         await Audit.log({ action: isNew?'create':'update', entity: 'tarea', entity_id: t.id, after: t, description: t.title });
         toast(isNew?'Tarea creada':'Tarea actualizada', 'success');
         close(true);

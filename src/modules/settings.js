@@ -9,6 +9,7 @@ import * as Audit from '../core/audit.js';
 import { derivePin } from '../core/crypto.js';
 import { api, ApiError } from '../core/api.js';
 import * as Settings from '../repos/settings.js';
+import * as Kv from '../repos/kv.js';
 import { exportBackup, importBackup, markBackupNow, checkBackupReminder } from '../core/backup.js';
 import { verifyChain } from '../core/audit.js';
 
@@ -65,7 +66,22 @@ async function renderCompany(container) {
       </div>
       <div class="mt-5 text-right"><button id="co-save" class="ing-btn-primary">Guardar</button></div>
     </div>
+    <div class="ing-card p-5 max-w-2xl mt-4">
+      <div class="text-sm font-black text-[#241a0d]">Migrar datos locales al servidor</div>
+      <p class="text-xs text-[#7d6c5c] mt-1">Sube al servidor lo que haya quedado guardado solo en esta PC (cheques, tareas, calendario, notificaciones, costos). Corré esto en cada PC que haya usado esos módulos.</p>
+      <div class="mt-3"><button id="co-migrate" class="ing-btn-secondary text-sm">Migrar datos locales</button> <span id="co-migrate-res" class="text-xs text-[#7d6c5c] ml-2"></span></div>
+    </div>
   `;
+  container.querySelector('#co-migrate').addEventListener('click', async (ev) => {
+    ev.currentTarget.disabled = true;
+    const out = container.querySelector('#co-migrate-res');
+    let total = 0;
+    for (const col of ['checks', 'tasks', 'calendar_events', 'notifications', 'monthly_pnl']) {
+      try { total += await Kv.migrateFromLocal(col); } catch { /* seguir */ }
+    }
+    out.textContent = `${total} registro(s) migrado(s)`;
+    toast(`Migrados ${total} registro(s) al servidor`, 'success');
+  });
   container.querySelector('#co-save').addEventListener('click', async () => {
     const value = {
       name: container.querySelector('#co-name').value,

@@ -25,6 +25,7 @@ import { metricsRoutes } from './routes/metrics.js';
 import { settingsRoutes } from './routes/settings.js';
 import { employeesRoutes } from './routes/employees.js';
 import { transfersRoutes } from './routes/transfers.js';
+import { kvRoutes } from './routes/kv.js';
 import { AppError } from './utils/errors.js';
 import { startSyncWorker } from './sync/worker.js';
 import { runSeed } from './scripts/seed.js';
@@ -46,6 +47,17 @@ async function main() {
 
   await app.register(cookie);
   await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } });
+
+  // Rate limiting: límite global amplio + límite estricto por ruta (login) vía
+  // `config.rateLimit` en las rutas de auth. Protege contra fuerza bruta.
+  const rateLimit = (await import('@fastify/rate-limit')).default;
+  await app.register(rateLimit, {
+    global: true,
+    max: 600,
+    timeWindow: '1 minute',
+    // Sin token todavía (login) → por IP; con token, por usuario.
+    keyGenerator: (req: any) => req.user?.userId || req.ip,
+  });
 
   // Raw body for webhook signature validation
   app.addContentTypeParser(
@@ -151,6 +163,7 @@ async function main() {
   await app.register(settingsRoutes, { prefix: '/api' });
   await app.register(employeesRoutes, { prefix: '/api' });
   await app.register(transfersRoutes, { prefix: '/api' });
+  await app.register(kvRoutes, { prefix: '/api' });
   await app.register(integrationsRoutes, { prefix: '/api' });
   await app.register(imagesRoutes, { prefix: '/api' });
   await app.register(purchasesRoutes, { prefix: '/api' });

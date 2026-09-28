@@ -1,6 +1,9 @@
 // Cheques — a proveedores con plazos, notificaciones de vencimiento y suma pendiente.
 
-import { getAll, put, newId, del } from '../core/db.js';
+import { newId } from '../core/db.js';
+import * as Kv from '../repos/kv.js';
+import { Suppliers } from '../repos/catalog.js';
+import { listAll as listNotifs } from '../core/notifications.js';
 import { money, fmtDate } from '../core/format.js';
 import { activeBranchId, currentSession } from '../core/auth.js';
 import { openModal, confirmModal } from '../components/modal.js';
@@ -18,7 +21,7 @@ export async function mount(el) { await render(el); checkUpcoming(); }
 
 async function render(el) {
   const branchId = activeBranchId();
-  const [checks, suppliers] = await Promise.all([getAll('checks'), getAll('suppliers')]);
+  const [checks, suppliers] = await Promise.all([Kv.list('checks').catch(() => []), Suppliers.list().catch(() => [])]);
   const supMap = Object.fromEntries(suppliers.map(s => [s.id, s.name]));
   const today = new Date().toISOString().slice(0, 10);
   const in7 = new Date(); in7.setDate(in7.getDate() + 7); const in7k = in7.toISOString().slice(0, 10);
@@ -115,7 +118,7 @@ async function render(el) {
   el.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     const ok = await confirmModal({ title: 'Borrar', message: '¿Eliminar este cheque?', danger: true, confirmLabel: 'Borrar' });
     if (!ok) return;
-    await del('checks', b.dataset.del);
+    await Kv.del('checks', b.dataset.del);
     await Audit.log({ action: 'delete', entity: 'cheque', entity_id: b.dataset.del, description: 'Cheque eliminado' });
     render(el);
   }));
@@ -173,7 +176,7 @@ async function editCheck(root, existing, suppliers) {
         c.amount = Number(m.querySelector('#ch-amt').value) || 0;
         c.status = m.querySelector('#ch-st').value;
         c.note = m.querySelector('#ch-note').value;
-        await put('checks', c);
+        await Kv.put('checks', c);
         await Audit.log({ action: isNew ? 'create' : 'update', entity: 'cheque', entity_id: c.id, after: c, description: `Cheque #${c.number} ${money(c.amount)}` });
         if (isNew && c.status === 'pending' && daysUntil(c.due_at) <= 7) {
           await push({ title: 'Cheque próximo a vencer', body: `#${c.number} · ${money(c.amount)} · vence ${fmtDate(c.due_at)}`, type: 'warn' });
@@ -187,7 +190,7 @@ async function editCheck(root, existing, suppliers) {
 }
 
 async function markStatus(root, id, status) {
-  const all = await getAll('checks');
+  const all = await Kv.list('checks').catch(() => []);
   const c = all.find(x => x.id === id);
   if (!c) return;
 
@@ -215,7 +218,7 @@ async function markStatus(root, id, status) {
   }
 
   c.status = status;
-  await put('checks', c);
+  await Kv.put('checks', c);
   await Audit.log({ action: 'update', entity: 'cheque', entity_id: id, after: c, description: `Estado → ${status}` });
   if (status === 'bounced') await push({ title: 'Cheque rebotado', body: `#${c.number} · ${money(c.amount)}`, type: 'error' });
   toast(status === 'paid' ? 'Cheque pagado · caja actualizada' : 'Actualizado', 'success');
@@ -230,7 +233,7 @@ function daysUntil(isoDate) {
 
 // Lanza notificaciones al montar para cheques próximos/vencidos
 async function checkUpcoming() {
-  const [checks, notifs] = await Promise.all([getAll('checks'), getAll('notifications')]);
+  const [checks, notifs] = await Promise.all([Kv.list('checks').catch(() => []), listNotifs().catch(() => [])]);
   const today = new Date().toISOString().slice(0, 10);
   const session = currentSession();
   for (const c of checks) {

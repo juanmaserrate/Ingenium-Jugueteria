@@ -1,6 +1,8 @@
 // Reportes — exportaciones XLSX de todos los dominios.
 
 import { getAll } from '../core/db.js';
+import * as Kv from '../repos/kv.js';
+import { Suppliers } from '../repos/catalog.js';
 import { api } from '../core/api.js';
 import { money, fmtDateTime, fmtDate, monthKey, hoursBetween, hoursDecimal } from '../core/format.js';
 import { activeBranchId } from '../core/auth.js';
@@ -141,7 +143,7 @@ async function repExpenses() {
 }
 
 async function repPnl() {
-  const all = await getAll('monthly_pnl');
+  const all = await Kv.list('monthly_pnl').catch(() => []);
   const rows = all.sort((a,b) => a.month.localeCompare(b.month)).map(p => ({
     Mes: p.month, Sucursal: p.branch_id, VentasBrutas: p.gross_sales, FacturadoNeto: p.net_invoiced || p.net_sales,
     COGS: p.cogs, GananciaBruta: p.gross_profit, Gastos: p.expenses, Cheques: p.checks,
@@ -223,7 +225,7 @@ async function repStockByCat() {
 }
 
 async function repChecks() {
-  const [checks, suppliers] = await Promise.all([getAll('checks'), getAll('suppliers')]);
+  const [checks, suppliers] = await Promise.all([Kv.list('checks').catch(() => []), Suppliers.list().catch(() => [])]);
   const spMap = Object.fromEntries(suppliers.map(s => [s.id, s.name]));
   const rows = checks.sort((a,b) => (a.due_at||'').localeCompare(b.due_at||'')).map(c => ({
     Numero: c.number, Proveedor: spMap[c.supplier_id] || '', Banco: c.bank || '',

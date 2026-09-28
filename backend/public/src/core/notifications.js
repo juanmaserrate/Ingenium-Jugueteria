@@ -1,9 +1,11 @@
 // Notificaciones in-app (campana).
 
-import { put, getAll, newId } from './db.js';
+import { newId } from './db.js';
+import * as Kv from '../repos/kv.js';
 import { emit, EV } from './events.js';
 import { currentSession } from './auth.js';
 
+// Notificaciones persistentes: ahora en el servidor (compartidas entre PC).
 export async function push({ title, body = '', type = 'info', link = null, branch_id = null }) {
   const s = currentSession();
   const notif = {
@@ -17,31 +19,31 @@ export async function push({ title, body = '', type = 'info', link = null, branc
     link,
     read_at: null,
   };
-  await put('notifications', notif);
+  try { await Kv.put('notifications', notif); } catch { /* no bloquear el flujo si falla */ }
   emit(EV.NOTIFICATION_NEW, notif);
   return notif;
 }
 
 export async function listAll({ onlyUnread = false } = {}) {
-  const all = await getAll('notifications');
+  const all = (await Kv.list('notifications').catch(() => [])) || [];
   const filt = onlyUnread ? all.filter(n => !n.read_at) : all;
-  return filt.sort((a, b) => b.datetime.localeCompare(a.datetime));
+  return filt.sort((a, b) => String(b.datetime).localeCompare(String(a.datetime)));
 }
 
 export async function markRead(id) {
-  const all = await getAll('notifications');
+  const all = (await Kv.list('notifications').catch(() => [])) || [];
   const n = all.find(x => x.id === id);
   if (!n) return;
   n.read_at = new Date().toISOString();
-  await put('notifications', n);
+  try { await Kv.put('notifications', n); } catch { /* noop */ }
   emit(EV.NOTIFICATION_NEW, n);
 }
 
 export async function markAllRead() {
-  const all = await getAll('notifications');
+  const all = (await Kv.list('notifications').catch(() => [])) || [];
   const now = new Date().toISOString();
   for (const n of all) {
-    if (!n.read_at) { n.read_at = now; await put('notifications', n); }
+    if (!n.read_at) { n.read_at = now; try { await Kv.put('notifications', n); } catch { /* noop */ } }
   }
   emit(EV.NOTIFICATION_NEW, null);
 }

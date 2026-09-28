@@ -53,7 +53,7 @@ const userSyncSchema = z
 
 export async function authRoutes(app: FastifyInstance) {
   // Login con PIN (mismo flujo que el frontend actual)
-  app.post('/auth/login-pin', async (request) => {
+  app.post('/auth/login-pin', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async (request) => {
     const { branchId, userId, pin } = loginPinSchema.parse(request.body);
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user || user.branchId !== branchId || !user.active) {
@@ -67,7 +67,7 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   // Login cl\u00e1sico email+password (para admin del panel integraciones)
-  app.post('/auth/login', async (request) => {
+  app.post('/auth/login', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async (request) => {
     const { email, password } = loginPasswordSchema.parse(request.body);
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user || !user.passwordHash || !user.active) {

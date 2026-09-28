@@ -847,3 +847,17 @@ model Setting {
 
   @@map("settings")
 }
+
+// Almacén genérico clave/valor por colección: reemplaza los stores locales de
+// IndexedDB que faltaban migrar (cheques, tareas, calendario, notificaciones,
+// costos del P&L). El valor es el objeto completo (mismo shape que usaba el front).
+model KvItem {
+  collection String
+  key        String
+  value      Json
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@id([collection, key])
+  @@index([collection])
+  @@map("kv_items")
+}
