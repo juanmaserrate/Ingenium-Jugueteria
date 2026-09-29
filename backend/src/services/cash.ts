@@ -58,11 +58,29 @@ export async function move(input: {
   });
 }
 
+// Apertura de caja: FIJA el saldo de la caja al monto que el operador cuenta
+// físicamente (no lo suma). Si venía un saldo anterior (p.ej. no se cerró la caja
+// el día previo), la diferencia se registra como un ajuste de reconciliación, para
+// que quede el rastro y la caja arranque en el número real del cajón.
 export async function openDay(branchId: string, initialAmount: number, userId?: string) {
+  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+  const target = round2(initialAmount);
+  const current = round2(await balance(branchId, 'register'));
+  // Si había saldo anterior distinto de 0, reconciliarlo antes de abrir.
+  if (current !== 0) {
+    await move({
+      branchId,
+      type: 'adjustment',
+      amountIn: current < 0 ? -current : 0,
+      amountOut: current > 0 ? current : 0,
+      description: `Ajuste de apertura: saldo anterior de $${current} reconciliado al conteo físico`,
+      userId,
+    });
+  }
   return move({
     branchId,
     type: 'opening',
-    amountIn: initialAmount,
+    amountIn: target,
     description: 'Apertura de caja',
     userId,
   });
