@@ -7,7 +7,18 @@ import * as Products from '../repos/products.js';
 import * as Settings from '../repos/settings.js';
 import { syncCatalog } from '../repos/catalog.js';
 import { navigate } from '../core/router.js';
+import { api } from '../core/api.js';
 import { on, EV, emit } from '../core/events.js';
+
+// Aviso "hay datos nuevos": comparamos una huella liviana del servidor
+// (GET /api/sync-state) contra la última vista. Si cambió → puntito en ↻.
+// No recarga nada solo: el operador actualiza cuando quiere.
+let _lastSeenFp = null;
+let _hasUpdates = false;
+let _pollStarted = false;
+async function fetchFp() {
+  try { return (await api('/api/sync-state'))?.fp ?? null; } catch { return null; }
+}
 
 const PAGE_LABELS = {
   '/dashboard': 'Panel',
@@ -69,8 +80,9 @@ export async function mountTopbar(el) {
           ${cashOpen ? 'Caja abierta' : 'Caja cerrada'}
         </a>
         <div class="flex items-center gap-2">
-          <button id="tb-refresh" title="Actualizar: traer los últimos cambios del servidor" class="p-2.5 text-[#7d6c5c] hover:bg-[#fff1e6] rounded-full transition-all">
+          <button id="tb-refresh" title="${_hasUpdates ? 'Hay datos nuevos en el servidor — tocá para actualizar' : 'Actualizar: traer los últimos cambios del servidor'}" class="relative p-2.5 ${_hasUpdates ? 'text-[#d82f1e]' : 'text-[#7d6c5c]'} hover:bg-[#fff1e6] rounded-full transition-all">
             <span class="material-symbols-outlined">refresh</span>
+            ${_hasUpdates ? `<span class="absolute top-1 right-1 bg-[#d82f1e] w-2.5 h-2.5 rounded-full ring-2 ring-white"></span>` : ''}
           </button>
           <button id="tb-theme" title="Modo oscuro / claro" class="p-2.5 text-[#7d6c5c] hover:bg-[#fff1e6] rounded-full transition-all">
             <span class="material-symbols-outlined">${document.documentElement.classList.contains('dark') ? 'light_mode' : 'dark_mode'}</span>
@@ -139,6 +151,9 @@ export async function mountTopbar(el) {
         // 2) Re-montar el módulo actual limpio → vuelve a leer del servidor.
         const cur = location.hash.slice(1) || '/dashboard';
         await navigate(cur);
+        // 3) Marcar como "visto" el estado actual → apaga el puntito de aviso.
+        _lastSeenFp = await fetchFp();
+        _hasUpdates = false;
         Notif.toast('Datos actualizados', 'success');
       } catch (e) {
         Notif.toast('No se pudo actualizar: ' + (e?.message || ''), 'error');
@@ -163,6 +178,22 @@ export async function mountTopbar(el) {
   on(EV.NOTIFICATION_NEW, render);
   on(EV.BRANCH_CHANGED, render);
   on(EV.CASH_MOVED, render);
+
+  // Aviso de datos nuevos: baseline + chequeo cada 60s (una sola vez por sesión).
+  if (!_pollStarted) {
+    _pollStarted = true;
+    _lastSeenFp = await fetchFp(); // punto de partida: sin aviso al entrar
+    const check = async () => {
+      const fp = await fetchFp();
+      if (fp && _lastSeenFp && fp !== _lastSeenFp && !_hasUpdates) {
+        _hasUpdates = true;
+        render();
+      }
+    };
+    setInterval(check, 60_000);
+    // También al volver a la pestaña (si estuvo minimizada un rato).
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+  }
 }
 
 function openBellPanel() {
