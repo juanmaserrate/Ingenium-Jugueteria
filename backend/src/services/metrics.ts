@@ -73,10 +73,11 @@ export async function getDashboard(params: { branchId?: string; month: string; t
     senaSum({ datetime: { gte: mr.gte, lt: mr.lt } }),
   ]);
 
-  // Caja: saldo acumulado (todos los movimientos hasta hoy)
+  // Caja: saldo acumulado de la caja NORMAL (box='register'). NO incluye la caja
+  // de seguridad, para que coincida con el "Saldo actual" del módulo Caja.
   const cashAgg = await prisma.cashMovement.aggregate({
     _sum: { amountIn: true, amountOut: true }, _count: true,
-    where: branchId ? { branchId } : {},
+    where: { box: 'register', ...(branchId ? { branchId } : {}) },
   });
   const cashBalance = (cashAgg._sum.amountIn ?? 0) - (cashAgg._sum.amountOut ?? 0);
 
