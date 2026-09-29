@@ -7,7 +7,7 @@
 //   - API (/api, /auth, /webhooks): NUNCA cachear — se deja a fetch normal.
 //     Cuando no hay red, la cola local de sync-queue.js se encarga.
 
-const VERSION = 'ingenium-v2-tn';
+const VERSION = 'ingenium-v3-netfirst';
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSETS_CACHE = `${VERSION}-assets`;
 const CDN_CACHE = `${VERSION}-cdn`;
@@ -106,6 +106,22 @@ async function cacheFirst(event, cacheName) {
   }
 }
 
+// Network-first para JS/CSS del mismo origen: SIEMPRE trae la última versión
+// cuando hay internet (evita servir módulos viejos que rompen contra otros nuevos,
+// p. ej. un repo cacheado sin una función que el módulo nuevo ya usa). El caché
+// queda solo como respaldo offline.
+async function networkFirstAsset(event, cacheName) {
+  const cache = await caches.open(cacheName);
+  try {
+    const res = await fetch(event.request);
+    if (res && res.ok) cache.put(event.request, res.clone());
+    return res;
+  } catch (err) {
+    const cached = await cache.match(event.request);
+    return cached || new Response('', { status: 504, statusText: 'Offline' });
+  }
+}
+
 async function staleWhileRevalidate(event, cacheName) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(event.request);
@@ -158,9 +174,11 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Mismo origen: cache-first
+  // Mismo origen (JS/CSS del app): network-first → última versión siempre que
+  // haya internet; el caché es respaldo offline. Evita mezclar módulos viejos y
+  // nuevos tras un deploy.
   if (url.origin === self.location.origin) {
-    event.respondWith(cacheFirst(event, ASSETS_CACHE));
+    event.respondWith(networkFirstAsset(event, ASSETS_CACHE));
     return;
   }
 });
