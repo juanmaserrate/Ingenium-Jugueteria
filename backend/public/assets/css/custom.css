@@ -84,6 +84,17 @@ button:focus-visible, a:focus-visible, [role="button"]:focus-visible, [role="rad
 }
 .ing-input:focus { outline: none; border-color: #d82f1e; background: #fff; }
 
+/* Variante compacta para barras de filtros: ancho automático y baja, para que
+   varios controles entren en una sola fila en vez de apilarse full-width. */
+.ing-filter {
+  width: auto; padding: .4rem .7rem; border-radius: .6rem;
+  background: #fff1e6; border: 2px solid transparent;
+  font-weight: 600; font-size: .8rem; transition: all .15s; max-width: 100%;
+}
+.ing-filter:focus { outline: none; border-color: #d82f1e; background: #fff; }
+html.dark .ing-filter { background: #2a2219; color: #f3ece3; }
+html.dark .ing-filter:focus { background: #1e1a16; }
+
 .ing-btn-primary {
   background: #d82f1e; color: #fff; font-weight: 800;
   padding: .875rem 1.5rem; border-radius: 9999px;

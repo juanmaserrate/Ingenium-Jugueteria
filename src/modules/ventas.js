@@ -157,11 +157,11 @@ function render(el) {
     .concat(Object.entries(state.brMap || {}).map(([id, name]) => `<option value="${id}" ${state.branch === id ? 'selected' : ''}>${escapeHtml(name)}</option>`)).join('');
 
   const dateInput = state.period === 'custom' ? `
-      <input id="v-from" type="date" value="${state.customFrom}" class="ing-input" title="Desde" />
-      <input id="v-to" type="date" value="${state.customTo}" class="ing-input" title="Hasta" />
+      <input id="v-from" type="date" value="${state.customFrom}" class="ing-filter" title="Desde" />
+      <input id="v-to" type="date" value="${state.customTo}" class="ing-filter" title="Hasta" />
     ` : state.period === 'all' ? '' : `
       <input id="v-date" type="${state.period === 'year' ? 'number' : state.period === 'month' ? 'month' : 'date'}"
-        value="${state.period === 'year' ? state.date.slice(0, 4) : state.period === 'month' ? state.date.slice(0, 7) : state.date}" class="ing-input" />`;
+        value="${state.period === 'year' ? state.date.slice(0, 4) : state.period === 'month' ? state.date.slice(0, 7) : state.date}" class="ing-filter" />`;
 
   el.innerHTML = `
     <div class="mb-5 flex flex-wrap justify-between items-start gap-4">
@@ -188,25 +188,25 @@ function render(el) {
       </div>
     </div>
 
-    <div class="ing-card p-3 mb-4">
-      <div class="flex flex-wrap gap-2 items-center">
+    <div class="ing-card p-2.5 mb-4">
+      <div class="flex flex-wrap gap-1.5 items-center">
         <div class="flex gap-1">
-          ${['day', 'month', 'year', 'custom', 'all'].map(p => `<button data-period="${p}" class="px-3 py-1.5 text-xs font-bold rounded-lg ${state.period === p ? 'bg-[#d82f1e] text-white' : 'bg-[#fff1e6] text-[#7d6c5c]'}">${{ day: 'Día', month: 'Mes', year: 'Año', custom: 'Rango', all: 'Todo' }[p]}</button>`).join('')}
+          ${['day', 'month', 'year', 'custom', 'all'].map(p => `<button data-period="${p}" class="px-2.5 py-1 text-xs font-bold rounded-md ${state.period === p ? 'bg-[#d82f1e] text-white' : 'bg-[#fff1e6] text-[#7d6c5c]'}">${{ day: 'Día', month: 'Mes', year: 'Año', custom: 'Rango', all: 'Todo' }[p]}</button>`).join('')}
         </div>
         ${dateInput}
-        <select id="v-type" class="ing-input">
+        <select id="v-type" class="ing-filter">
           <option value="all" ${state.type === 'all' ? 'selected' : ''}>Ventas y devoluciones</option>
           <option value="sale" ${state.type === 'sale' ? 'selected' : ''}>Sólo ventas</option>
           <option value="return" ${state.type === 'return' ? 'selected' : ''}>Sólo devoluciones</option>
         </select>
-        <select id="v-method" class="ing-input">${methodOpts}</select>
-        <select id="v-br" class="ing-input">${branchOpts}</select>
-        <select id="v-source" class="ing-input">
+        <select id="v-method" class="ing-filter">${methodOpts}</select>
+        <select id="v-br" class="ing-filter">${branchOpts}</select>
+        <select id="v-source" class="ing-filter">
           <option value="" ${state.source === '' ? 'selected' : ''}>Todo origen</option>
           <option value="pos" ${state.source === 'pos' ? 'selected' : ''}>POS</option>
           <option value="tn" ${state.source === 'tn' ? 'selected' : ''}>Tienda Nube</option>
         </select>
-        <input id="v-q" placeholder="Buscar N°, cliente o producto…" class="ing-input flex-1 min-w-[180px]" value="${escapeHtml(state.q)}" />
+        <input id="v-q" placeholder="Buscar N°, cliente o producto…" class="ing-filter flex-1 min-w-[160px]" value="${escapeHtml(state.q)}" />
       </div>
     </div>
 
