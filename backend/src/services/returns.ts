@@ -88,6 +88,45 @@ export async function processReturn(input: ReturnInput) {
     throw new ValidationError('La devoluci\u00f3n no tiene items');
   }
   const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+  // Si la devoluci\u00f3n referencia una VENTA original, validamos contra ella: no se
+  // puede devolver un producto que no se vendi\u00f3, ni m\u00e1s cantidad que la vendida
+  // (contando devoluciones previas), y el precio unitario se toma de la venta real
+  // (no del cliente) para que no se pueda inflar el reintegro.
+  if (input.originalSaleId) {
+    const sale = await prisma.sale.findUnique({
+      where: { id: input.originalSaleId },
+      include: { items: true },
+    });
+    if (!sale) throw new ValidationError('La venta original no existe');
+    const soldQty = new Map<string, number>();
+    const soldPrice = new Map<string, number>();
+    for (const it of sale.items) {
+      soldQty.set(it.variantId, (soldQty.get(it.variantId) ?? 0) + it.qty);
+      soldPrice.set(it.variantId, it.unitPrice);
+    }
+    // Cantidades ya devueltas de esta venta (en devoluciones anteriores).
+    const prev = await prisma.return.findMany({ where: { originalSaleId: input.originalSaleId } });
+    const alreadyReturned = new Map<string, number>();
+    for (const r of prev) {
+      for (const it of ((r.returnedItems as any[]) ?? [])) {
+        alreadyReturned.set(it.variantId, (alreadyReturned.get(it.variantId) ?? 0) + (Number(it.qty) || 0));
+      }
+    }
+    for (const it of input.returnedItems) {
+      if (!soldQty.has(it.variantId)) {
+        throw new ValidationError('Se intenta devolver un producto que no est\u00e1 en la venta original');
+      }
+      const cap = soldQty.get(it.variantId)!;
+      const prevQty = alreadyReturned.get(it.variantId) ?? 0;
+      if (prevQty + it.qty > cap) {
+        throw new ValidationError(`No se puede devolver m\u00e1s de lo vendido (vendido ${cap}, ya devuelto ${prevQty}, ped\u00eds ${it.qty})`);
+      }
+      // Precio real de la venta (evita reintegros inflados).
+      it.unitPrice = soldPrice.get(it.variantId) ?? it.unitPrice;
+    }
+  }
+
   const returnedTotal = round2(input.returnedItems.reduce((s, i) => s + i.qty * i.unitPrice, 0));
   const takenTotal = round2(input.takenItems.reduce((s, i) => s + i.qty * i.unitPrice, 0));
   const difference = round2(returnedTotal - takenTotal);
