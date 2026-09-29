@@ -15,6 +15,11 @@ import { toast } from '../core/notifications.js';
 import { activeBranchId, currentSession } from '../core/auth.js';
 import { on, EV } from '../core/events.js';
 
+// Candado anti doble-submit: evita que un doble click / F9 repetido dispare
+// dos veces la confirmación de la MISMA venta (que crearía 2 ventas y doble
+// descuento de stock). Se libera siempre en el finally de confirmSale.
+let _confirming = false;
+
 // ===== Estado global del POS =====
 const state = {
   tabs: [],         // [{id, label, draftId, sale}]
@@ -615,6 +620,32 @@ function saleToFront(bs) {
 
 // ===== Confirmar venta =====
 async function confirmSale(root) {
+  // Anti doble-submit: si ya hay una confirmación en curso, ignorar.
+  if (_confirming) return;
+  const btn = (root?.querySelector?.('#pos-confirm')) || document.getElementById('pos-confirm');
+  const btnOrig = btn ? btn.innerHTML : null;
+  _confirming = true;
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add('opacity-60', 'cursor-not-allowed');
+    btn.innerHTML = '<span class="material-symbols-outlined animate-spin">progress_activity</span> Procesando…';
+  }
+  try {
+    await _confirmSaleInner(root);
+  } finally {
+    _confirming = false;
+    // Si la venta salió OK el panel se re-renderiza y este botón queda
+    // desconectado (hay uno nuevo, habilitado). Solo restauramos si sigue vivo
+    // (caminos de validación/error que no re-renderizan).
+    if (btn && btn.isConnected) {
+      btn.disabled = false;
+      btn.classList.remove('opacity-60', 'cursor-not-allowed');
+      if (btnOrig != null) btn.innerHTML = btnOrig;
+    }
+  }
+}
+
+async function _confirmSaleInner(root) {
   const t = activeTab();
   const sale = t.sale;
   if (!sale.items.length) { toast('El carrito está vacío', 'warn'); return; }
@@ -662,10 +693,17 @@ async function confirmSale(root) {
     }
   }
 
+  // Id estable de ESTA venta: se manda como offlineId para idempotencia. Si por un
+  // timeout se reintenta la misma venta, el backend (offlineId @unique) devuelve la
+  // que ya creó en vez de duplicarla. Una venta nueva (carrito nuevo) genera otro id.
+  if (!sale.client_sale_id) {
+    sale.client_sale_id = (globalThis.crypto?.randomUUID?.()) || ('cs_' + Date.now() + '_' + Math.random().toString(36).slice(2));
+  }
   const buildBody = (negative) => ({
     branchId: br,
     sellerId: null, // empleados aún no migrados al backend
     customerId: sale.customer_id || null,
+    offlineId: sale.client_sale_id,
     items: sale.items.map(it => ({
       variantId: it.variant_id,
       qty: Number(it.qty),

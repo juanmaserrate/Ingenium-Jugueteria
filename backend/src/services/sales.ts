@@ -117,7 +117,9 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
   }
 
   // Atomic: validate stock, decrement, create sale, create cash movement
-  const sale = await prisma.$transaction(async (tx) => {
+  let sale: string;
+  try {
+  sale = await prisma.$transaction(async (tx) => {
     // Validate stock per item
     for (const it of input.items) {
       const stock = await tx.stock.findUnique({
@@ -229,6 +231,16 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
 
     return saleId;
   });
+  } catch (e) {
+    // Carrera: otra request con el mismo offlineId creó la venta en paralelo.
+    // El índice único de offlineId dispara P2002 → devolvemos la venta existente
+    // en vez de duplicarla (garantía real de idempotencia, no best-effort).
+    if (input.offlineId && (e as any)?.code === 'P2002') {
+      const dup = await prisma.sale.findFirst({ where: { offlineId: input.offlineId } });
+      if (dup) return getSale(dup.id);
+    }
+    throw e;
+  }
 
   await logAudit({
     userId: opts.userId ?? input.sellerId ?? undefined,

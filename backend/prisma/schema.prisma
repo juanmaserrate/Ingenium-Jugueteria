@@ -244,7 +244,7 @@ model Sale {
   status              String   // draft | confirmed | cancelled
   source              String   @default("pos") // pos | tn
   tnOrderId           String?  @map("tn_order_id")
-  offlineId           String?  @map("offline_id") // id temporal antes de sync
+  offlineId           String?  @unique @map("offline_id") // id temporal antes de sync; @unique = idempotencia (Postgres permite múltiples NULL)
   createdAt           DateTime @default(now()) @map("created_at")
 
   branch    Branch     @relation(fields: [branchId], references: [id])
