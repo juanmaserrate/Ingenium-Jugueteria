@@ -90,15 +90,31 @@ export async function createSena(input: SenaInput) {
 // Marca una seña como usada (redeemed) y la vincula a la venta. Se llama desde
 // confirmSale cuando un pago trae senaId. NO mueve la caja (la plata ya entró al
 // crearla) ni suma a lo facturado (eso lo excluyen las métricas).
-export async function redeemSena(senaId: string, saleId: string, tx?: any) {
-  const client = tx ?? prisma;
+export async function redeemSena(
+  senaId: string,
+  saleId: string,
+  opts: { amount?: number; customerId?: string | null; tx?: any } = {},
+) {
+  const client = opts.tx ?? prisma;
   const sena = await client.sena.findUnique({ where: { id: senaId } });
   if (!sena) throw new ValidationError('Seña no encontrada');
   if (sena.status !== 'active') throw new ValidationError(`La seña #${sena.number} ya fue usada o cancelada`);
-  await client.sena.update({
-    where: { id: senaId },
+  // Debe ser del mismo cliente de la venta: no se puede usar la seña de otro.
+  if (sena.customerId && opts.customerId && sena.customerId !== opts.customerId) {
+    throw new ValidationError(`La seña #${sena.number} es de otro cliente`);
+  }
+  // El monto aplicado no puede superar el valor de la seña (evita "pagar" $20.000
+  // con una seña de $500). Tolerancia de $0.01 por coma flotante.
+  if (opts.amount != null && opts.amount > sena.amount + 0.01) {
+    throw new ValidationError(`La seña #${sena.number} es por $${sena.amount} y no cubre $${opts.amount}`);
+  }
+  // Canje atómico: solo si sigue activa. Evita doble canje concurrente (dos ventas
+  // simultáneas con la misma seña).
+  const res = await client.sena.updateMany({
+    where: { id: senaId, status: 'active' },
     data: { status: 'redeemed', redeemedAt: new Date(), redeemedSaleId: saleId },
   });
+  if (res.count !== 1) throw new ValidationError(`La seña #${sena.number} ya fue usada`);
   return sena;
 }
 

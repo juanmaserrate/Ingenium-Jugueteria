@@ -518,7 +518,10 @@ function renderSide(root, totals) {
         </div>
       </div>
 
-      <button id="pos-fill-cash" class="w-full ing-btn-secondary text-sm">Pagar todo con efectivo</button>
+      <div class="flex gap-2">
+        <button id="pos-fill-cash" class="flex-1 ing-btn-secondary text-sm">Pagar con efectivo</button>
+        <button id="pos-use-vale" class="flex-1 ing-btn-secondary text-sm flex items-center justify-center gap-1"><span class="material-symbols-outlined text-base">local_activity</span> Usar vale</button>
+      </div>
 
       <div class="space-y-2 pt-2 border-t border-[#fff1e6]">
         <button id="pos-confirm" class="w-full ing-btn-primary text-base py-3 flex items-center justify-center gap-2">
@@ -550,6 +553,7 @@ function renderSide(root, totals) {
     sale.payments = [{ method_id: 'cash', amount: totals.total }];
     persistDraft(); renderCart(root);
   });
+  side.querySelector('#pos-use-vale')?.addEventListener('click', () => applyVale(root, sale, totals));
   side.querySelector('#pos-save-draft').addEventListener('click', async () => { await persistDraft(); toast('Borrador guardado', 'success'); });
   side.querySelector('#pos-clear').addEventListener('click', async () => {
     const ok = await confirmModal({ title: 'Vaciar', message: '¿Vaciar el carrito actual?', danger: true, confirmLabel: 'Vaciar' });
@@ -562,6 +566,17 @@ function renderSide(root, totals) {
 }
 
 function payRow(p, i) {
+  // Pago con VALE (nota de crédito): medio fijo, monto no editable.
+  if (p.method_id === 'credit_note') {
+    return `
+    <div class="flex gap-2 items-center">
+      <div class="ing-input flex-1 !bg-amber-50 !border-amber-200 text-amber-700 font-bold text-sm flex items-center">Vale ${escapeHtml(p.code || '')}</div>
+      <div class="w-28 text-right font-bold text-sm text-amber-700">${money(p.amount || 0)}</div>
+      <button data-pay-remove="${i}" title="Quitar vale" class="w-8 h-8 rounded-md text-[#7d6c5c] hover:bg-red-50 hover:text-red-600 flex items-center justify-center">
+        <span class="material-symbols-outlined text-base">close</span>
+      </button>
+    </div>`;
+  }
   // Pago con SEÑA: medio fijo, monto no editable (es el valor de la seña).
   if (p.method_id === 'sena') {
     return `
@@ -716,6 +731,10 @@ async function _confirmSaleInner(root) {
       // Pago con seña: no mueve caja (la plata entró al crearla) y lleva senaId.
       if (p.method_id === 'sena') {
         return { methodId: 'sena', methodName: `Seña #${p.sena_number}`, amount: Number(p.amount) || 0, affectsCash: false, senaId: p.sena_id };
+      }
+      // Pago con vale (nota de crédito): no mueve caja; lleva creditNoteId para canjearlo.
+      if (p.method_id === 'credit_note') {
+        return { methodId: 'credit_note', methodName: `Vale ${p.code || ''}`.trim(), amount: Number(p.amount) || 0, affectsCash: false, creditNoteId: p.credit_note_id };
       }
       const m = state.methods.find(x => x.id === p.method_id);
       return {
@@ -876,6 +895,48 @@ function printTicket(rec) {
 
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Aplica un VALE (nota de crédito) como medio de pago: pide el código, lo valida
+// contra el backend (no usado, no vencido) y lo agrega por el monto pendiente
+// (nunca más que el valor del vale → no genera vuelto en efectivo).
+async function applyVale(root, sale, totals) {
+  sale.payments = sale.payments || [];
+  if (sale.payments.some(p => p.method_id === 'credit_note')) { toast('Ya hay un vale aplicado en esta venta', 'warn'); return; }
+  const paid = sale.payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const pending = round2((totals.total || 0) - paid);
+  if (pending <= 0.01) { toast('La venta ya está paga', 'warn'); return; }
+  await openModal({
+    title: 'Usar vale (nota de crédito)',
+    size: 'sm',
+    bodyHTML: `
+      <label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1">Código del vale</label>
+      <input id="vale-code" class="ing-input w-full" placeholder="Ej: NC-XXXXXX" autocomplete="off" />
+      <div id="vale-msg" class="text-xs text-[#7d6c5c] mt-2">Falta pagar ${money(pending)}</div>`,
+    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="ok">Aplicar</button>`,
+    onOpen: (el, close) => {
+      setTimeout(() => el.querySelector('#vale-code')?.focus(), 50);
+      const msg = el.querySelector('#vale-msg');
+      const apply = async () => {
+        const code = (el.querySelector('#vale-code').value || '').trim();
+        if (!code) { msg.textContent = 'Ingresá un código'; return; }
+        try {
+          const cn = await api(`/api/credit-notes/lookup?code=${encodeURIComponent(code)}`);
+          const amount = round2(Math.min(Number(cn.amount) || 0, pending));
+          sale.payments.push({ method_id: 'credit_note', amount, credit_note_id: cn.id, code: cn.code });
+          close(true);
+          persistDraft(); renderCart(root);
+          toast(`Vale ${cn.code} aplicado (${money(amount)})`, 'success');
+        } catch (e) {
+          msg.textContent = e.message || 'Vale inválido';
+          msg.className = 'text-xs text-red-600 mt-2 font-bold';
+        }
+      };
+      el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
+      el.querySelector('[data-act="ok"]').addEventListener('click', apply);
+      el.querySelector('#vale-code').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); apply(); } });
+    },
+  });
 }
 
 // ===== Cliente por número de documento =====

@@ -46,13 +46,51 @@ export async function listCreditNotes() {
   return prisma.creditNote.findMany({ orderBy: { issuedAt: 'desc' }, take: 1000 });
 }
 
+// Busca un vale por código y valida que se pueda usar (no canjeado, no vencido).
+// Lo usa el POS antes de aplicarlo como pago.
+export async function lookupCreditNote(code: string) {
+  const cn = await prisma.creditNote.findUnique({ where: { code: code.trim() } });
+  if (!cn) throw new ValidationError('Vale no encontrado');
+  if (cn.redeemedAt) throw new ValidationError(`El vale ${cn.code} ya fue usado`);
+  if (cn.expiresAt && cn.expiresAt.getTime() < Date.now()) throw new ValidationError(`El vale ${cn.code} está vencido`);
+  return cn;
+}
+
+// Canjea un vale (nota de crédito) dentro de la venta: valida estado, vencimiento
+// y monto, y lo marca usado de forma ATÓMICA (un vale = una sola vez).
+export async function redeemCreditNote(
+  creditNoteId: string,
+  saleId: string,
+  opts: { amount?: number; customerId?: string | null; tx?: any } = {},
+) {
+  const client = opts.tx ?? prisma;
+  const cn = await client.creditNote.findUnique({ where: { id: creditNoteId } });
+  if (!cn) throw new ValidationError('Vale no encontrado');
+  if (cn.redeemedAt) throw new ValidationError(`El vale ${cn.code} ya fue usado`);
+  if (cn.expiresAt && cn.expiresAt.getTime() < Date.now()) throw new ValidationError(`El vale ${cn.code} está vencido`);
+  if (cn.customerId && opts.customerId && cn.customerId !== opts.customerId) {
+    throw new ValidationError(`El vale ${cn.code} es de otro cliente`);
+  }
+  if (opts.amount != null && opts.amount > cn.amount + 0.01) {
+    throw new ValidationError(`El vale ${cn.code} es por $${cn.amount} y no cubre $${opts.amount}`);
+  }
+  // Marca usado SOLO si sigue sin canjear → evita reuso concurrente/infinito.
+  const res = await client.creditNote.updateMany({
+    where: { id: creditNoteId, redeemedAt: null },
+    data: { redeemedAt: new Date(), redeemedSaleId: saleId },
+  });
+  if (res.count !== 1) throw new ValidationError(`El vale ${cn.code} ya fue usado`);
+  return cn;
+}
+
 export async function processReturn(input: ReturnInput) {
   if (input.returnedItems.length === 0 && input.takenItems.length === 0) {
     throw new ValidationError('La devoluci\u00f3n no tiene items');
   }
-  const returnedTotal = input.returnedItems.reduce((s, i) => s + i.qty * i.unitPrice, 0);
-  const takenTotal = input.takenItems.reduce((s, i) => s + i.qty * i.unitPrice, 0);
-  const difference = returnedTotal - takenTotal;
+  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+  const returnedTotal = round2(input.returnedItems.reduce((s, i) => s + i.qty * i.unitPrice, 0));
+  const takenTotal = round2(input.takenItems.reduce((s, i) => s + i.qty * i.unitPrice, 0));
+  const difference = round2(returnedTotal - takenTotal);
 
   const returnId = await prisma.$transaction(async (tx) => {
     const rid = randomId();
@@ -119,10 +157,10 @@ export async function processReturn(input: ReturnInput) {
     // Cash movement for refund: SOLO la parte reintegrada en efectivo sale del cajón.
     // Un reintegro por tarjeta/transferencia NO mueve la caja (mismo criterio que ventas).
     if (difference > 0 && input.refundPayments && input.refundPayments.length > 0) {
-      const cash = input.refundPayments.reduce(
+      const cash = round2(input.refundPayments.reduce(
         (s, p) => s + ((p.affectsCash ?? isCashMethod(p.methodId)) ? p.amount : 0),
         0,
-      );
+      ));
       if (cash > 0) {
         await tx.cashMovement.create({
           data: {
@@ -141,10 +179,10 @@ export async function processReturn(input: ReturnInput) {
     } else if (difference < 0 && input.refundPayments && input.refundPayments.length > 0) {
       // Canje a mayor valor: el cliente PAGA la diferencia. La parte en efectivo
       // ENTRA a la caja (amountIn). Tarjeta/transferencia no mueven la caja.
-      const cashIn = input.refundPayments.reduce(
+      const cashIn = round2(input.refundPayments.reduce(
         (s, p) => s + ((p.affectsCash ?? isCashMethod(p.methodId)) ? p.amount : 0),
         0,
-      );
+      ));
       if (cashIn > 0) {
         await tx.cashMovement.create({
           data: {

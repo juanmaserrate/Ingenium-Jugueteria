@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { processReturn, listReturns, listCreditNotes } from '../services/returns.js';
+import { processReturn, listReturns, listCreditNotes, lookupCreditNote } from '../services/returns.js';
 
 const itemSchema = z.object({
   variantId: z.string(),
@@ -39,4 +39,10 @@ export async function returnsRoutes(app: FastifyInstance) {
   });
 
   app.get('/credit-notes', async () => listCreditNotes());
+
+  // Busca un vale por código y valida que se pueda usar (para el POS).
+  app.get('/credit-notes/lookup', async (req) => {
+    const { code } = z.object({ code: z.string().min(1) }).parse(req.query);
+    return lookupCreditNote(code);
+  });
 }

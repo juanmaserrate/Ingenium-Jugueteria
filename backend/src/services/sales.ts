@@ -7,6 +7,7 @@ import { nextCounter } from './counters.js';
 import { adjustStock, releaseReserved } from './stock.js';
 import { enqueueSync } from '../sync/queue.js';
 import { redeemSena } from './senas.js';
+import { redeemCreditNote } from './returns.js';
 
 export type SalePaymentInput = {
   methodId: string;
@@ -17,6 +18,9 @@ export type SalePaymentInput = {
   // Si el pago es con una SEÑA, su id. La seña ya entró a la caja al crearse, así
   // que este pago NO mueve la caja (affectsCash=false) ni suma a lo facturado.
   senaId?: string | null;
+  // Si el pago es con un VALE (nota de crédito), su id. No mueve la caja; se canjea
+  // (marca usado) al confirmar la venta.
+  creditNoteId?: string | null;
 };
 
 // Fallback cuando el front no manda affectsCash: tratamos efectivo por id conocido.
@@ -181,7 +185,7 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
           discountPct: it.discountPct ?? null,
           discountFixed: it.discountFixed ?? null,
           priceOverridden: it.priceOverridden ?? false,
-          subtotal: computeItemSubtotal(it),
+          subtotal: round2(computeItemSubtotal(it)),
         },
       });
       // Decrement stock (atómico + guarda contra oversell por concurrencia)
@@ -203,16 +207,22 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
           amount: p.amount,
         },
       });
-      // Pago con seña → marcarla como usada y vincularla a esta venta.
-      if (p.senaId) await redeemSena(p.senaId, saleId, tx);
+      // Pago con seña → marcarla como usada, validando cliente y monto.
+      if (p.senaId) await redeemSena(p.senaId, saleId, { amount: p.amount, customerId: input.customerId ?? null, tx });
+      // Pago con vale (nota de crédito) → canjearlo (una sola vez, valida vencimiento/monto).
+      if (p.creditNoteId) await redeemCreditNote(p.creditNoteId, saleId, { amount: p.amount, customerId: input.customerId ?? null, tx });
     }
 
-    // Movimiento de caja: SOLO los pagos que afectan caja (efectivo) entran al cajón.
-    // Una venta 100% con tarjeta/transferencia no mueve la caja.
-    const cashIn = input.payments.reduce(
-      (s, p) => s + ((p.affectsCash ?? isCashMethod(p.methodId)) ? p.amount : 0),
+    // Movimiento de caja: SOLO los pagos en efectivo entran al cajón. Señas y vales
+    // NO mueven la caja al canjearse (la seña ya entró al crearse; el vale es saldo
+    // a favor, no efectivo físico), aunque el front no mande affectsCash=false.
+    const cashIn = round2(input.payments.reduce(
+      (s, p) => {
+        if (p.senaId || p.creditNoteId) return s;
+        return s + ((p.affectsCash ?? isCashMethod(p.methodId)) ? p.amount : 0);
+      },
       0,
-    );
+    ));
     if (cashIn !== 0) {
       await tx.cashMovement.create({
         data: {
