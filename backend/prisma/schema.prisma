@@ -534,9 +534,14 @@ model Transfer {
   fromBranch  String   @map("from_branch")
   toBranch    String   @map("to_branch")
   items       Json     // [{ variantId, qty }]
+  // pending = creada por el origen, esperando que el destino confirme la recepción.
+  // confirmed = recibida (recién ahí se movió el stock). rejected/cancelled = sin efecto.
   status      String   @default("confirmed")
   notes       String?
   userId      String?  @map("user_id")
+  confirmedAt DateTime? @map("confirmed_at")
+  confirmedBy String?  @map("confirmed_by")
+  reason      String?  // motivo de rechazo/cancelación
 
   from Branch @relation("TransferFrom", fields: [fromBranch], references: [id])
   to   Branch @relation("TransferTo", fields: [toBranch], references: [id])
@@ -544,6 +549,7 @@ model Transfer {
   @@index([datetime])
   @@index([fromBranch])
   @@index([toBranch])
+  @@index([status])
   @@map("transfers")
 }
 

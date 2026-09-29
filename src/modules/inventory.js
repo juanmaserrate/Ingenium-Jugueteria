@@ -1731,18 +1731,36 @@ async function openCatalogForm(item, title, repo, entityLabel, withParentCat, co
 function toFrontTransfer(t) {
   return {
     id: t.id,
+    number: t.number,
     remito_number: `R-${String(t.number).padStart(6, '0')}`,
     datetime: t.datetime,
     from_branch: t.fromBranch,
     to_branch: t.toBranch,
     items: t.items || [],
     notes: t.notes || null,
+    status: t.status || 'confirmed',
+    confirmed_at: t.confirmedAt || null,
+    reason: t.reason || null,
   };
 }
 
+// Filtros del módulo de transferencias (se conservan entre re-renders).
+const transferFilters = { from: '', to: '', branch: '', status: '' };
+const TR_STATUS = {
+  pending:   { label: 'Pendiente', cls: 'bg-amber-100 text-amber-700' },
+  confirmed: { label: 'Confirmada', cls: 'bg-green-100 text-green-700' },
+  rejected:  { label: 'Rechazada', cls: 'bg-red-100 text-red-700' },
+  cancelled: { label: 'Cancelada', cls: 'bg-gray-200 text-gray-600' },
+};
+
 async function renderTransfers(container) {
+  const qs = new URLSearchParams();
+  if (transferFilters.branch) qs.set('branchId', transferFilters.branch);
+  if (transferFilters.status) qs.set('status', transferFilters.status);
+  if (transferFilters.from) qs.set('from', transferFilters.from);
+  if (transferFilters.to) qs.set('to', new Date(new Date(transferFilters.to).getTime() + 86400000).toISOString().slice(0, 10));
   const [transfersRaw, branches, products, localTransfers] = await Promise.all([
-    api('/api/transfers').catch(() => []),
+    api('/api/transfers?' + qs.toString()).catch(() => []),
     getAll('branches'), P.list(),
     getAll('transfers').catch(() => []),
   ]);
@@ -1750,39 +1768,84 @@ async function renderTransfers(container) {
   const stocks = products.flatMap(p => p._stocks || []);
   const brMap = Object.fromEntries(branches.map(b => [b.id, b.name]));
   const pMap  = Object.fromEntries(products.map(p => [p.id, p]));
+  // variantId -> producto, para resolver items nuevos (guardan variantId).
+  const vMap = {};
+  for (const p of products) for (const v of (p.variants || [])) vMap[v.id] = p;
+  const me = activeBranchId();
+  const pendingForMe = transfers.filter(t => t.status === 'pending' && t.to_branch === me).length;
 
   container.innerHTML = `
     ${localTransfers.length ? `
     <div class="ing-card p-3 mb-4 border-l-4 border-amber-500 bg-amber-50 flex items-center justify-between gap-3 flex-wrap">
-      <div class="text-sm text-[#241a0d]"><b>${localTransfers.length} transferencia(s)</b> quedaron guardadas solo en esta PC (registro). Nota: el stock de esas transferencias ya se movió; esto sube el remito al servidor para el historial compartido.</div>
+      <div class="text-sm text-[#241a0d]"><b>${localTransfers.length} transferencia(s)</b> quedaron guardadas solo en esta PC (registro). El stock de esas ya se movió; esto sube el remito al servidor para el historial compartido.</div>
       <button id="tr-migrate" class="ing-btn-secondary !py-1.5 !px-3 text-sm shrink-0">Archivar registro local</button>
     </div>` : ''}
-    <div class="flex justify-between items-center mb-4">
-      <h2 class="text-xl font-black">Transferencias entre sucursales (${transfers.length})</h2>
+    <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
+      <h2 class="text-xl font-black">Transferencias entre sucursales${pendingForMe ? ` · <span class="text-amber-600">${pendingForMe} pendiente(s) de recibir</span>` : ''}</h2>
       <button id="tr-new" class="ing-btn-primary text-sm"><span class="material-symbols-outlined align-middle text-base">add</span> Nueva transferencia</button>
+    </div>
+    <div class="ing-card p-2.5 mb-4">
+      <div class="flex flex-wrap gap-1.5 items-center">
+        <input id="trf-from" type="date" value="${transferFilters.from}" class="ing-filter" title="Desde" />
+        <input id="trf-to" type="date" value="${transferFilters.to}" class="ing-filter" title="Hasta" />
+        <select id="trf-branch" class="ing-filter">
+          <option value="">Todas las sucursales</option>
+          ${branches.map(b => `<option value="${b.id}" ${transferFilters.branch===b.id?'selected':''}>${b.name}</option>`).join('')}
+        </select>
+        <select id="trf-status" class="ing-filter">
+          <option value="">Todos los estados</option>
+          ${Object.entries(TR_STATUS).map(([k,v]) => `<option value="${k}" ${transferFilters.status===k?'selected':''}>${v.label}</option>`).join('')}
+        </select>
+        <button id="trf-clear" class="text-xs font-bold text-[#7d6c5c] hover:text-[#d82f1e] px-2">Limpiar</button>
+      </div>
     </div>
     <div class="ing-card overflow-auto">
       <table class="ing-table w-full">
-        <thead><tr><th>Remito</th><th>Fecha</th><th>De</th><th>A</th><th>Items</th><th class="text-right">Acciones</th></tr></thead>
+        <thead><tr><th>Remito</th><th>Fecha</th><th>De</th><th>A</th><th>Items</th><th>Estado</th><th class="text-right">Acciones</th></tr></thead>
         <tbody>
-          ${transfers.length === 0 ? `<tr><td colspan="6" class="text-center py-6 text-[#7d6c5c]">Sin transferencias</td></tr>` :
-            transfers.sort((a,b)=>b.datetime.localeCompare(a.datetime)).map(t => `
+          ${transfers.length === 0 ? `<tr><td colspan="7" class="text-center py-6 text-[#7d6c5c]">Sin transferencias</td></tr>` :
+            transfers.map(t => {
+              const st = TR_STATUS[t.status] || { label: t.status, cls: 'bg-[#fff1e6] text-[#7d6c5c]' };
+              const isDest = t.to_branch === me, isOrigin = t.from_branch === me;
+              const acciones = [];
+              if (t.status === 'pending' && isDest) {
+                acciones.push(`<button data-confirm="${t.id}" class="ing-btn-primary !py-1 !px-2 text-xs">Recibir</button>`);
+                acciones.push(`<button data-reject="${t.id}" class="ing-btn-secondary !py-1 !px-2 text-xs">Rechazar</button>`);
+              }
+              if (t.status === 'pending' && isOrigin) {
+                acciones.push(`<button data-cancel="${t.id}" class="ing-btn-secondary !py-1 !px-2 text-xs">Cancelar</button>`);
+              }
+              acciones.push(`<button data-print="${t.id}" title="Remito" class="p-1.5 hover:bg-[#fff1e6] rounded-full"><span class="material-symbols-outlined text-base">print</span></button>`);
+              return `
               <tr>
                 <td class="font-mono font-bold text-[#d82f1e]">${t.remito_number}</td>
                 <td class="text-xs">${new Date(t.datetime).toLocaleString('es-AR')}</td>
                 <td>${brMap[t.from_branch] || '-'}</td>
                 <td>${brMap[t.to_branch] || '-'}</td>
                 <td>${t.items.length} producto(s)</td>
-                <td class="text-right">
-                  <button data-print="${t.id}" class="p-1.5 hover:bg-[#fff1e6] rounded-full"><span class="material-symbols-outlined text-base">print</span></button>
-                </td>
-              </tr>
-            `).join('')}
+                <td><span class="px-2 py-1 rounded-full font-bold uppercase text-[10px] ${st.cls}">${st.label}</span></td>
+                <td class="text-right"><div class="flex gap-1 justify-end items-center">${acciones.join('')}</div></td>
+              </tr>`;
+            }).join('')}
         </tbody>
       </table>
     </div>
   `;
   container.querySelector('#tr-new').addEventListener('click', () => openTransferForm(branches, products, stocks, container));
+  // Filtros
+  const onFilter = () => {
+    transferFilters.from = container.querySelector('#trf-from').value;
+    transferFilters.to = container.querySelector('#trf-to').value;
+    transferFilters.branch = container.querySelector('#trf-branch').value;
+    transferFilters.status = container.querySelector('#trf-status').value;
+    renderTransfers(container);
+  };
+  ['trf-from','trf-to','trf-branch','trf-status'].forEach(id => container.querySelector('#'+id).addEventListener('change', onFilter));
+  container.querySelector('#trf-clear').addEventListener('click', () => { transferFilters.from = transferFilters.to = transferFilters.branch = transferFilters.status = ''; renderTransfers(container); });
+  // Acciones confirmar/rechazar/cancelar
+  container.querySelectorAll('[data-confirm]').forEach(b => b.addEventListener('click', () => transferAction(b.dataset.confirm, 'confirm', container)));
+  container.querySelectorAll('[data-reject]').forEach(b => b.addEventListener('click', () => transferAction(b.dataset.reject, 'reject', container)));
+  container.querySelectorAll('[data-cancel]').forEach(b => b.addEventListener('click', () => transferAction(b.dataset.cancel, 'cancel', container)));
   container.querySelector('#tr-migrate')?.addEventListener('click', async (ev) => {
     ev.currentTarget.disabled = true;
     let done = 0, failed = 0;
@@ -1802,8 +1865,25 @@ async function renderTransfers(container) {
   });
   container.querySelectorAll('[data-print]').forEach(b => b.addEventListener('click', () => {
     const t = transfers.find(x => x.id === b.dataset.print);
-    printTransfer(t, brMap, pMap);
+    printTransfer(t, brMap, pMap, vMap);
   }));
+}
+
+// Confirmar / rechazar / cancelar una transferencia pendiente.
+async function transferAction(id, action, container) {
+  const labels = { confirm: ['Recibir transferencia', '¿Confirmás la recepción? Recién ahí se mueve el stock a esta sucursal.', 'Recibir', 'confirm'],
+                   reject: ['Rechazar transferencia', '¿Rechazás esta transferencia? No se mueve stock.', 'Rechazar', 'reject'],
+                   cancel: ['Cancelar transferencia', '¿Cancelás esta transferencia pendiente? No se mueve stock.', 'Cancelar', 'cancel'] };
+  const [title, message, confirmLabel, ep] = labels[action];
+  const ok = await confirmModal({ title, message, confirmLabel, danger: action !== 'confirm' });
+  if (!ok) return;
+  try {
+    await api(`/api/transfers/${encodeURIComponent(id)}/${ep}`, { method: 'POST', body: {} });
+    toast(action === 'confirm' ? 'Transferencia recibida · stock actualizado' : action === 'reject' ? 'Transferencia rechazada' : 'Transferencia cancelada', 'success');
+    renderTransfers(container);
+  } catch (e) {
+    toast(e?.message || 'No se pudo completar la acción', 'error');
+  }
 }
 
 async function openTransferForm(branches, products, stocks, container) {
@@ -1812,12 +1892,12 @@ async function openTransferForm(branches, products, stocks, container) {
       <div class="grid grid-cols-2 gap-3">
         <label class="block"><span class="text-xs font-black text-[#7d6c5c] uppercase">Origen</span>
           <select name="from_branch" class="ing-input mt-1" required>
-            ${branches.map(b => `<option value="${b.id}">${b.name}</option>`).join('')}
+            ${branches.map(b => `<option value="${b.id}" ${b.id===activeBranchId()?'selected':''}>${b.name}</option>`).join('')}
           </select>
         </label>
         <label class="block"><span class="text-xs font-black text-[#7d6c5c] uppercase">Destino</span>
           <select name="to_branch" class="ing-input mt-1" required>
-            ${branches.map((b,i) => `<option value="${b.id}" ${i===1?'selected':''}>${b.name}</option>`).join('')}
+            ${branches.map(b => `<option value="${b.id}" ${b.id!==activeBranchId()?'selected':''}>${b.name}</option>`).join('')}
           </select>
         </label>
       </div>
@@ -1828,9 +1908,9 @@ async function openTransferForm(branches, products, stocks, container) {
       </div>
     </form>`;
   openModal({
-    title: 'Nueva transferencia',
+    title: 'Nueva transferencia (queda pendiente)',
     bodyHTML: body,
-    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="save">Confirmar transferencia</button>`,
+    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="save">Generar transferencia</button>`,
     size: 'lg',
     onOpen: (el, close) => {
       const form = el.querySelector('#tr-form');
@@ -1880,10 +1960,10 @@ async function openTransferForm(branches, products, stocks, container) {
             if (!variantId) { toast('Un producto no tiene variante en el servidor', 'error'); btn.disabled = false; return; }
             apiItems.push({ variantId, product_id: it.product_id, qty: it.qty });
           }
-          // Una sola llamada: el backend mueve el stock (igual que hoy) y deja el remito.
+          // Crea la transferencia PENDIENTE (no mueve stock hasta que el destino la reciba).
           const saved = await api('/api/transfers', { method: 'POST', body: { fromBranch: from, toBranch: to, items: apiItems } });
           const remito = `R-${String(saved.number).padStart(6, '0')}`;
-          toast(`Transferencia ${remito} confirmada`, 'success');
+          toast(`Transferencia ${remito} generada · pendiente de que la reciba el destino`, 'success');
           close(true);
           renderTransfers(container);
         } catch (e) {
@@ -1895,7 +1975,8 @@ async function openTransferForm(branches, products, stocks, container) {
   });
 }
 
-function printTransfer(t, brMap, pMap) {
+function printTransfer(t, brMap, pMap, vMap = {}) {
+  const stLabel = (TR_STATUS[t.status] || {}).label || t.status || '';
   const body = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start">
       <div>
@@ -1903,24 +1984,30 @@ function printTransfer(t, brMap, pMap) {
         <div class="muted">Sistema de Ventas</div>
       </div>
       <div style="text-align:right">
-        <h1>REMITO</h1>
+        <h1>REMITO INTERNO</h1>
         <div style="font-family:monospace;font-size:20px;font-weight:bold">${t.remito_number}</div>
         <div class="muted">${new Date(t.datetime).toLocaleString('es-AR')}</div>
+        <div style="margin-top:4px;font-weight:bold">Estado: ${stLabel}</div>
       </div>
     </div>
     <div style="display:flex;gap:32px;margin:24px 0">
-      <div><strong>De:</strong> ${brMap[t.from_branch]}</div>
-      <div><strong>A:</strong> ${brMap[t.to_branch]}</div>
+      <div><strong>De:</strong> ${brMap[t.from_branch] || t.from_branch}</div>
+      <div><strong>A:</strong> ${brMap[t.to_branch] || t.to_branch}</div>
     </div>
     <table>
       <thead><tr><th>Código</th><th>Producto</th><th style="text-align:center">Cantidad</th></tr></thead>
       <tbody>
         ${t.items.map(it => {
-          const p = pMap[it.product_id] || {};
+          const p = vMap[it.variantId] || pMap[it.product_id] || {};
           return `<tr><td>${p.code || '-'}</td><td>${p.name || '-'}</td><td style="text-align:center">${it.qty}</td></tr>`;
         }).join('')}
       </tbody>
     </table>
+    ${t.notes ? `<div style="margin-top:12px"><strong>Nota:</strong> ${t.notes}</div>` : ''}
+    <div style="margin-top:40px;display:flex;justify-content:space-between;gap:40px">
+      <div style="flex:1;border-top:1px solid #999;padding-top:6px;text-align:center" class="muted">Firma origen</div>
+      <div style="flex:1;border-top:1px solid #999;padding-top:6px;text-align:center" class="muted">Firma recepción</div>
+    </div>
     <div class="stamp">Traslado entre sucursales · Sin valor fiscal</div>
   `;
   printHTML({ title: `Remito ${t.remito_number}`, bodyHTML: body });
