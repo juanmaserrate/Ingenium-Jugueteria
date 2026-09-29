@@ -1,13 +1,16 @@
 import { prisma } from '../db.js';
 import { randomId } from '../utils/crypto.js';
+import { ValidationError } from '../utils/errors.js';
 
-export async function balance(branchId: string): Promise<number> {
-  const movements = await prisma.cashMovement.findMany({ where: { branchId } });
+// Todas las lecturas de la caja NORMAL filtran box='register' para no mezclar la
+// caja de seguridad. Los datos viejos (sin box) quedaron en 'register' por default.
+export async function balance(branchId: string, box: string = 'register'): Promise<number> {
+  const movements = await prisma.cashMovement.findMany({ where: { branchId, box } });
   return movements.reduce((s, m) => s + m.amountIn - m.amountOut, 0);
 }
 
-export async function listMovements(branchId: string) {
-  return prisma.cashMovement.findMany({ where: { branchId }, orderBy: { datetime: 'asc' } });
+export async function listMovements(branchId: string, box: string = 'register') {
+  return prisma.cashMovement.findMany({ where: { branchId, box }, orderBy: { datetime: 'asc' } });
 }
 
 export async function listExpenses(branchId: string) {
@@ -20,7 +23,7 @@ export async function dayStatus(branchId: string) {
   const now = new Date();
   const ar = new Date(now.getTime() - 3 * 3600 * 1000);
   const todayKey = ar.toISOString().slice(0, 10);
-  const movements = await prisma.cashMovement.findMany({ where: { branchId }, orderBy: { datetime: 'desc' }, take: 200 });
+  const movements = await prisma.cashMovement.findMany({ where: { branchId, box: 'register' }, orderBy: { datetime: 'desc' }, take: 200 });
   const todays = movements.filter((m) => new Date(m.datetime.getTime() - 3 * 3600 * 1000).toISOString().slice(0, 10) === todayKey);
   const opened = todays.some((m) => m.type === 'opening');
   const closed = todays.some((m) => m.type === 'closing');
@@ -35,13 +38,17 @@ export async function move(input: {
   description?: string;
   refId?: string;
   userId?: string;
+  box?: string;
+  tx?: any;
 }) {
-  return prisma.cashMovement.create({
+  const client = input.tx ?? prisma;
+  return client.cashMovement.create({
     data: {
       id: randomId(),
       datetime: new Date(),
       branchId: input.branchId,
       type: input.type,
+      box: input.box ?? 'register',
       amountIn: input.amountIn ?? 0,
       amountOut: input.amountOut ?? 0,
       description: input.description ?? null,
@@ -107,4 +114,73 @@ export async function addExpense(input: {
     });
   }
   return expense;
+}
+
+// ===================== CAJA DE SEGURIDAD (fuerte) =====================
+// Segunda caja por sucursal, con saldo propio y persistente (no se cierra a
+// diario). Movimientos con box='safe'. El efectivo entra depositando desde la
+// caja normal y vuelve retirando; también se registran gastos y reajustes.
+
+export async function safeBalance(branchId: string): Promise<number> {
+  return balance(branchId, 'safe');
+}
+
+export async function listSafeMovements(branchId: string) {
+  return prisma.cashMovement.findMany({ where: { branchId, box: 'safe' }, orderBy: { datetime: 'desc' }, take: 500 });
+}
+
+// Depósito: saca de la caja normal y entra a la de seguridad (2 movimientos atómicos).
+export async function depositToSafe(input: { branchId: string; amount: number; description?: string; userId?: string }) {
+  const amount = Math.round((input.amount + Number.EPSILON) * 100) / 100;
+  if (!(amount > 0)) throw new ValidationError('El monto del depósito debe ser mayor a 0');
+  const reg = await balance(input.branchId, 'register');
+  if (amount > reg + 0.01) throw new ValidationError(`No hay tanto efectivo en la caja normal (disponible $${reg})`);
+  const desc = input.description?.trim() || 'Depósito a caja de seguridad';
+  return prisma.$transaction(async (tx) => {
+    const ref = randomId();
+    await move({ branchId: input.branchId, box: 'register', type: 'safe_deposit', amountOut: amount, description: desc, refId: ref, userId: input.userId, tx });
+    await move({ branchId: input.branchId, box: 'safe', type: 'deposit', amountIn: amount, description: desc, refId: ref, userId: input.userId, tx });
+    return { ok: true, amount };
+  });
+}
+
+// Retiro: saca de la caja de seguridad y vuelve a la caja normal.
+export async function withdrawFromSafe(input: { branchId: string; amount: number; description?: string; userId?: string }) {
+  const amount = Math.round((input.amount + Number.EPSILON) * 100) / 100;
+  if (!(amount > 0)) throw new ValidationError('El monto del retiro debe ser mayor a 0');
+  const safe = await balance(input.branchId, 'safe');
+  if (amount > safe + 0.01) throw new ValidationError(`No hay tanto en la caja de seguridad (disponible $${safe})`);
+  const desc = input.description?.trim() || 'Retiro de caja de seguridad';
+  return prisma.$transaction(async (tx) => {
+    const ref = randomId();
+    await move({ branchId: input.branchId, box: 'safe', type: 'safe_withdraw', amountOut: amount, description: desc, refId: ref, userId: input.userId, tx });
+    await move({ branchId: input.branchId, box: 'register', type: 'safe_withdraw', amountIn: amount, description: desc, refId: ref, userId: input.userId, tx });
+    return { ok: true, amount };
+  });
+}
+
+// Gasto pagado desde la caja de seguridad (sale plata de la fuerte).
+export async function addSafeExpense(input: { branchId: string; amount: number; category?: string; description?: string; userId?: string }) {
+  const amount = Math.round((input.amount + Number.EPSILON) * 100) / 100;
+  if (!(amount > 0)) throw new ValidationError('El monto del gasto debe ser mayor a 0');
+  const safe = await balance(input.branchId, 'safe');
+  if (amount > safe + 0.01) throw new ValidationError(`No hay tanto en la caja de seguridad (disponible $${safe})`);
+  const desc = input.description?.trim() || input.category?.trim() || 'Gasto de caja de seguridad';
+  return move({ branchId: input.branchId, box: 'safe', type: 'expense', amountOut: amount, description: desc, userId: input.userId });
+}
+
+// Reajuste: pone el saldo de la caja de seguridad en el valor real indicado,
+// registrando la diferencia como un ajuste (positivo o negativo).
+export async function adjustSafeBalance(input: { branchId: string; targetBalance: number; description?: string; userId?: string }) {
+  const target = Math.round((input.targetBalance + Number.EPSILON) * 100) / 100;
+  const current = await balance(input.branchId, 'safe');
+  const delta = Math.round((target - current + Number.EPSILON) * 100) / 100;
+  if (delta === 0) return { ok: true, delta: 0, balance: current };
+  const desc = input.description?.trim() || `Reajuste de saldo (de $${current} a $${target})`;
+  await move({
+    branchId: input.branchId, box: 'safe', type: 'adjustment',
+    amountIn: delta > 0 ? delta : 0, amountOut: delta < 0 ? -delta : 0,
+    description: desc, userId: input.userId,
+  });
+  return { ok: true, delta, balance: target };
 }

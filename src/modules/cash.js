@@ -81,6 +81,9 @@ async function render(el) {
       <button id="c-manual" class="ing-btn-secondary flex items-center gap-2">
         <span class="material-symbols-outlined text-base">edit</span> Ajuste manual
       </button>
+      <button id="c-deposit" class="ing-btn-secondary flex items-center gap-2">
+        <span class="material-symbols-outlined text-base">savings</span> Depósitos
+      </button>
       <div class="flex-1"></div>
       <button id="c-export" class="ing-btn-secondary flex items-center gap-2">
         <span class="material-symbols-outlined text-base">download</span> Exportar XLSX
@@ -90,6 +93,7 @@ async function render(el) {
     <div class="flex gap-2 mb-4 border-b border-[#fff1e6]">
       ${tabBtn('moves', 'Movimientos', 'receipt_long')}
       ${tabBtn('expenses', 'Gastos', 'shopping_bag')}
+      ${tabBtn('safe', 'Caja de seguridad', 'lock')}
     </div>
 
     <div id="c-content"></div>
@@ -100,10 +104,12 @@ async function render(el) {
   el.querySelector('#c-close').addEventListener('click', () => closeDayModal(el, balance));
   el.querySelector('#c-expense').addEventListener('click', () => expenseModal(el, methods));
   el.querySelector('#c-manual').addEventListener('click', () => manualMoveModal(el));
+  el.querySelector('#c-deposit').addEventListener('click', () => depositModal(el, balance));
   el.querySelector('#c-export').addEventListener('click', () => exportMoves(moves));
 
   if (state.tab === 'moves') renderMoves(el.querySelector('#c-content'), moves);
   if (state.tab === 'expenses') renderExpenses(el.querySelector('#c-content'), expenses.filter(e => e.branch_id === branchId));
+  if (state.tab === 'safe') renderSafe(el.querySelector('#c-content'), el, branchId, balance);
 }
 
 function tabBtn(id, label, icon) {
@@ -151,7 +157,10 @@ function typeColor(t) {
     expense: 'bg-red-100 text-red-700',
     adjustment: 'bg-amber-100 text-amber-700',
     manual: 'bg-gray-100 text-gray-700',
-    sena: 'bg-indigo-100 text-indigo-700', deposit: 'bg-indigo-100 text-indigo-700',
+    sena: 'bg-indigo-100 text-indigo-700',
+    deposit: 'bg-emerald-100 text-emerald-700',
+    safe_deposit: 'bg-emerald-100 text-emerald-700',
+    safe_withdraw: 'bg-cyan-100 text-cyan-700',
   };
   return map[t] || 'bg-[#fff1e6] text-[#7d6c5c]';
 }
@@ -168,7 +177,10 @@ function typeLabel(t) {
     adjustment: 'Ajuste',
     manual: 'Manual',
     transfer: 'Transferencia',
-    sena: 'Seña', deposit: 'Seña',
+    sena: 'Seña',
+    deposit: 'Depósito',
+    safe_deposit: 'Depósito',
+    safe_withdraw: 'Retiro',
   };
   return map[t] || t;
 }
@@ -319,6 +331,169 @@ async function manualMoveModal(el) {
           });
           toast('Movimiento registrado', 'success'); close(true); render(el);
         } catch (err) { toast(err.message, 'error'); }
+      });
+    },
+  });
+}
+
+// ===================== CAJA DE SEGURIDAD (fuerte) =====================
+async function renderSafe(container, el, branchId, registerBalance) {
+  container.innerHTML = `<div class="p-6 text-center text-[#7d6c5c]">Cargando caja de seguridad…</div>`;
+  let bal = 0, moves = [];
+  try {
+    [bal, moves] = await Promise.all([Cash.safeBalance(branchId), Cash.listSafeMovements(branchId)]);
+  } catch (e) {
+    container.innerHTML = `<div class="ing-card p-6 text-center text-[#7d6c5c]">No se pudo cargar la caja de seguridad: ${e.message || ''}</div>`;
+    return;
+  }
+  container.innerHTML = `
+    <div class="ing-card p-4 mb-4 flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <div class="text-[10px] font-black text-[#7d6c5c] uppercase">Saldo caja de seguridad</div>
+        <div class="text-3xl font-black text-emerald-700">${money(bal)}</div>
+        <div class="text-xs text-[#7d6c5c] mt-1">Caja normal disponible: <b>${money(registerBalance)}</b></div>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <button id="sf-deposit" class="ing-btn-primary flex items-center gap-2"><span class="material-symbols-outlined text-base">savings</span> Depositar</button>
+        <button id="sf-withdraw" class="ing-btn-secondary flex items-center gap-2"><span class="material-symbols-outlined text-base">payments</span> Retirar</button>
+        <button id="sf-expense" class="ing-btn-secondary flex items-center gap-2"><span class="material-symbols-outlined text-base">shopping_bag</span> Registrar gasto</button>
+        <button id="sf-adjust" class="ing-btn-secondary flex items-center gap-2"><span class="material-symbols-outlined text-base">tune</span> Reajustar saldo</button>
+      </div>
+    </div>
+    <div class="ing-card overflow-hidden">
+      <table class="ing-table w-full">
+        <thead><tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th class="text-right">Entra</th><th class="text-right">Sale</th><th class="text-right">Saldo</th></tr></thead>
+        <tbody>
+          ${moves.length === 0 ? `<tr><td colspan="6" class="text-center py-8 text-[#7d6c5c]">Sin movimientos en la caja de seguridad</td></tr>` :
+            moves.map(m => `
+              <tr>
+                <td class="text-xs">${fmtDateTime(m.datetime)}</td>
+                <td class="text-xs"><span class="px-2 py-1 rounded-full font-bold uppercase text-[10px] ${typeColor(m.type)}">${typeLabel(m.type)}</span></td>
+                <td class="text-sm">${m.description || '-'}</td>
+                <td class="text-right font-bold text-green-700">${m.amount_in ? money(m.amount_in) : '-'}</td>
+                <td class="text-right font-bold text-red-600">${m.amount_out ? money(m.amount_out) : '-'}</td>
+                <td class="text-right font-black">${money(m.balance_after)}</td>
+              </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+  container.querySelector('#sf-deposit').addEventListener('click', () => depositModal(el, registerBalance));
+  container.querySelector('#sf-withdraw').addEventListener('click', () => withdrawModal(el, bal));
+  container.querySelector('#sf-expense').addEventListener('click', () => safeExpenseModal(el, bal));
+  container.querySelector('#sf-adjust').addEventListener('click', () => adjustSafeModal(el, bal));
+}
+
+async function depositModal(el, registerBalance) {
+  await openModal({
+    title: 'Depósito a caja de seguridad',
+    size: 'sm',
+    bodyHTML: `
+      <div class="bg-[#fff8f4] rounded-xl p-3 text-sm mb-3">
+        <div class="flex justify-between"><span class="text-[#7d6c5c]">Disponible en caja normal</span><span class="font-bold">${money(registerBalance)}</span></div>
+      </div>
+      <label class="text-xs font-bold text-[#7d6c5c] uppercase">Monto a depositar</label>
+      <input id="dp-amt" type="number" step="0.01" min="0" value="0" class="ing-input w-full mt-1" />
+      <label class="text-xs font-bold text-[#7d6c5c] uppercase mt-3 block">Descripción (opcional)</label>
+      <input id="dp-desc" class="ing-input w-full mt-1" placeholder="Ej: cierre de turno" />
+      <p class="text-xs text-[#7d6c5c] mt-2">Sale de la caja normal y entra a la caja de seguridad.</p>
+    `,
+    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="ok">Depositar</button>`,
+    onOpen: (m, close) => {
+      m.querySelector('#dp-amt').focus(); m.querySelector('#dp-amt').select();
+      m.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
+      m.querySelector('[data-act="ok"]').addEventListener('click', async () => {
+        const amt = Number(m.querySelector('#dp-amt').value) || 0;
+        if (!(amt > 0)) { toast('Monto inválido', 'warn'); return; }
+        try { await Cash.depositToSafe(activeBranchId(), amt, m.querySelector('#dp-desc').value.trim()); toast('Depósito realizado', 'success'); close(true); render(el); }
+        catch (err) { toast(err.message, 'error'); }
+      });
+    },
+  });
+}
+
+async function withdrawModal(el, safeBal) {
+  await openModal({
+    title: 'Retiro de caja de seguridad',
+    size: 'sm',
+    bodyHTML: `
+      <div class="bg-[#fff8f4] rounded-xl p-3 text-sm mb-3">
+        <div class="flex justify-between"><span class="text-[#7d6c5c]">Disponible en caja de seguridad</span><span class="font-bold">${money(safeBal)}</span></div>
+      </div>
+      <label class="text-xs font-bold text-[#7d6c5c] uppercase">Monto a retirar</label>
+      <input id="wd-amt" type="number" step="0.01" min="0" value="0" class="ing-input w-full mt-1" />
+      <label class="text-xs font-bold text-[#7d6c5c] uppercase mt-3 block">Descripción (opcional)</label>
+      <input id="wd-desc" class="ing-input w-full mt-1" placeholder="Ej: para dar cambio" />
+      <p class="text-xs text-[#7d6c5c] mt-2">Sale de la caja de seguridad y vuelve a la caja normal.</p>
+    `,
+    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="ok">Retirar</button>`,
+    onOpen: (m, close) => {
+      m.querySelector('#wd-amt').focus(); m.querySelector('#wd-amt').select();
+      m.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
+      m.querySelector('[data-act="ok"]').addEventListener('click', async () => {
+        const amt = Number(m.querySelector('#wd-amt').value) || 0;
+        if (!(amt > 0)) { toast('Monto inválido', 'warn'); return; }
+        try { await Cash.withdrawFromSafe(activeBranchId(), amt, m.querySelector('#wd-desc').value.trim()); toast('Retiro realizado', 'success'); close(true); render(el); }
+        catch (err) { toast(err.message, 'error'); }
+      });
+    },
+  });
+}
+
+async function safeExpenseModal(el, safeBal) {
+  await openModal({
+    title: 'Gasto desde caja de seguridad',
+    size: 'sm',
+    bodyHTML: `
+      <div class="bg-[#fff8f4] rounded-xl p-3 text-sm mb-3">
+        <div class="flex justify-between"><span class="text-[#7d6c5c]">Disponible en caja de seguridad</span><span class="font-bold">${money(safeBal)}</span></div>
+      </div>
+      <label class="text-xs font-bold text-[#7d6c5c] uppercase">Categoría</label>
+      <input id="se-cat" class="ing-input w-full mt-1" value="General" />
+      <label class="text-xs font-bold text-[#7d6c5c] uppercase mt-3 block">Descripción</label>
+      <input id="se-desc" class="ing-input w-full mt-1" />
+      <label class="text-xs font-bold text-[#7d6c5c] uppercase mt-3 block">Monto</label>
+      <input id="se-amt" type="number" step="0.01" min="0" value="0" class="ing-input w-full mt-1" />
+      <p class="text-xs text-[#7d6c5c] mt-2">Sale plata de la caja de seguridad.</p>
+    `,
+    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="ok">Registrar</button>`,
+    onOpen: (m, close) => {
+      m.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
+      m.querySelector('[data-act="ok"]').addEventListener('click', async () => {
+        const amt = Number(m.querySelector('#se-amt').value) || 0;
+        if (!(amt > 0)) { toast('Monto inválido', 'warn'); return; }
+        try {
+          await Cash.addSafeExpense(activeBranchId(), { amount: amt, category: m.querySelector('#se-cat').value.trim() || 'General', description: m.querySelector('#se-desc').value.trim() });
+          toast('Gasto registrado', 'success'); close(true); render(el);
+        } catch (err) { toast(err.message, 'error'); }
+      });
+    },
+  });
+}
+
+async function adjustSafeModal(el, safeBal) {
+  await openModal({
+    title: 'Reajustar saldo de caja de seguridad',
+    size: 'sm',
+    bodyHTML: `
+      <div class="bg-[#fff8f4] rounded-xl p-3 text-sm mb-3">
+        <div class="flex justify-between"><span class="text-[#7d6c5c]">Saldo actual en el sistema</span><span class="font-bold">${money(safeBal)}</span></div>
+      </div>
+      <label class="text-xs font-bold text-[#7d6c5c] uppercase">Saldo real (el que hay de verdad)</label>
+      <input id="aj-amt" type="number" step="0.01" min="0" value="${safeBal.toFixed(2)}" class="ing-input w-full mt-1" />
+      <label class="text-xs font-bold text-[#7d6c5c] uppercase mt-3 block">Motivo (opcional)</label>
+      <input id="aj-desc" class="ing-input w-full mt-1" placeholder="Ej: recuento físico" />
+      <p class="text-xs text-[#7d6c5c] mt-2">El sistema registra la diferencia como un ajuste.</p>
+    `,
+    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="ok">Reajustar</button>`,
+    onOpen: (m, close) => {
+      m.querySelector('#aj-amt').focus(); m.querySelector('#aj-amt').select();
+      m.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
+      m.querySelector('[data-act="ok"]').addEventListener('click', async () => {
+        const target = Number(m.querySelector('#aj-amt').value);
+        if (Number.isNaN(target) || target < 0) { toast('Saldo inválido', 'warn'); return; }
+        try { await Cash.adjustSafeBalance(activeBranchId(), target, m.querySelector('#aj-desc').value.trim()); toast('Saldo reajustado', 'success'); close(true); render(el); }
+        catch (err) { toast(err.message, 'error'); }
       });
     },
   });

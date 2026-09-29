@@ -85,3 +85,50 @@ export async function addExpense({ branchId, amount, category, description, paym
   emit(EV.CASH_MOVED, r);
   return r;
 }
+
+// ===================== CAJA DE SEGURIDAD (fuerte) =====================
+export async function safeBalance(branchId) {
+  const r = await api(`/api/cash/${encodeURIComponent(branchId)}/safe/balance`);
+  return r?.balance || 0;
+}
+
+// Movimientos de la caja de seguridad (más nuevos primero), con balance_after
+// calculado de atrás para adelante para mostrar el saldo tras cada movimiento.
+export async function listSafeMovements(branchId) {
+  const raw = await api(`/api/cash/${encodeURIComponent(branchId)}/safe/movements`);
+  const asc = (raw || []).slice().reverse(); // el backend devuelve desc → ascendente para el running
+  let running = 0;
+  const withBal = asc.map((m) => {
+    running += (m.amountIn || 0) - (m.amountOut || 0);
+    return {
+      id: m.id, type: m.type, datetime: m.datetime, branch_id: m.branchId,
+      amount_in: m.amountIn || 0, amount_out: m.amountOut || 0,
+      balance_after: running, description: m.description || '',
+    };
+  });
+  return withBal.reverse(); // volver a desc para mostrar
+}
+
+export async function depositToSafe(branchId, amount, description) {
+  const r = await api(`/api/cash/${encodeURIComponent(branchId)}/safe/deposit`, { method: 'POST', body: { amount: Number(amount) || 0, description } });
+  emit(EV.CASH_MOVED, r);
+  return r;
+}
+
+export async function withdrawFromSafe(branchId, amount, description) {
+  const r = await api(`/api/cash/${encodeURIComponent(branchId)}/safe/withdraw`, { method: 'POST', body: { amount: Number(amount) || 0, description } });
+  emit(EV.CASH_MOVED, r);
+  return r;
+}
+
+export async function addSafeExpense(branchId, { amount, category, description }) {
+  const r = await api(`/api/cash/${encodeURIComponent(branchId)}/safe/expense`, { method: 'POST', body: { amount: Number(amount) || 0, category, description } });
+  emit(EV.CASH_MOVED, r);
+  return r;
+}
+
+export async function adjustSafeBalance(branchId, targetBalance, description) {
+  const r = await api(`/api/cash/${encodeURIComponent(branchId)}/safe/adjust`, { method: 'POST', body: { targetBalance: Number(targetBalance) || 0, description } });
+  emit(EV.CASH_MOVED, r);
+  return r;
+}

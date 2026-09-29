@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { balance, openDay, closeDay, addExpense, move, listMovements, listExpenses, dayStatus } from '../services/cash.js';
+import { balance, openDay, closeDay, addExpense, move, listMovements, listExpenses, dayStatus,
+  safeBalance, listSafeMovements, depositToSafe, withdrawFromSafe, addSafeExpense, adjustSafeBalance } from '../services/cash.js';
 
 export async function cashRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate);
@@ -59,5 +60,35 @@ export async function cashRoutes(app: FastifyInstance) {
       })
       .parse(req.body);
     return move({ ...body, userId: req.user.userId });
+  });
+
+  // ===== Caja de seguridad (fuerte) =====
+  app.get('/cash/:branchId/safe/balance', async (req) => {
+    const { branchId } = req.params as { branchId: string };
+    return { balance: await safeBalance(branchId) };
+  });
+  app.get('/cash/:branchId/safe/movements', async (req) => {
+    const { branchId } = req.params as { branchId: string };
+    return listSafeMovements(branchId);
+  });
+  app.post('/cash/:branchId/safe/deposit', async (req) => {
+    const { branchId } = req.params as { branchId: string };
+    const body = z.object({ amount: z.number().positive(), description: z.string().optional() }).parse(req.body);
+    return depositToSafe({ branchId, ...body, userId: req.user.userId });
+  });
+  app.post('/cash/:branchId/safe/withdraw', async (req) => {
+    const { branchId } = req.params as { branchId: string };
+    const body = z.object({ amount: z.number().positive(), description: z.string().optional() }).parse(req.body);
+    return withdrawFromSafe({ branchId, ...body, userId: req.user.userId });
+  });
+  app.post('/cash/:branchId/safe/expense', async (req) => {
+    const { branchId } = req.params as { branchId: string };
+    const body = z.object({ amount: z.number().positive(), category: z.string().optional(), description: z.string().optional() }).parse(req.body);
+    return addSafeExpense({ branchId, ...body, userId: req.user.userId });
+  });
+  app.post('/cash/:branchId/safe/adjust', async (req) => {
+    const { branchId } = req.params as { branchId: string };
+    const body = z.object({ targetBalance: z.number(), description: z.string().optional() }).parse(req.body);
+    return adjustSafeBalance({ branchId, ...body, userId: req.user.userId });
   });
 }

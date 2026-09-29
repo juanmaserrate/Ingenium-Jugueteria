@@ -369,7 +369,10 @@ model CashMovement {
   id          String   @id
   datetime    DateTime
   branchId    String   @map("branch_id")
-  type        String   // opening | closing | sale | return | expense | adjustment
+  type        String   // opening | closing | sale | return | expense | adjustment | safe_deposit | safe_withdraw
+  // Caja a la que pertenece el movimiento: 'register' = caja normal del día,
+  // 'safe' = caja de seguridad/fuerte (saldo propio, no se cierra a diario).
+  box         String   @default("register") @map("box")
   amountIn    Float    @default(0) @map("amount_in")
   amountOut   Float    @default(0) @map("amount_out")
   description String?
@@ -382,6 +385,7 @@ model CashMovement {
   @@index([datetime])
   @@index([branchId])
   @@index([type])
+  @@index([box])
   @@map("cash_movements")
 }
 
