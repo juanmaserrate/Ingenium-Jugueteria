@@ -178,8 +178,6 @@ html.dark .ing-table td { border-bottom-color: #2a2219; color: #f3ece3; }
 html.dark .ing-table tbody tr:hover { background: rgba(216,47,30,.08); }
 
 /* Sidebar / Topbar / Modales */
-html.dark #sidebar { background: #1a1714 !important; box-shadow: 40px 0 40px rgba(0,0,0,.3); }
-html.dark #topbar { background: rgba(18,16,14,.85) !important; border-bottom-color: #2a2219 !important; }
 html.dark .modal-content { background: #1e1a16; color: #f3ece3; }
 html.dark .modal-backdrop { background: rgba(0,0,0,.65); }
 html.dark .toast { background: #1e1a16; color: #f3ece3; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
