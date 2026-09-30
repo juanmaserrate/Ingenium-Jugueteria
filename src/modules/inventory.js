@@ -12,7 +12,6 @@ import { toast } from '../core/notifications.js';
 import { activeBranchId, currentSession } from '../core/auth.js';
 import * as Audit from '../core/audit.js';
 import { exportSimple } from '../core/xlsx.js';
-import { next as nextCounter } from '../repos/counters.js';
 import { printHTML } from '../core/pdf.js';
 
 // Escapa caracteres reservados para incrustar contenido en value="..." de un input.

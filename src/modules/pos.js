@@ -1,6 +1,7 @@
 // POS / Ventas — multi-pestaña, scan/búsqueda, descuentos %/fijo, edición de precio (doble-click),
 // descuentos globales, pagos mixtos, clientes, vendedores, drafts.
-// Usa repos/sales.js para confirmar. Impacto en stock + caja + audit lo hace el repo.
+// Confirma posteando a /api/sales (el backend hace stock + caja + auditoría atómicamente).
+// De repos/sales.js solo usa cálculo de totales y persistencia de borradores.
 
 import * as Sales from '../repos/sales.js';
 import * as P from '../repos/products.js';
@@ -118,6 +119,24 @@ async function refreshData() {
   state.methods = methods || [];
   state.categories = categories;
   state.brands = brands;
+}
+
+// Descuento local del stock tras UNA venta propia, para NO recargar los ~11k productos
+// del backend en cada venta (era el cuello de botella del POS). El servidor ya descontó
+// el stock de forma atómica; acá solo reflejamos el cambio en memoria para la vista. Si
+// algo quedara desfasado, el próximo refresh (STOCK_CHANGED externo o botón Actualizar)
+// lo corrige, y la venta en el servidor siempre es la fuente de verdad.
+function applyLocalStockDecrement(soldItems, br) {
+  for (const it of soldItems || []) {
+    const qty = Number(it.qty) || 0;
+    if (!it.product_id || !qty) continue;
+    const st = state.stocks.find(s => s.product_id === it.product_id && s.branch_id === br);
+    if (st) st.qty = (Number(st.qty) || 0) - qty;
+    // Mantener también el _stocks del producto cacheado (por si se relee desde ahí).
+    const prod = state.products.find(p => p.id === it.product_id);
+    const ps = prod?._stocks?.find(s => s.branch_id === br);
+    if (ps) ps.qty = (Number(ps.qty) || 0) - qty;
+  }
 }
 
 function newTab() {
@@ -776,6 +795,8 @@ async function _confirmSaleInner(root) {
       }
     }
     const rec = saleToFront(bs);
+    // Snapshot de lo vendido ANTES de resetear el carrito, para el descuento local de stock.
+    const soldItems = (sale.items || []).map(i => ({ product_id: i.product_id, qty: Number(i.qty) || 0 }));
     // Remover draft
     if (t.draftId) await Sales.removeDraft(t.draftId).catch(() => {});
     // Si es la única tab → reset, si hay otras → cerrar
@@ -790,7 +811,9 @@ async function _confirmSaleInner(root) {
       state.tabs = state.tabs.filter(x => x.id !== t.id);
       state.activeTab = state.tabs[0].id;
     }
-    await refreshData();
+    // Antes acá se hacía refreshData() (recargaba TODO el catálogo, ~11k productos, en
+    // cada venta). Ahora solo descontamos localmente el stock de lo vendido.
+    applyLocalStockDecrement(soldItems, br);
     state.senas = {}; // invalidar cache de señas (alguna pudo quedar usada)
     renderTabs(root); renderCart(root);
     showSaleReceipt(rec);

@@ -8,6 +8,8 @@
   },
   "scripts": {
     "build": "cd backend && npm install --no-audit --no-fund && npm run build",
-    "start": "cd backend && npm start"
+    "start": "cd backend && npm start",
+    "mirror": "node scripts/mirror-frontend.mjs",
+    "install-hooks": "sh scripts/install-hooks.sh"
   }
 }

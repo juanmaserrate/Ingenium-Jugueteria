@@ -1,0 +1,5 @@
+#!/bin/sh
+# Auto-espejo del frontend a backend/public antes de cada commit (evita drift).
+# Instalado en .git/hooks/pre-commit por scripts/install-hooks.sh.
+node scripts/mirror-frontend.mjs || exit 1
+git add backend/public
