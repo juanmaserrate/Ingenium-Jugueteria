@@ -747,6 +747,7 @@ model SyncQueue {
   lastError  String?  @map("last_error")
   nextRunAt  DateTime @default(now()) @map("next_run_at")
   createdAt  DateTime @default(now()) @map("created_at")
+  startedAt  DateTime? @map("started_at") // cuándo pasó a 'running' (para el reaper de huérfanos)
   doneAt     DateTime? @map("done_at")
 
   @@index([status])

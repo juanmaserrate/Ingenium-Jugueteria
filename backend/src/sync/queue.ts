@@ -29,9 +29,43 @@ export async function takeNextJobs(limit = 10) {
   if (jobs.length === 0) return [];
   await prisma.syncQueue.updateMany({
     where: { id: { in: jobs.map((j) => j.id) } },
-    data: { status: 'running' },
+    data: { status: 'running', startedAt: now },
   });
   return jobs;
+}
+
+// Reaper: re-encola los jobs que quedaron 'running' más tiempo que la lease (o sin
+// startedAt = de una corrida anterior). Cubre el caso de redeploy/crash de Railway
+// que dejó jobs huérfanos en 'running' → nunca se volverían a tomar. Con leaseMs=0
+// (cutoff = ahora) re-encola TODOS los running: se usa al arrancar el proceso, donde
+// cualquier 'running' es necesariamente huérfano (el worker todavía no procesó nada).
+export async function reapStuckJobs(leaseMs: number): Promise<number> {
+  const cutoff = new Date(Date.now() - leaseMs);
+  const res = await prisma.syncQueue.updateMany({
+    where: { status: 'running', OR: [{ startedAt: { lt: cutoff } }, { startedAt: null }] },
+    data: { status: 'queued', nextRunAt: new Date() },
+  });
+  return res.count;
+}
+
+// Re-drive: vuelve a poner en cola los jobs 'failed' (agotaron los reintentos). Sin
+// ids re-encola todos; con ids, solo esos. Resetea attempts para que reintenten limpio.
+export async function redriveFailed(ids?: string[]): Promise<number> {
+  const where: any = { status: 'failed' };
+  if (ids && ids.length) where.id = { in: ids };
+  const res = await prisma.syncQueue.updateMany({
+    where,
+    data: { status: 'queued', attempts: 0, lastError: null, nextRunAt: new Date() },
+  });
+  return res.count;
+}
+
+// Conteo por estado, para exponer salud de la cola en el panel de integraciones.
+export async function queueStats(): Promise<Record<string, number>> {
+  const rows = await prisma.syncQueue.groupBy({ by: ['status'], _count: { _all: true } });
+  const out: Record<string, number> = { queued: 0, running: 0, done: 0, failed: 0 };
+  for (const r of rows) out[r.status] = r._count._all;
+  return out;
 }
 
 export async function markDone(id: string) {

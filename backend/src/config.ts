@@ -30,6 +30,9 @@ const schema = z.object({
 
   SYNC_WORKER_INTERVAL_MS: z.coerce.number().default(5000),
   SYNC_MAX_RETRIES: z.coerce.number().default(5),
+  // Lease de un job "running": si supera este tiempo sin terminar (típicamente por un
+  // redeploy/crash de Railway que dejó el job huérfano), el reaper lo vuelve a 'queued'.
+  SYNC_JOB_LEASE_MS: z.coerce.number().default(5 * 60 * 1000),
 
   // Escaneo de facturas con Claude (módulo de compras). Vacío → scan deshabilitado (503 controlado).
   ANTHROPIC_API_KEY: z.string().default(''),

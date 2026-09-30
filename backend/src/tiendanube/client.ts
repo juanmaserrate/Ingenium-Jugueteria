@@ -16,6 +16,28 @@ export class TnClient {
         'Content-Type': 'application/json',
       },
     });
+
+    // Rate-limit (429): TN limita las llamadas por tienda. Ante un 429 esperamos lo que
+    // pide el header Retry-After (segundos) — o un backoff exponencial si no viene — y
+    // reintentamos hasta MAX veces. Como el worker es de un solo hilo, esta espera hace
+    // de throttle natural. Solo reintenta 429 (no toca la lógica de los demás errores).
+    const MAX_429_RETRIES = 4;
+    this.http.interceptors.response.use(undefined, async (error: any) => {
+      const cfg = error?.config;
+      const status = error?.response?.status;
+      if (status === 429 && cfg) {
+        cfg.__retry429 = (cfg.__retry429 ?? 0) + 1;
+        if (cfg.__retry429 <= MAX_429_RETRIES) {
+          const ra = Number(error.response?.headers?.['retry-after']);
+          const waitMs = Number.isFinite(ra) && ra > 0
+            ? Math.min(60_000, ra * 1000)
+            : Math.min(30_000, 1000 * 2 ** cfg.__retry429);
+          await new Promise((r) => setTimeout(r, waitMs));
+          return this.http.request(cfg);
+        }
+      }
+      return Promise.reject(error);
+    });
   }
 
   // --- Products ---

@@ -21,13 +21,21 @@ export const syncHandlers = {
     if (product.tnMapping) return { skipped: 'already synced' };
 
     const tnProduct = await tn.createProduct(productToTn(product));
-    await prisma.productTnMapping.create({
-      data: {
-        productId: product.id,
-        tnProductId: String(tnProduct.id),
-        lastPushAt: new Date(),
-      },
-    });
+    // Si el guardado del mapping falla DESPUÉS de crear el producto en TN, borramos el
+    // producto recién creado y relanzamos: así el reintento arranca limpio y no queda un
+    // producto DUPLICADO en TN (sin este compensating-delete, cada reintento creaba otro).
+    try {
+      await prisma.productTnMapping.create({
+        data: {
+          productId: product.id,
+          tnProductId: String(tnProduct.id),
+          lastPushAt: new Date(),
+        },
+      });
+    } catch (e) {
+      await tn.deleteProduct(String(tnProduct.id)).catch(() => null);
+      throw e;
+    }
     // Mapear variantes
     const tnVariants: any[] = tnProduct.variants ?? [];
     for (let i = 0; i < product.variants.length && i < tnVariants.length; i++) {
