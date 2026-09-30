@@ -131,7 +131,7 @@ async function repReturns() {
   const cnMap = Object.fromEntries((creditNotes || []).map(v => [v.id, v.code]));
   const rows = (returns || []).map(r => ({
     Numero: r.number, Fecha: fmtDateTime(r.datetime), Cliente: cuMap[r.customerId] || '',
-    Devuelve: r.returnedTotal, Lleva: r.takenTotal, Diferencia: r.difference,
+    Devuelve: r.returnedTotal, Lleva: r.takenTotal, 'Diferencia (+cobrado / -devuelto)': -Number(r.difference || 0),
     Vale: cnMap[r.creditNoteId] || '', Motivo: r.reason || '',
   }));
   const vales = (creditNotes || []).map(v => ({

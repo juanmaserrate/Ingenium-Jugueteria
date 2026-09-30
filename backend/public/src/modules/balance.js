@@ -189,7 +189,7 @@ async function render(el) {
       Medios: (s.payments || []).map(p => `${p.methodName}: ${p.amount}`).join(' · '),
     }));
     const returnsRows = filteredReturns.map(r => ({
-      Numero: r.number, Fecha: fmtDateTime(r.datetime), Devuelto: r.returnedTotal, Llevado: r.takenTotal, Diferencia: r.difference,
+      Numero: r.number, Fecha: fmtDateTime(r.datetime), Devuelto: r.returnedTotal, Llevado: r.takenTotal, 'Diferencia (+cobrado / -devuelto)': -Number(r.difference || 0),
     }));
     const mediosRows = Object.entries(byMethod).map(([name, amt]) => ({ Medio: name, Monto: amt }));
     exportToXLSX({

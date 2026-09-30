@@ -461,7 +461,7 @@ function renderHistory(container) {
           <div>${cust ? `${cust.name} ${cust.lastname||''}` : '<span class="text-[#7d6c5c]">—</span>'}</div>
           <div class="text-right font-bold">${money(r.returned_total)}</div>
           <div class="text-right">${money(r.taken_total)}</div>
-          <div class="text-right font-bold ${r.difference > 0 ? 'text-orange-600' : r.difference < 0 ? 'text-green-700' : ''}">${money(r.difference)}</div>
+          <div class="text-right font-bold ${(-r.difference) > 0 ? 'text-green-700' : (-r.difference) < 0 ? 'text-orange-600' : ''}" title="+ cliente paga · − se le devuelve">${(() => { const inv = -(r.difference || 0); return Math.abs(inv) < 0.01 ? money(0) : `${inv > 0 ? '+' : '−'}${money(Math.abs(inv))}`; })()}</div>
           <div class="text-right font-bold ${invDelta < 0 ? 'text-red-600' : invDelta > 0 ? 'text-green-700' : 'text-[#7d6c5c]'}">${money(invDelta)}</div>
           <div class="text-xs">${r.credit_note_code ? `<span class="bg-[#fff1e6] text-[#d82f1e] px-2 py-1 rounded-full font-bold">${r.credit_note_code}</span>` : '—'}</div>
         </div>
