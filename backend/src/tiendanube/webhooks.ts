@@ -1,4 +1,5 @@
 import { prisma } from '../db.js';
+import { Prisma } from '@prisma/client';
 import { getTnClient } from './client.js';
 import { findOrCreateByEmail } from '../services/customers.js';
 import { processReturn } from '../services/returns.js';
@@ -30,28 +31,37 @@ export async function handleOrderPaid(event: any) {
     });
   }
 
-  await prisma.tnOrderPending.create({
-    data: {
-      tnOrderId,
-      number: order.number ? String(order.number) : null,
-      customerName: order.customer?.name ?? 'Sin nombre',
-      customerEmail: order.customer?.email ?? null,
-      customerPhone: order.customer?.phone ?? null,
-      items: (order.products ?? []).map((p: any) => ({
-        tnProductId: String(p.product_id),
-        tnVariantId: String(p.variant_id),
-        qty: p.quantity,
-        unitPrice: parseFloat(p.price),
-        productName: p.name,
-        variantName: p.variant_values?.join(' / ') ?? null,
-      })) as any,
-      total: parseFloat(order.total ?? '0'),
-      currency: order.currency ?? 'ARS',
-      paymentStatus: order.payment_status ?? 'paid',
-      rawPayload: order,
-      status: 'pending',
-    },
-  });
+  try {
+    await prisma.tnOrderPending.create({
+      data: {
+        tnOrderId,
+        number: order.number ? String(order.number) : null,
+        customerName: order.customer?.name ?? 'Sin nombre',
+        customerEmail: order.customer?.email ?? null,
+        customerPhone: order.customer?.phone ?? null,
+        items: (order.products ?? []).map((p: any) => ({
+          tnProductId: String(p.product_id),
+          tnVariantId: String(p.variant_id),
+          qty: p.quantity,
+          unitPrice: parseFloat(p.price),
+          productName: p.name,
+          variantName: p.variant_values?.join(' / ') ?? null,
+        })) as any,
+        total: parseFloat(order.total ?? '0'),
+        currency: order.currency ?? 'ARS',
+        paymentStatus: order.payment_status ?? 'paid',
+        rawPayload: order,
+        status: 'pending',
+      },
+    });
+  } catch (e) {
+    // Carrera: si dos webhooks 'order/paid' de la misma orden llegan a la vez, el
+    // segundo choca contra el unique de tnOrderId → lo tratamos como ya recibido.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+      return { skipped: 'already received (race)' };
+    }
+    throw e;
+  }
 
   // Notificaci\u00f3n
   await prisma.notification.create({
@@ -73,12 +83,22 @@ export async function handleOrderCancelled(event: any) {
   const pending = await prisma.tnOrderPending.findUnique({ where: { tnOrderId } });
   if (!pending) return { skipped: 'unknown order' };
 
+  // Guarda at\u00f3mica: un solo handler gana el pasaje a 'cancelled'. Evita que dos
+  // webhooks 'order/cancelled' (o reintentos de TN) generen la devoluci\u00f3n dos veces.
+  const flip = await prisma.tnOrderPending.updateMany({
+    where: { tnOrderId, status: { not: 'cancelled' } },
+    data: { status: 'cancelled' },
+  });
+  if (flip.count !== 1) return { skipped: 'already cancelled' };
+
   if (pending.status === 'assigned' && pending.assignedSaleId) {
     const sale = await prisma.sale.findUnique({
       where: { id: pending.assignedSaleId },
       include: { items: true },
     });
     if (sale && sale.status === 'confirmed') {
+      // processReturn ya valida qty \u2264 vendida y deduplica contra devoluciones previas,
+      // as\u00ed que incluso ante un reintento no reembolsa de m\u00e1s.
       await processReturn({
         branchId: sale.branchId,
         originalSaleId: sale.id,
@@ -95,11 +115,6 @@ export async function handleOrderCancelled(event: any) {
       });
     }
   }
-
-  await prisma.tnOrderPending.update({
-    where: { tnOrderId },
-    data: { status: 'cancelled' },
-  });
 
   return { ok: true };
 }

@@ -286,6 +286,11 @@ export async function cancelSale(
   const returnToTn = opts.returnToTn !== false;
 
   await prisma.$transaction(async (tx) => {
+    // Guarda atómica: solo cancela si la venta SIGUE confirmada. Si dos cancelaciones
+    // llegan a la vez, solo una gana el updateMany (count===1); la otra aborta la tx
+    // → no se restaura stock dos veces ni se revierte la caja por duplicado.
+    const guard = await tx.sale.updateMany({ where: { id, status: 'confirmed' }, data: { status: 'cancelled' } });
+    if (guard.count !== 1) throw new ValidationError('La venta ya fue cancelada');
     // Restore stock
     for (const it of sale.items) {
       await adjustStock(it.variantId, sale.branchId, it.qty, {
@@ -316,7 +321,7 @@ export async function cancelSale(
         },
       });
     }
-    await tx.sale.update({ where: { id }, data: { status: 'cancelled' } });
+    // El estado ya se fijó a 'cancelled' arriba (guarda atómica).
   });
 
   await logAudit({

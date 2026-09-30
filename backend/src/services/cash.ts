@@ -86,15 +86,34 @@ export async function openDay(branchId: string, initialAmount: number, userId?: 
   });
 }
 
+// Cierre de caja: el operador cuenta el efectivo físico. Si difiere del saldo del
+// sistema, la diferencia se registra como un ARQUEO explícito (faltante/sobrante),
+// no como parte del cierre — así el descuadre queda visible y auditable en vez de
+// disimularse. Luego se deja una marca de cierre (monto 0) que cierra el día.
 export async function closeDay(branchId: string, countedAmount: number, userId?: string) {
-  const current = await balance(branchId);
-  const diff = countedAmount - current;
+  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+  const counted = round2(countedAmount);
+  const current = round2(await balance(branchId, 'register'));
+  const diff = round2(counted - current); // >0 sobrante ; <0 faltante
+  if (diff !== 0) {
+    const kind = diff < 0 ? 'FALTANTE' : 'SOBRANTE';
+    await move({
+      branchId,
+      box: 'register',
+      type: 'adjustment',
+      amountIn: diff > 0 ? diff : 0,
+      amountOut: diff < 0 ? -diff : 0,
+      description: `Diferencia de arqueo (${kind} $${Math.abs(diff)}) — contado $${counted} vs sistema $${current}`,
+      userId,
+    });
+  }
   return move({
     branchId,
+    box: 'register',
     type: 'closing',
-    amountIn: diff > 0 ? diff : 0,
-    amountOut: diff < 0 ? -diff : 0,
-    description: `Cierre de caja (contado: ${countedAmount}, sistema: ${current})`,
+    amountIn: 0,
+    amountOut: 0,
+    description: `Cierre de caja — contado $${counted}${diff !== 0 ? `, diferencia $${diff}` : ' (sin diferencia)'}`,
     userId,
   });
 }

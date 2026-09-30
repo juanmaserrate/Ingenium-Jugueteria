@@ -10,6 +10,7 @@ import {
   registerWebhooks,
 } from '../tiendanube/oauth.js';
 import { randomId } from '../utils/crypto.js';
+import { ValidationError } from '../utils/errors.js';
 import { confirmSale } from '../services/sales.js';
 import { enqueueSync } from '../sync/queue.js';
 import { getTnClient } from '../tiendanube/client.js';
@@ -363,18 +364,38 @@ export async function integrationsRoutes(app: FastifyInstance) {
       const discountGlobalFixed = diff < 0 ? round2(-diff) : undefined;
       const saleAmount = diff < 0 ? round2(pending.total) : itemsSubtotal;
 
-      const sale = await confirmSale(
-        {
-          branchId: body.branchId,
-          customerId,
-          items: saleItems,
-          discountGlobalFixed,
-          payments: [{ methodId: 'tiendanube', methodName: 'Tienda Nube', amount: saleAmount }],
-          source: 'tn',
-          tnOrderId: pending.tnOrderId,
-        },
-        { userId: req.user.userId, allowNegative: body.allowNegative },
-      );
+      // Guarda atómica: reclamar la orden (pending → assigning) ANTES de crear la
+      // venta. Si dos asignaciones concurrentes llegan a la vez, solo una gana el
+      // updateMany (count===1); la otra corta acá → no se crean dos ventas ni se
+      // descuenta el stock por duplicado.
+      const claim = await prisma.tnOrderPending.updateMany({
+        where: { id, status: 'pending' },
+        data: { status: 'assigning' },
+      });
+      if (claim.count !== 1) throw new ValidationError('La orden ya fue asignada o está en proceso');
+
+      let sale;
+      try {
+        sale = await confirmSale(
+          {
+            branchId: body.branchId,
+            customerId,
+            items: saleItems,
+            discountGlobalFixed,
+            payments: [{ methodId: 'tiendanube', methodName: 'Tienda Nube', amount: saleAmount }],
+            source: 'tn',
+            tnOrderId: pending.tnOrderId,
+          },
+          { userId: req.user.userId, allowNegative: body.allowNegative },
+        );
+      } catch (e) {
+        // Si la venta falla, liberar el lock para que el operador pueda reintentar.
+        await prisma.tnOrderPending.updateMany({
+          where: { id, status: 'assigning' },
+          data: { status: 'pending' },
+        });
+        throw e;
+      }
 
       await prisma.tnOrderPending.update({
         where: { id },
