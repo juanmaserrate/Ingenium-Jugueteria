@@ -347,6 +347,10 @@ export async function integrationsRoutes(app: FastifyInstance) {
       if (status !== 'pending') return orders;
       const tn = await getTnClient();
       if (!tn) return orders; // sin TN no podemos verificar → mostramos lo que hay
+      // Presupuesto de llamadas a TN por request: evita que un backlog grande dispare
+      // cientos de getOrder en una sola carga. Las cacheadas no gastan presupuesto, así
+      // que en varias cargas (con la caché) se va depurando toda la cola sin trabar.
+      let budget = 30;
       const visible: typeof orders = [];
       for (const o of orders) {
         try {
@@ -355,11 +359,15 @@ export async function integrationsRoutes(app: FastifyInstance) {
           let curStatus = '';
           if (cached && Date.now() - cached.checkedAt < TN_DONE_TTL_MS) {
             done = cached.done;
-          } else {
+          } else if (budget > 0) {
+            budget--;
             const cur = await tn.getOrder(o.tnOrderId);
             done = tnOrderIsDone(cur);
             curStatus = String(cur?.status ?? '');
             tnDoneCache.set(o.tnOrderId, { checkedAt: Date.now(), done });
+          } else {
+            visible.push(o); // sin presupuesto → la mostramos, se verifica en próximas cargas
+            continue;
           }
           if (done) {
             const newStatus = curStatus === 'cancelled' ? 'cancelled' : 'fulfilled';
