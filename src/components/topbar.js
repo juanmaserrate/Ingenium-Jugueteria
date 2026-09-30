@@ -10,6 +10,21 @@ import { navigate } from '../core/router.js';
 import { api } from '../core/api.js';
 import { on, EV, emit } from '../core/events.js';
 
+// Logo: osito de peluche (no existe glifo en la fuente, así que va como SVG a medida).
+// Osito blanco con ojos/nariz en el rojo de la marca; se dibuja dentro del círculo rojo.
+const TEDDY_SVG = `<svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+  <g fill="#ffffff">
+    <circle cx="7" cy="6.5" r="2.6"/><circle cx="17" cy="6.5" r="2.6"/>
+    <circle cx="12" cy="10" r="5.3"/>
+    <ellipse cx="12" cy="18.3" rx="6" ry="4.8"/>
+    <circle cx="6.7" cy="16.8" r="1.9"/><circle cx="17.3" cy="16.8" r="1.9"/>
+  </g>
+  <g fill="#d82f1e">
+    <circle cx="10" cy="9.4" r="0.85"/><circle cx="14" cy="9.4" r="0.85"/>
+    <ellipse cx="12" cy="11.4" rx="1.25" ry="1"/>
+  </g>
+</svg>`;
+
 // Escapa texto para innerHTML. Las notificaciones pueden traer datos de TN
 // (nombres de producto/cliente), así que las tratamos como no confiables.
 function esc(s) {
@@ -71,45 +86,45 @@ export async function mountTopbar(el) {
 
     const uname = session?.user_name || 'Usuario';
     const initials = uname.split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase() || 'U';
-    const iconBtn = 'w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors';
+    const iconBtn = 'w-9 h-9 rounded-full text-[#7d6c5c] dark:text-[#c9b6a4] hover:bg-[#fff1e6] dark:hover:bg-[#2a2018] flex items-center justify-center transition-colors';
     el.innerHTML = `
       <!-- Marca -->
       <a href="#/dashboard" class="group flex items-center gap-3 shrink-0 min-w-0">
-        <div class="w-10 h-10 rounded-full bg-white flex items-center justify-center shadow-md ring-1 ring-white/40 shrink-0 transition-transform group-hover:scale-105">
-          <span class="material-symbols-outlined text-[#d82f1e] text-[24px]">toys</span>
+        <div class="w-10 h-10 rounded-full bg-[#d82f1e] flex items-center justify-center shadow-md shrink-0 transition-transform group-hover:scale-105">
+          ${TEDDY_SVG}
         </div>
         <div class="leading-tight min-w-0">
-          <div class="font-black text-lg sm:text-xl tracking-tight truncate">Ingenium</div>
-          <div class="text-[9px] sm:text-[10px] font-bold uppercase tracking-[0.22em] text-white/75 truncate">Sistema de Ventas</div>
+          <div class="font-black text-lg sm:text-xl tracking-tight text-[#d82f1e] truncate">Ingenium</div>
+          <div class="text-[9px] sm:text-[10px] font-bold uppercase tracking-[0.22em] text-[#7d6c5c] dark:text-[#c9b6a4] truncate">Sistema de Ventas</div>
         </div>
       </a>
       <!-- Controles -->
       <div class="flex items-center gap-2 shrink-0">
         ${isAdmin ? `
-        <div class="hidden sm:flex gap-1 items-center bg-white/10 rounded-full p-0.5">
+        <div class="hidden sm:flex gap-1 items-center bg-[#fff1e6] dark:bg-[#2a2018] rounded-full p-0.5">
           ${branches.map(b => `
-            <button data-branch="${b.id}" class="tb-branch px-3 py-1 rounded-full text-xs font-bold transition-all ${b.id === activeId ? 'bg-white text-[#b41005] shadow' : 'text-white/80 hover:bg-white/10'}">${b.name}</button>
+            <button data-branch="${b.id}" class="tb-branch px-3 py-1 rounded-full text-xs font-bold transition-all ${b.id === activeId ? 'bg-[#d82f1e] text-white shadow' : 'text-[#7d6c5c] dark:text-[#c9b6a4] hover:bg-white/60 dark:hover:bg-white/5'}">${b.name}</button>
           `).join('')}
         </div>` : ''}
-        <a href="#/cash" title="${cashOpen ? 'Caja abierta' : 'Caja cerrada — abrir en Caja'}" class="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/12 hover:bg-white/20 text-xs font-bold transition-colors">
-          <span class="w-2 h-2 rounded-full ${cashOpen ? 'bg-green-300' : 'bg-red-300'}"></span>
+        <a href="#/cash" title="${cashOpen ? 'Caja abierta' : 'Caja cerrada — abrir en Caja'}" class="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-bold transition-all ${cashOpen ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-600 hover:bg-red-100'}">
+          <span class="material-symbols-outlined text-base">${cashOpen ? 'lock_open' : 'lock'}</span>
           ${cashOpen ? 'Caja abierta' : 'Caja cerrada'}
         </a>
-        <button id="tb-refresh" title="${_hasUpdates ? 'Hay datos nuevos — tocá para actualizar' : 'Actualizar desde el servidor'}" class="relative ${iconBtn}">
+        <button id="tb-refresh" title="${_hasUpdates ? 'Hay datos nuevos — tocá para actualizar' : 'Actualizar desde el servidor'}" class="relative ${iconBtn} ${_hasUpdates ? '!text-[#d82f1e]' : ''}">
           <span class="material-symbols-outlined text-[20px]">refresh</span>
-          ${_hasUpdates ? `<span class="absolute top-0.5 right-0.5 bg-yellow-300 w-2.5 h-2.5 rounded-full ring-2 ring-[#d82f1e]"></span>` : ''}
+          ${_hasUpdates ? `<span class="absolute top-1 right-1 bg-[#d82f1e] w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-[#1a1410]"></span>` : ''}
         </button>
         <button id="tb-theme" title="Modo oscuro / claro" class="${iconBtn}">
           <span class="material-symbols-outlined text-[20px]">${document.documentElement.classList.contains('dark') ? 'light_mode' : 'dark_mode'}</span>
         </button>
         <button id="tb-bell" class="relative ${iconBtn}">
           <span class="material-symbols-outlined text-[20px]">notifications</span>
-          ${unread > 0 ? `<span class="absolute top-0.5 right-0.5 bg-yellow-300 text-[#b41005] text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center ring-2 ring-[#d82f1e]">${unread > 9 ? '9+' : unread}</span>` : ''}
+          ${unread > 0 ? `<span class="absolute top-0.5 right-0.5 bg-[#d82f1e] text-white text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center ring-2 ring-white dark:ring-[#1a1410]">${unread > 9 ? '9+' : unread}</span>` : ''}
         </button>
-        <button id="tb-logout" title="Cerrar sesión" class="${iconBtn}">
+        <button id="tb-logout" title="Cerrar sesión" class="${iconBtn} hover:!bg-red-50 hover:!text-red-600">
           <span class="material-symbols-outlined text-[20px]">logout</span>
         </button>
-        <div class="w-9 h-9 rounded-full bg-white/20 border border-white/25 flex items-center justify-center font-black text-sm shrink-0" title="${esc(uname)}${currentBranch ? ' · ' + esc(currentBranch.name) : ''} · ${esc(ROLE_LABELS[session?.role] || session?.role || '')}">${esc(initials)}</div>
+        <div class="w-9 h-9 rounded-full bg-[#fff1e6] dark:bg-[#2a2018] border border-[#e3ceba] dark:border-[#3a2e22] text-[#d82f1e] flex items-center justify-center font-black text-sm shrink-0" title="${esc(uname)}${currentBranch ? ' · ' + esc(currentBranch.name) : ''} · ${esc(ROLE_LABELS[session?.role] || session?.role || '')}">${esc(initials)}</div>
       </div>
     `;
 

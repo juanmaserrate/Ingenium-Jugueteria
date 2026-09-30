@@ -53,8 +53,8 @@ function groupHTML(group, currentPath) {
   return `
     <div class="nav-group relative">
       <button data-navtoggle class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${activeInGroup
-        ? 'bg-white/20 text-white'
-        : 'text-white/85 hover:bg-white/10 hover:text-white'}">
+        ? 'bg-[#fff1e6] dark:bg-[#2a2018] text-[#d82f1e]'
+        : 'text-[#241a0d] dark:text-[#fff1e6] hover:bg-[#fff1e6] dark:hover:bg-[#2a2018]'}">
         <span>${group.section}</span>
         <span class="nav-chevron material-symbols-outlined text-[18px] opacity-80 transition-transform duration-200">expand_more</span>
       </button>
@@ -71,7 +71,7 @@ export function mountSidebar(el, { onLogout }) {
       <nav class="flex flex-wrap items-center gap-0.5 min-w-0">
         ${GROUPS.map(g => groupHTML(g, path)).join('')}
       </nav>
-      <button id="btn-new-sale" class="shrink-0 bg-white text-[#d82f1e] font-bold px-4 py-1.5 rounded-full shadow flex items-center gap-1.5 hover:bg-[#fff1e6] active:scale-95 transition-all text-sm">
+      <button id="btn-new-sale" class="shrink-0 bg-[#d82f1e] text-white font-bold px-4 py-1.5 rounded-full shadow-md flex items-center gap-1.5 hover:brightness-110 active:scale-95 transition-all text-sm">
         <span class="material-symbols-outlined text-[18px]">add_circle</span>
         <span>Nueva venta</span>
       </button>`;

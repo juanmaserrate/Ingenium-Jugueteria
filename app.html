@@ -22,11 +22,11 @@
 </head>
 <body class="bg-background text-secondary min-h-screen">
 
-  <!-- Header de dos filas, full width. Fila 1 (marca + usuario): gradiente rojo.
-       Fila 2 (categorías + Nueva venta): rojo más oscuro. Deja todo el ancho libre. -->
-  <header class="sticky top-0 z-40 w-full shadow-lg">
-    <div id="topbar" class="w-full flex items-center justify-between gap-3 px-4 lg:px-6 py-2.5 text-white bg-gradient-to-r from-[#e0402e] via-[#d82f1e] to-[#a50e04]"></div>
-    <div id="sidebar" class="w-full flex items-center justify-between gap-3 px-4 lg:px-6 py-1.5 text-white bg-[#a50e04] border-t border-white/10"></div>
+  <!-- Header de dos filas, full width, con el color de la página (no rojo).
+       Fila 1: marca + usuario. Fila 2: categorías + Nueva venta. -->
+  <header class="sticky top-0 z-40 w-full bg-white/80 dark:bg-[#1a1410]/85 backdrop-blur-xl border-b border-[#fff1e6] dark:border-[#2a2018] shadow-sm">
+    <div id="topbar" class="w-full flex items-center justify-between gap-3 px-4 lg:px-6 py-2.5"></div>
+    <div id="sidebar" class="w-full flex items-center justify-between gap-3 px-4 lg:px-6 py-1.5 border-t border-[#fff1e6] dark:border-[#2a2018] bg-[#fff8f4]/60 dark:bg-[#231c16]/50"></div>
   </header>
 
   <!-- Main a todo el ancho -->
