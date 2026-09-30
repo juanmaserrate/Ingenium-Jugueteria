@@ -1,7 +1,20 @@
 import jwt from '@fastify/jwt';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { env } from '../config.js';
-import { UnauthorizedError } from '../utils/errors.js';
+import { UnauthorizedError, ForbiddenError } from '../utils/errors.js';
+
+// preHandler de rol: se usa DESPUÉS de `authenticate` (que llena request.user).
+// Ej: { preHandler: [app.authenticate, requireRole('admin')] }. Si el token no tiene
+// un rol permitido, corta con 403. Solo protege el backend (el front ya oculta cosas
+// por rol, pero eso es cosmético; esto es la barrera real vía API).
+export function requireRole(...roles: string[]) {
+  return async (request: FastifyRequest) => {
+    const role = request.user?.role;
+    if (!role || !roles.includes(role)) {
+      throw new ForbiddenError('Esta acción es solo para administradores');
+    }
+  };
+}
 
 export type JwtPayload = {
   userId: string;

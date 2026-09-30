@@ -3,6 +3,12 @@
 import { api, ApiError } from '../core/api.js';
 import { toast } from '../core/notifications.js';
 
+// Escapa texto antes de meterlo en innerHTML. Los nombres/emails vienen del checkout
+// de Tienda Nube (comprador anónimo), así que hay que tratarlos como no confiables.
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 export async function mount(el) {
   el.innerHTML = renderShell();
   const listEl = el.querySelector('#orders-list');
@@ -71,22 +77,22 @@ function renderOrder(o, branches) {
     .map(
       (i) => `
     <tr class="border-b border-[#fff1e6]">
-      <td class="py-1 px-2 text-sm">${i.productName}${i.variantName ? ' / ' + i.variantName : ''}</td>
-      <td class="py-1 px-2 text-sm text-center">${i.qty}</td>
+      <td class="py-1 px-2 text-sm">${esc(i.productName)}${i.variantName ? ' / ' + esc(i.variantName) : ''}</td>
+      <td class="py-1 px-2 text-sm text-center">${Number(i.qty)}</td>
       <td class="py-1 px-2 text-sm text-right">$${Number(i.unitPrice).toFixed(2)}</td>
     </tr>
   `,
     )
     .join('');
 
-  const branchOpts = branches.map((b) => `<option value="${b.id}">${b.name}</option>`).join('');
+  const branchOpts = branches.map((b) => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');
 
   return `
     <div class="bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-5 space-y-3">
       <header class="flex items-center justify-between">
         <div>
-          <p class="font-bold text-lg">Orden TN #${o.number ?? o.tnOrderId}</p>
-          <p class="text-sm text-[#7d6c5c]">${o.customerName} \u00b7 ${o.customerEmail ?? 'sin email'}</p>
+          <p class="font-bold text-lg">Orden TN #${esc(o.number ?? o.tnOrderId)}</p>
+          <p class="text-sm text-[#7d6c5c]">${esc(o.customerName)} \u00b7 ${esc(o.customerEmail ?? 'sin email')}</p>
           <p class="text-xs text-[#7d6c5c]">Recibida: ${new Date(o.receivedAt).toLocaleString('es-AR')}</p>
         </div>
         <div class="text-right">

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { requireRole } from '../auth/jwt.js';
 import { getAllSettings, getSetting, setSetting } from '../services/settings.js';
 
 export async function settingsRoutes(app: FastifyInstance) {
@@ -12,7 +13,8 @@ export async function settingsRoutes(app: FastifyInstance) {
     return { key, value: await getSetting(key) };
   });
 
-  app.put('/settings/:key', async (req) => {
+  // Cambiar la configuración es solo del admin (medios de pago, config general, etc.).
+  app.put('/settings/:key', { preHandler: requireRole('admin') }, async (req) => {
     const { key } = req.params as { key: string };
     const { value } = z.object({ value: z.any() }).parse(req.body);
     return { key, value: await setSetting(key, value) };

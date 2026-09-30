@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { requireRole } from '../auth/jwt.js';
 import {
   listEmployees, createEmployee, updateEmployee, deleteEmployee,
   listShifts, upsertShift,
@@ -21,13 +22,16 @@ const empSchema = z.object({
 export async function employeesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate);
 
+  // Alta/baja/edición de empleados = gestión → solo admin. Los turnos (fichaje) y las
+  // lecturas quedan abiertos para el operador.
+  const adminOnly = { preHandler: requireRole('admin') };
   app.get('/employees', async () => listEmployees());
-  app.post('/employees', async (req) => createEmployee(empSchema.parse(req.body)));
-  app.put('/employees/:id', async (req) => {
+  app.post('/employees', adminOnly, async (req) => createEmployee(empSchema.parse(req.body)));
+  app.put('/employees/:id', adminOnly, async (req) => {
     const { id } = req.params as { id: string };
     return updateEmployee(id, empSchema.partial().parse(req.body));
   });
-  app.delete('/employees/:id', async (req) => {
+  app.delete('/employees/:id', adminOnly, async (req) => {
     const { id } = req.params as { id: string };
     return deleteEmployee(id);
   });

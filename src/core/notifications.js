@@ -59,9 +59,12 @@ export function toast(message, kind = 'info', opts = {}) {
   const actionHTML = opts.action
     ? `<button type="button" class="toast-action ml-2 px-3 py-1 rounded-full bg-[#d82f1e] text-white text-xs font-black hover:brightness-110">${opts.action.label || 'Deshacer'}</button>`
     : '';
+  // Escapamos el mensaje: a veces incluye datos del servidor o de TN (nombres, errores)
+  // y el toast se pinta con innerHTML. Ningún llamador pasa HTML a propósito.
+  const safeMessage = String(message ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   el.innerHTML = `
     <span class="material-symbols-outlined text-[#d82f1e]">${icons[kind] || 'info'}</span>
-    <div class="flex-1 text-sm font-medium text-secondary">${message}</div>
+    <div class="flex-1 text-sm font-medium text-secondary">${safeMessage}</div>
     ${actionHTML}
   `;
   c.appendChild(el);

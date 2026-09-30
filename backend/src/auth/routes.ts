@@ -11,6 +11,14 @@ const loginPinSchema = z.object({
   pin: z.string().min(4).max(10),
 });
 
+// Anti fuerza-bruta de PIN POR USUARIO (en memoria). Complementa el rate-limit por IP:
+// aunque el atacante rote de IP, tras varios PIN fallidos seguidos contra el MISMO
+// usuario, ese usuario queda bloqueado un rato. Es por-instancia (un solo worker) y se
+// resetea en cada redeploy, lo cual es aceptable para este caso.
+const PIN_MAX_FAILS = 8;
+const PIN_BLOCK_MS = 5 * 60 * 1000;
+const pinFails = new Map<string, { count: number; blockedUntil: number }>();
+
 const loginPasswordSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
@@ -59,8 +67,22 @@ export async function authRoutes(app: FastifyInstance) {
     if (!user || user.branchId !== branchId || !user.active) {
       throw new UnauthorizedError('Usuario o sucursal incorrectos');
     }
+    // Bloqueo temporal por usuario si acumuló demasiados PIN fallidos.
+    const key = `${branchId}:${userId}`;
+    const rec = pinFails.get(key);
+    if (rec && rec.blockedUntil > Date.now()) {
+      const mins = Math.ceil((rec.blockedUntil - Date.now()) / 60000);
+      throw new UnauthorizedError(`Usuario bloqueado por intentos fallidos. Probá en ${mins} min.`);
+    }
     const derived = await pbkdf2(pin, user.pinSalt, user.pinIters);
-    if (derived !== user.pinHash) throw new UnauthorizedError('PIN incorrecto');
+    if (derived !== user.pinHash) {
+      const cur = pinFails.get(key) ?? { count: 0, blockedUntil: 0 };
+      cur.count += 1;
+      if (cur.count >= PIN_MAX_FAILS) { cur.blockedUntil = Date.now() + PIN_BLOCK_MS; cur.count = 0; }
+      pinFails.set(key, cur);
+      throw new UnauthorizedError('PIN incorrecto');
+    }
+    pinFails.delete(key); // login OK → limpia el contador
 
     const token = app.jwt.sign({ userId: user.id, branchId: user.branchId, role: user.role });
     return { token, user: { id: user.id, name: user.name, role: user.role, branchId: user.branchId } };

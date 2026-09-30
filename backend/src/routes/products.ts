@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { requireRole } from '../auth/jwt.js';
 import {
   listProducts,
   getProduct,
@@ -109,7 +110,8 @@ export async function productsRoutes(app: FastifyInstance) {
     return updateProduct(id, body, req.user.userId);
   });
 
-  app.delete('/products/:id', async (req, reply) => {
+  // Borrar un producto es destructivo y puede impactar TN → solo admin.
+  app.delete('/products/:id', { preHandler: requireRole('admin') }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const { keepTn } = req.query as { keepTn?: string };
     await deleteProduct(id, req.user.userId, { keepTn: keepTn === '1' || keepTn === 'true' });

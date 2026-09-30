@@ -11,6 +11,7 @@ import {
 } from '../tiendanube/oauth.js';
 import { randomId } from '../utils/crypto.js';
 import { ValidationError } from '../utils/errors.js';
+import { requireRole } from '../auth/jwt.js';
 import { confirmSale } from '../services/sales.js';
 import { enqueueSync } from '../sync/queue.js';
 import { getTnClient } from '../tiendanube/client.js';
@@ -65,14 +66,19 @@ export async function integrationsRoutes(app: FastifyInstance) {
   app.register(async (r) => {
     r.addHook('preHandler', app.authenticate);
 
-    r.post('/integrations/tiendanube/disconnect', async (req) => {
+    // La configuración de la integración y las operaciones masivas de catálogo/stock
+    // hacia TN son solo del admin. Las lecturas (status, listados) y la asignación de
+    // órdenes a sucursal (tarea diaria del operador) quedan abiertas.
+    const adminOnly = { preHandler: requireRole('admin') };
+
+    r.post('/integrations/tiendanube/disconnect', adminOnly, async (req) => {
       await disconnect(req.user.userId);
       return { ok: true };
     });
 
     // Enlaza productos del sistema con TN por código de barras / SKU (lee la API de TN).
     // dryRun=true (default) solo reporta; dryRun=false crea los mapeos.
-    r.post('/integrations/tiendanube/link-by-barcode', async (req) => {
+    r.post('/integrations/tiendanube/link-by-barcode', adminOnly, async (req) => {
       const body = z.object({ dryRun: z.boolean().optional() }).parse(req.body ?? {});
       return linkByBarcode({ dryRun: body.dryRun ?? true });
     });
@@ -140,7 +146,7 @@ export async function integrationsRoutes(app: FastifyInstance) {
     // proveedor deducido del final del nombre ("... - Proveedor"). NO empuja stock
     // a TN (el stock viene DESDE TN). Idempotente por tnProductId (si ya está
     // enlazado, lo saltea).
-    r.post('/integrations/tiendanube/import-products', async (req) => {
+    r.post('/integrations/tiendanube/import-products', adminOnly, async (req) => {
       const body = z
         .object({
           tnProductIds: z.array(z.string()).min(1),
@@ -247,18 +253,18 @@ export async function integrationsRoutes(app: FastifyInstance) {
     });
 
     // Vinculación manual producto del sistema ↔ producto TN (elegido por el usuario).
-    r.post('/integrations/tiendanube/link-manual', async (req) => {
+    r.post('/integrations/tiendanube/link-manual', adminOnly, async (req) => {
       const body = z.object({ productId: z.string(), tnProductId: z.string(), tnVariantId: z.string().optional() }).parse(req.body);
       return linkManual(body);
     });
     // Vinculación manual de un producto CON variantes ↔ producto TN con variantes.
     // Empareja cada variante (por barcode/código, o por valor talle/color/modelo)
     // y devuelve las que quedaron sin casar para resolver a mano.
-    r.post('/integrations/tiendanube/link-variants', async (req) => {
+    r.post('/integrations/tiendanube/link-variants', adminOnly, async (req) => {
       const body = z.object({ productId: z.string(), tnProductId: z.string() }).parse(req.body);
       return linkManualVariants(body);
     });
-    r.post('/integrations/tiendanube/unlink', async (req) => {
+    r.post('/integrations/tiendanube/unlink', adminOnly, async (req) => {
       const body = z.object({ productId: z.string() }).parse(req.body);
       return unlinkProduct(body.productId);
     });
@@ -419,7 +425,7 @@ export async function integrationsRoutes(app: FastifyInstance) {
       });
     });
 
-    r.post('/tn-products-pending/:id/approve', async (req) => {
+    r.post('/tn-products-pending/:id/approve', adminOnly, async (req) => {
       const { id } = req.params as { id: string };
       const body = z
         .object({
@@ -524,7 +530,7 @@ export async function integrationsRoutes(app: FastifyInstance) {
       return { ok: true, productId };
     });
 
-    r.post('/tn-products-pending/:id/reject', async (req) => {
+    r.post('/tn-products-pending/:id/reject', adminOnly, async (req) => {
       const { id } = req.params as { id: string };
       await prisma.tnProductPending.update({
         where: { id },
@@ -538,7 +544,7 @@ export async function integrationsRoutes(app: FastifyInstance) {
     // producto ENLAZADO. Corrige desincronizaciones (p.ej. tras una recarga masiva
     // donde el stock local quedó distinto al de TN). Idempotente: push_stock fija
     // el valor absoluto, no descuenta, así que correrlo varias veces es seguro.
-    r.post('/resync-stock', async (req) => {
+    r.post('/resync-stock', adminOnly, async (req) => {
       const linkedProducts = await prisma.product.findMany({
         where: { tnMapping: { isNot: null }, active: true },
         select: { variants: { select: { id: true } } },
@@ -583,7 +589,7 @@ export async function integrationsRoutes(app: FastifyInstance) {
 
     // Empuja stock a TN SOLO para las variantes indicadas (conciliación selectiva,
     // evita el zeroing accidental). Reusa push_stock: solo toca el número de stock.
-    r.post('/resync-stock/batch', async (req) => {
+    r.post('/resync-stock/batch', adminOnly, async (req) => {
       const body = z.object({ variantIds: z.array(z.string()).min(1) }).parse(req.body);
       for (const vid of body.variantIds) {
         await enqueueSync('push_stock', { variantId: vid });
@@ -608,14 +614,14 @@ export async function integrationsRoutes(app: FastifyInstance) {
       return listConflicts(q.status ?? 'open');
     });
 
-    r.post('/sync/conflicts/:id/resolve', async (req) => {
+    r.post('/sync/conflicts/:id/resolve', adminOnly, async (req) => {
       const { id } = req.params as { id: string };
       const body = z.object({ resolution: z.enum(['accept', 'cancel', 'adjust']) }).parse(req.body);
       const { resolveConflict } = await import('../sync/conflicts.js');
       return resolveConflict(id, body.resolution, req.user.userId);
     });
 
-    r.post('/sync/conflicts/:id/dismiss', async (req) => {
+    r.post('/sync/conflicts/:id/dismiss', adminOnly, async (req) => {
       const { id } = req.params as { id: string };
       const { dismissConflict } = await import('../sync/conflicts.js');
       return dismissConflict(id, req.user.userId);

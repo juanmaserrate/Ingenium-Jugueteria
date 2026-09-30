@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { requireRole } from '../auth/jwt.js';
 import { listJobs, redriveFailed, reapStuckJobs, queueStats } from '../sync/queue.js';
 
 export async function syncRoutes(app: FastifyInstance) {
@@ -15,7 +16,7 @@ export async function syncRoutes(app: FastifyInstance) {
 
   // Re-drive manual: reintenta los jobs 'failed' (todos, o los ids indicados). Sirve
   // para recuperar sincronizaciones que agotaron los reintentos sin quedar pegadas.
-  app.post('/sync/redrive', async (req) => {
+  app.post('/sync/redrive', { preHandler: requireRole('admin') }, async (req) => {
     const body = z.object({ ids: z.array(z.string()).optional() }).parse(req.body ?? {});
     const count = await redriveFailed(body.ids);
     return { ok: true, requeued: count };
@@ -23,7 +24,7 @@ export async function syncRoutes(app: FastifyInstance) {
 
   // Reaper manual: re-encola jobs 'running' huérfanos (lease vencida). El worker ya lo
   // corre solo, pero deja forzarlo desde el panel.
-  app.post('/sync/reap', async () => {
+  app.post('/sync/reap', { preHandler: requireRole('admin') }, async () => {
     const count = await reapStuckJobs(0);
     return { ok: true, reaped: count };
   });

@@ -10,6 +10,12 @@ import { navigate } from '../core/router.js';
 import { api } from '../core/api.js';
 import { on, EV, emit } from '../core/events.js';
 
+// Escapa texto para innerHTML. Las notificaciones pueden traer datos de TN
+// (nombres de producto/cliente), así que las tratamos como no confiables.
+function esc(s) {
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 // Aviso "hay datos nuevos": comparamos una huella liviana del servidor
 // (GET /api/sync-state) contra la última vista. Si cambió → puntito en ↻.
 // No recarga nada solo: el operador actualiza cuando quiere.
@@ -228,8 +234,8 @@ function openBellPanel() {
       <div class="p-3 rounded-xl hover:bg-[#fff1e6] flex gap-3 ${n.read_at ? 'opacity-60' : ''}">
         <span class="material-symbols-outlined text-[#d82f1e]">${n.read_at ? 'notifications' : 'notifications_active'}</span>
         <div class="flex-1">
-          <div class="font-bold text-sm">${n.title}</div>
-          ${n.body ? `<div class="text-xs text-[#7d6c5c] mt-0.5">${n.body}</div>` : ''}
+          <div class="font-bold text-sm">${esc(n.title)}</div>
+          ${n.body ? `<div class="text-xs text-[#7d6c5c] mt-0.5">${esc(n.body)}</div>` : ''}
           <div class="text-[10px] text-[#c9b6a4] mt-1">${new Date(n.datetime).toLocaleString('es-AR')}</div>
         </div>
       </div>
