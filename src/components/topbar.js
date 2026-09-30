@@ -59,6 +59,9 @@ export async function mountTopbar(el) {
     const unread = (await Notif.listAll({ onlyUnread: true })).length;
     const currentBranch = branches.find(b => b.id === Auth.activeBranchId());
     const cashOpen = await Cash.isDayOpen(Auth.activeBranchId());
+    // El alternador de sucursal es solo para el admin. Los demás operan en su
+    // sucursal fija (la ven junto a su nombre, abajo a la derecha).
+    const isAdmin = session?.role === 'admin';
 
     el.innerHTML = `
       <div class="flex items-center gap-10">
@@ -66,11 +69,12 @@ export async function mountTopbar(el) {
         <span class="text-[#7d6c5c] font-semibold text-sm">/ ${pageLabel}</span>
       </div>
       <div class="flex items-center gap-5">
+        ${isAdmin ? `
         <div class="flex gap-2 items-center">
           ${branches.map(b => `
             <button data-branch="${b.id}" class="tb-branch px-4 py-1.5 rounded-full text-xs font-bold transition-all ${b.id === activeId ? 'bg-[#d82f1e] text-white shadow' : 'text-[#7d6c5c] hover:bg-[#fff1e6]'}">${b.name}</button>
           `).join('')}
-        </div>
+        </div>` : ''}
         <div class="flex items-center gap-2 px-4 py-1.5 bg-[#fff1e6] rounded-full border border-[#e3ceba]">
           <span class="material-symbols-outlined text-[#d82f1e] text-lg">admin_panel_settings</span>
           <span class="text-xs font-bold text-[#b41005]">${ROLE_LABELS[session?.role] || (session?.role || '').toUpperCase()}</span>
