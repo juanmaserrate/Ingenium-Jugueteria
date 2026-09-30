@@ -84,7 +84,7 @@ export async function authRoutes(app: FastifyInstance) {
     }
     pinFails.delete(key); // login OK → limpia el contador
 
-    const token = app.jwt.sign({ userId: user.id, branchId: user.branchId, role: user.role });
+    const token = app.jwt.sign({ userId: user.id, branchId: user.branchId, role: user.role, tv: user.tokenVersion });
     return { token, user: { id: user.id, name: user.name, role: user.role, branchId: user.branchId } };
   });
 
@@ -98,7 +98,7 @@ export async function authRoutes(app: FastifyInstance) {
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) throw new UnauthorizedError('Credenciales inv\u00e1lidas');
 
-    const token = app.jwt.sign({ userId: user.id, branchId: user.branchId, role: user.role });
+    const token = app.jwt.sign({ userId: user.id, branchId: user.branchId, role: user.role, tv: user.tokenVersion });
     return { token, user: { id: user.id, name: user.name, role: user.role, branchId: user.branchId } };
   });
 
@@ -176,7 +176,20 @@ export async function authRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const existing = await prisma.user.findUnique({ where: { id } });
     if (!existing) return { ok: true, skipped: 'not_found' };
-    await prisma.user.update({ where: { id }, data: { active: false } });
+    // Desactivar + subir tokenVersion: corta el acceso al instante (el token deja de valer
+    // aunque le queden días), y si se reactiva más tarde los tokens viejos siguen muertos.
+    await prisma.user.update({ where: { id }, data: { active: false, tokenVersion: { increment: 1 } } });
+    return { ok: true };
+  });
+
+  // Fuerza el cierre de sesión de un usuario en todos sus dispositivos (bump de
+  // tokenVersion → sus tokens actuales dejan de valer). Solo admin.
+  app.post('/auth/users/:id/logout-everywhere', { preHandler: [app.authenticate] }, async (request) => {
+    if (request.user.role !== 'admin') throw new UnauthorizedError('Solo admin');
+    const { id } = request.params as { id: string };
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) return { ok: true, skipped: 'not_found' };
+    await prisma.user.update({ where: { id }, data: { tokenVersion: { increment: 1 } } });
     return { ok: true };
   });
 

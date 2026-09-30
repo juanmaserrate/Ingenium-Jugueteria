@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { processReturn, listReturns, listCreditNotes, lookupCreditNote } from '../services/returns.js';
+import { assertBranchAccess } from '../auth/jwt.js';
 
 const itemSchema = z.object({
   variantId: z.string(),
@@ -30,11 +31,13 @@ export async function returnsRoutes(app: FastifyInstance) {
 
   app.get('/returns', async (req) => {
     const q = req.query as { branchId?: string };
-    return listReturns({ branchId: q.branchId });
+    const branchId = req.user.role === 'admin' ? q.branchId : req.user.branchId;
+    return listReturns({ branchId });
   });
 
   app.post('/returns', async (req) => {
     const body = schema.parse(req.body);
+    assertBranchAccess(req.user, body.branchId);
     return processReturn({ ...body, userId: req.user.userId });
   });
 

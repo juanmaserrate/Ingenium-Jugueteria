@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { confirmSale, cancelSale, listSales, getSale } from '../services/sales.js';
+import { assertBranchAccess } from '../auth/jwt.js';
 
 const itemSchema = z.object({
   variantId: z.string(),
@@ -43,25 +44,32 @@ export async function salesRoutes(app: FastifyInstance) {
 
   app.get('/sales', async (req) => {
     const q = req.query as { branchId?: string; limit?: string; from?: string; to?: string; status?: string; source?: string; customerId?: string };
+    // No-admin: se acota a SU sucursal (ignora cualquier branchId que venga).
+    const branchId = req.user.role === 'admin' ? q.branchId : req.user.branchId;
     return listSales({
-      branchId: q.branchId, limit: q.limit ? parseInt(q.limit) : undefined,
+      branchId, limit: q.limit ? parseInt(q.limit) : undefined,
       from: q.from, to: q.to, status: q.status, source: q.source, customerId: q.customerId,
     });
   });
 
   app.get('/sales/:id', async (req) => {
     const { id } = req.params as { id: string };
-    return getSale(id);
+    const sale = await getSale(id);
+    assertBranchAccess(req.user, sale.branchId);
+    return sale;
   });
 
   app.post('/sales', async (req) => {
     const body = saleSchema.parse(req.body);
+    assertBranchAccess(req.user, body.branchId);
     return confirmSale(body, { userId: req.user.userId, allowNegative: body.allowNegative });
   });
 
   app.post('/sales/:id/cancel', async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = z.object({ reason: z.string().optional(), returnToTn: z.boolean().optional() }).parse(req.body ?? {});
+    const sale = await getSale(id);
+    assertBranchAccess(req.user, sale.branchId);
     await cancelSale(id, { userId: req.user.userId, reason: body.reason, returnToTn: body.returnToTn });
     return reply.send({ ok: true });
   });
@@ -72,6 +80,7 @@ export async function salesRoutes(app: FastifyInstance) {
     const results: any[] = [];
     for (const s of body) {
       try {
+        assertBranchAccess(req.user, s.branchId);
         const sale = await confirmSale(s, { userId: req.user.userId, allowNegative: s.allowNegative });
         results.push({ ok: true, offlineId: s.offlineId, id: sale.id });
       } catch (err: any) {
