@@ -407,6 +407,10 @@ export async function linkByBarcode(opts: { dryRun?: boolean } = {}): Promise<Li
 // un par de minutos si el catálogo es grande.
 export async function findCodeMismatches() {
   const norm = (s: unknown) => String(s ?? '').trim();
+  const isDigits = (s: string) => /^[0-9]+$/.test(s);
+  const stripLead = (s: string) => s.replace(/^0+/, '') || '0';
+  // Saca un sufijo de variante tipo "-VERDE", "-ROSA", "-VARON" del código local.
+  const baseCode = (s: string) => s.replace(/-[A-Za-z0-9]+$/, '');
   const dump = await dumpTnCatalog();
   const byVar = new Map<string, any>();
   for (const r of dump.rows) byVar.set(String(r.tnVariantId), r);
@@ -416,33 +420,49 @@ export async function findCodeMismatches() {
     include: { variants: { include: { tnMapping: true } } },
   });
 
-  const items: any[] = [];
+  // Categorías: drift = código genuinamente distinto (accionable). El resto es ruido
+  // conocido de la importación del catálogo a TN (Excel).
+  const drift: any[] = [];
+  const noVinculo: any[] = [];
+  const resumen = { drift: 0, tn_corrupto: 0, solo_cero_izq: 0, tn_sin_barcode: 0, local_sin_codigo: 0, sin_vinculo_tn: 0 };
   let comparados = 0;
+
   for (const p of products) {
     for (const v of p.variants) {
       if (!v.tnMapping) continue;
       const tnVariantId = String(v.tnMapping.tnVariantId);
       const tn = byVar.get(tnVariantId);
-      // El código local "que vale" para escanear: barcode/código de la variante; si no
-      // tiene, el código del producto (caso más común en este sistema).
-      const localCode = norm(v.barcode || v.code || (v.isDefault ? p.code : ''));
-      const base = { productId: p.id, name: p.name, localCode, tnProductId: v.tnMapping.tnProductId, tnVariantId };
-      if (!tn) { items.push({ ...base, tnBarcode: null, reason: 'variante no existe en TN (posible mal vínculo)' }); continue; }
+      const localCodeRaw = norm(v.barcode || v.code || (v.isDefault ? p.code : ''));
+      const base = { productId: p.id, name: p.name, localCode: localCodeRaw, tnProductId: v.tnMapping.tnProductId, tnVariantId };
+      if (!tn) { resumen.sin_vinculo_tn++; noVinculo.push({ ...base, reason: 'la variante no existe en TN (posible mal vínculo)' }); continue; }
       comparados++;
-      const tnBarcode = norm(tn.barcode);
+      const tnBarcodeRaw = norm(tn.barcode);
       const tnSku = norm(tn.sku);
-      if (!tnBarcode && !tnSku) continue; // TN sin barcode ni SKU → no hay con qué comparar
-      // Coincide si el código local matchea el barcode O el SKU de TN.
-      if (localCode && (localCode === tnBarcode || localCode === tnSku)) continue;
-      items.push({
-        ...base,
-        tnBarcode: tnBarcode || null,
-        tnSku: tnSku || null,
-        tnName: tn.name || null,
-        reason: !localCode ? 'producto local sin código' : 'código local distinto al de TN',
-      });
+      // Coincidencia directa (incluye match contra el SKU de TN).
+      if (localCodeRaw && (localCodeRaw === tnBarcodeRaw || localCodeRaw === tnSku)) continue;
+      if (!localCodeRaw) { resumen.local_sin_codigo++; continue; }
+      // Clasificar el tipo de diferencia.
+      const L = stripLead(baseCode(localCodeRaw));
+      if (!isDigits(tnBarcodeRaw)) { resumen.tn_corrupto++; continue; }      // sci-notation / no numérico
+      const T = stripLead(tnBarcodeRaw);
+      if (T === '0') { resumen.tn_sin_barcode++; continue; }                  // TN sin barcode real
+      if (L === T) { resumen.solo_cero_izq++; continue; }                     // mismo número, cero a la izq/sufijo
+      if (/0{5,}$/.test(tnBarcodeRaw)) { resumen.tn_corrupto++; continue; }   // redondeado (Excel)
+      // Dígito de más/menos (uno es prefijo/sufijo del otro) → corrupción, no drift.
+      if (L.length !== T.length && (L.startsWith(T) || T.startsWith(L) || L.endsWith(T) || T.endsWith(L))) { resumen.tn_corrupto++; continue; }
+      // Genuinamente distinto → accionable.
+      resumen.drift++;
+      drift.push({ ...base, tnBarcode: tnBarcodeRaw, tnSku: tnSku || null, tnName: tn.name || null });
     }
   }
-  items.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-  return { enlazados: products.length, comparados, desalineados: items.length, items };
+  drift.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  noVinculo.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  return {
+    enlazados: products.length,
+    comparados,
+    resumen,
+    nota: 'drift = código genuinamente distinto (revisar/alinear). El resto (tn_corrupto, solo_cero_izq, tn_sin_barcode) es ruido de la importación del catálogo a TN.',
+    drift,
+    sin_vinculo_tn: noVinculo,
+  };
 }
