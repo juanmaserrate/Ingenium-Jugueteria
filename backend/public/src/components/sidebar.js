@@ -52,7 +52,7 @@ function groupHTML(group, currentPath) {
   }).join('');
   return `
     <div class="nav-group relative">
-      <button data-navtoggle class="flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-bold transition-colors ${activeInGroup
+      <button data-navtoggle class="flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-colors ${activeInGroup
         ? 'bg-[#fff1e6] dark:bg-[#2a2018] text-[#d82f1e]'
         : 'text-[#241a0d] dark:text-[#fff1e6] hover:bg-[#fff1e6] dark:hover:bg-[#2a2018]'}">
         <span class="material-symbols-outlined text-[20px]">${group.icon}</span>
@@ -72,7 +72,7 @@ export function mountSidebar(el, { onLogout }) {
       <a href="#/dashboard" class="flex items-center shrink-0 pr-2">
         <span class="text-xl font-black tracking-tighter text-[#d82f1e]">Ingenium</span>
       </a>
-      <nav class="flex items-center gap-1 overflow-x-auto no-scrollbar">
+      <nav class="flex flex-wrap items-center gap-1">
         ${GROUPS.map(g => groupHTML(g, path)).join('')}
       </nav>
       <button id="btn-new-sale" class="ml-1 shrink-0 bg-[#d82f1e] text-white font-bold px-3.5 py-2 rounded-full shadow-md flex items-center gap-1.5 hover:brightness-110 active:scale-95 transition-all text-sm">
