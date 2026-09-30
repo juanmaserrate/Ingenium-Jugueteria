@@ -257,10 +257,20 @@ function rowHTML(e) {
     detail = `
       ${ri ? `<div class="text-xs font-black uppercase tracking-wider text-[#7d6c5c] mb-1">Productos devueltos</div>${ri}` : ''}
       ${ti ? `<div class="text-xs font-black uppercase tracking-wider text-[#7d6c5c] mt-2 mb-1">Productos llevados (canje)</div>${ti}` : ''}
-      <div class="flex justify-between items-center pt-2 mt-1 border-t border-[#fff1e6] dark:border-[#2a2018]">
-        <span class="text-xs font-black uppercase tracking-wider text-[#7d6c5c]">Diferencia</span>
-        <span class="font-black ${e.difference >= 0 ? 'text-orange-600' : 'text-green-700'}">${money(e.difference)}</span>
+      ${(() => {
+        // Mostramos la diferencia desde la óptica del cliente: >0 = el cliente paga,
+        // <0 = se le devuelve. (El backend guarda devuelto−llevado, con el signo opuesto;
+        // acá lo invertimos solo para mostrar, la caja no cambia.)
+        const inv = -(e.difference || 0);
+        const cero = Math.abs(inv) < 0.01;
+        const label = cero ? 'Sin diferencia (canje exacto)' : (inv > 0 ? 'El cliente paga' : 'Se le devuelve al cliente');
+        const color = cero ? 'text-[#7d6c5c]' : (inv > 0 ? 'text-green-700' : 'text-orange-600');
+        const text = cero ? money(0) : `${inv > 0 ? '+' : '−'}${money(Math.abs(inv))}`;
+        return `<div class="flex justify-between items-center pt-2 mt-1 border-t border-[#fff1e6] dark:border-[#2a2018]">
+        <span class="text-xs font-black uppercase tracking-wider text-[#7d6c5c]">${label}</span>
+        <span class="font-black ${color}">${text}</span>
       </div>`;
+      })()}`;
   } else {
     const items = (e.items || []).map(it => lineItem(it)).join('');
     detail = `
