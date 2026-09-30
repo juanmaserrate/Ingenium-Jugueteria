@@ -56,7 +56,7 @@ function groupHTML(group, currentPath) {
         ? 'bg-white/20 text-white'
         : 'text-white/85 hover:bg-white/10 hover:text-white'}">
         <span>${group.section}</span>
-        <span class="material-symbols-outlined text-[18px] opacity-80">expand_more</span>
+        <span class="nav-chevron material-symbols-outlined text-[18px] opacity-80 transition-transform duration-200">expand_more</span>
       </button>
       <div data-navmenu class="hidden absolute left-0 mt-1.5 min-w-[220px] bg-white dark:bg-[#1a1410] border border-[#e3ceba] dark:border-[#2a2018] rounded-2xl shadow-2xl p-1.5 z-50 space-y-0.5">
         ${items}
@@ -76,16 +76,20 @@ export function mountSidebar(el, { onLogout }) {
         <span>Nueva venta</span>
       </button>`;
 
-    // Desplegables: abrir/cerrar; solo uno abierto a la vez.
-    const closeAll = () => el.querySelectorAll('[data-navmenu]').forEach(m => m.classList.add('hidden'));
+    // Desplegables: abrir/cerrar; solo uno abierto a la vez. El chevron rota al abrir.
+    const closeAll = () => el.querySelectorAll('.nav-group').forEach(g => {
+      g.querySelector('[data-navmenu]')?.classList.add('hidden');
+      g.querySelector('.nav-chevron')?.classList.remove('rotate-180');
+    });
     el.querySelectorAll('.nav-group').forEach(group => {
       const toggle = group.querySelector('[data-navtoggle]');
       const menu = group.querySelector('[data-navmenu]');
+      const chev = group.querySelector('.nav-chevron');
       toggle.addEventListener('click', (e) => {
         e.stopPropagation();
         const wasHidden = menu.classList.contains('hidden');
         closeAll();
-        if (wasHidden) menu.classList.remove('hidden');
+        if (wasHidden) { menu.classList.remove('hidden'); chev?.classList.add('rotate-180'); }
       });
       // Al elegir un ítem, cerrar el menú (la navegación por hash re-renderiza igual).
       menu.querySelectorAll('[data-navitem]').forEach(a => a.addEventListener('click', closeAll));
@@ -95,7 +99,10 @@ export function mountSidebar(el, { onLogout }) {
 
   // Cerrar los desplegables al hacer click fuera del nav.
   document.addEventListener('click', (e) => {
-    if (!el.contains(e.target)) el.querySelectorAll('[data-navmenu]').forEach(m => m.classList.add('hidden'));
+    if (!el.contains(e.target)) el.querySelectorAll('.nav-group').forEach(g => {
+      g.querySelector('[data-navmenu]')?.classList.add('hidden');
+      g.querySelector('.nav-chevron')?.classList.remove('rotate-180');
+    });
   });
 
   // onLogout se expone para el topbar (botón de cerrar sesión) vía window.

@@ -74,11 +74,13 @@ export async function mountTopbar(el) {
     const iconBtn = 'w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors';
     el.innerHTML = `
       <!-- Marca -->
-      <a href="#/dashboard" class="flex items-center gap-3 shrink-0 min-w-0">
-        <div class="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center font-black text-lg tracking-tight shrink-0">I</div>
+      <a href="#/dashboard" class="group flex items-center gap-3 shrink-0 min-w-0">
+        <div class="w-10 h-10 rounded-full bg-white flex items-center justify-center shadow-md ring-1 ring-white/40 shrink-0 transition-transform group-hover:scale-105">
+          <span class="material-symbols-outlined text-[#d82f1e] text-[24px]">toys</span>
+        </div>
         <div class="leading-tight min-w-0">
-          <div class="font-black text-base sm:text-lg tracking-tight truncate">Ingenium</div>
-          <div class="text-[9px] sm:text-[10px] font-bold uppercase tracking-[0.18em] text-white/70 truncate">Sistema de Ventas</div>
+          <div class="font-black text-lg sm:text-xl tracking-tight truncate">Ingenium</div>
+          <div class="text-[9px] sm:text-[10px] font-bold uppercase tracking-[0.22em] text-white/75 truncate">Sistema de Ventas</div>
         </div>
       </a>
       <!-- Controles -->
