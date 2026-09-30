@@ -16,7 +16,7 @@ import { openModal, confirmModal } from '../components/modal.js';
 const AR = '-03:00';
 
 const state = {
-  period: 'month',
+  period: 'day',      // por defecto: el día actual (todayKey abajo)
   date: todayKey(),
   customFrom: todayKey(),
   customTo: todayKey(),
