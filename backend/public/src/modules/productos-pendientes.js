@@ -146,7 +146,7 @@ function renderPending(p, branches) {
 
 function renderShell() {
   return `
-    <div class="max-w-6xl mx-auto space-y-6">
+    <div class="w-full space-y-6">
       <header>
         <h1 class="text-3xl font-black text-[#241a0d]">Productos de Tienda Nube</h1>
         <p class="text-[#7d6c5c] text-sm">Productos creados en TN que esperan revisi\u00f3n y asignaci\u00f3n de stock inicial.</p>

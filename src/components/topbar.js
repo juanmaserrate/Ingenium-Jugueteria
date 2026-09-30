@@ -70,11 +70,7 @@ export async function mountTopbar(el) {
     const isAdmin = session?.role === 'admin';
 
     el.innerHTML = `
-      <div class="flex items-center gap-10">
-        <span class="text-xl font-black uppercase tracking-[0.05em] text-[#d82f1e]">Ingenium</span>
-        <span class="text-[#7d6c5c] font-semibold text-sm">/ ${pageLabel}</span>
-      </div>
-      <div class="flex items-center gap-5">
+      <div class="flex items-center gap-3 lg:gap-4">
         ${isAdmin ? `
         <div class="flex gap-2 items-center">
           ${branches.map(b => `
@@ -104,14 +100,17 @@ export async function mountTopbar(el) {
           <button class="p-2.5 text-[#7d6c5c] hover:bg-[#fff1e6] rounded-full transition-all" onclick="location.hash='/settings'">
             <span class="material-symbols-outlined">settings</span>
           </button>
-          <div class="flex items-center gap-3 pl-3 border-l border-[#e3ceba]">
-            <div class="text-right">
-              <div class="text-xs font-bold text-[#241a0d] leading-tight">${session?.user_name || ''}</div>
+          <div class="flex items-center gap-2 pl-2 border-l border-[#e3ceba]">
+            <div class="text-right hidden sm:block">
+              <div class="text-xs font-bold text-[#241a0d] dark:text-[#fff1e6] leading-tight">${session?.user_name || ''}</div>
               <div class="text-[10px] text-[#7d6c5c]">${currentBranch?.name || ''}</div>
             </div>
-            <div class="w-10 h-10 rounded-full border-2 border-[#d82f1e]/20 p-0.5 bg-[#fff1e6] flex items-center justify-center">
+            <div class="w-9 h-9 rounded-full border-2 border-[#d82f1e]/20 p-0.5 bg-[#fff1e6] flex items-center justify-center">
               <span class="material-symbols-outlined text-[#d82f1e]">person</span>
             </div>
+            <button id="tb-logout" title="Cerrar sesión" class="p-2.5 text-[#7d6c5c] hover:bg-red-50 hover:text-red-600 rounded-full transition-all">
+              <span class="material-symbols-outlined">logout</span>
+            </button>
           </div>
         </div>
       </div>
@@ -174,6 +173,7 @@ export async function mountTopbar(el) {
       }
     });
     el.querySelector('#tb-bell').addEventListener('click', () => openBellPanel());
+    el.querySelector('#tb-logout')?.addEventListener('click', () => { try { window.__ingLogout?.(); } catch {} });
     el.querySelector('#tb-theme').addEventListener('click', () => {
       const html = document.documentElement;
       const dark = html.classList.toggle('dark');

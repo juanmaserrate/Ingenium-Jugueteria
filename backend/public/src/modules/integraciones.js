@@ -116,7 +116,7 @@ export async function mount(el) {
 
 function renderShell() {
   return `
-    <div class="max-w-5xl mx-auto space-y-6">
+    <div class="w-full space-y-6">
       <header>
         <h1 class="text-3xl font-black text-[#241a0d]">Integraciones</h1>
         <p class="text-[#7d6c5c] text-sm">Conect\u00e1 tu sistema con Tienda Nube para sincronizar productos, stock y ventas.</p>

@@ -121,7 +121,7 @@ function renderOrder(o, branches) {
 
 function renderShell() {
   return `
-    <div class="max-w-5xl mx-auto space-y-6">
+    <div class="w-full space-y-6">
       <header>
         <h1 class="text-3xl font-black text-[#241a0d]">Ventas Web</h1>
         <p class="text-[#7d6c5c] text-sm">\u00d3rdenes pagadas de Tienda Nube esperando que elijas a qu\u00e9 sucursal imputarlas.</p>

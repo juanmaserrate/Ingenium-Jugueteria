@@ -192,3 +192,7 @@ html.dark ::-webkit-scrollbar-thumb:hover { background: #5c4a36; }
 /* Inputs nativos select/checkbox heredan contraste */
 html.dark select.ing-input option { background: #1e1a16; color: #f3ece3; }
 html.dark input[type="date"], html.dark input[type="month"], html.dark input[type="time"] { color-scheme: dark; }
+
+/* Oculta la barra de scroll horizontal del nav del header (se puede scrollear igual). */
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
