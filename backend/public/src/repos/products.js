@@ -83,6 +83,7 @@ function toFront(bp) {
     width: bp.width ?? null,
     height: bp.height ?? null,
     depth: bp.depth ?? null,
+    active: bp.active !== false,
     seo_title: bp.seoTitle ?? null,
     seo_description: bp.seoDescription ?? null,
     handle: bp.handle ?? null,
@@ -129,6 +130,9 @@ function toBackendBody(data) {
   if (Array.isArray(data.tn_category_ids)) {
     body.tnCategoryIds = data.tn_category_ids.map(Number).filter((n) => !Number.isNaN(n));
   }
+  // Solo mandamos `active` cuando viene explícito (bulk edit): así crear un producto
+  // sin ese campo no lo desactiva por accidente (el backend default es activo).
+  if (typeof data.active === 'boolean') body.active = data.active;
   return body;
 }
 

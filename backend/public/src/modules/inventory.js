@@ -197,7 +197,8 @@ const state = {
   tab: 'products',
   selected: new Set(),
   page: 0,
-  filters: { search: '', category: '', brand: '', supplier: '', onlyMeli: false, variant: '' },
+  filters: { search: '', category: '', brand: '', supplier: '', onlyMeli: false, variant: '', stock: 'all' },
+  sort: 'newest', // newest | oldest | name — por defecto los más nuevos primero
   expandedVariants: new Set(), // productos con el detalle de variantes desplegado
   visibleCols: new Set(['code', 'name', 'category', 'brand', 'supplier', 'cost', 'price', 'margin', 'stock_lomas', 'stock_banfield', 'total', 'meli']),
   // Caché de datos: se carga una sola vez y los filtros operan sobre él
@@ -339,8 +340,20 @@ async function renderProducts(container, forceReload = false) {
         Object.entries(v.attributes || {}).some(([k, val]) => `${k} ${val}`.toLowerCase().includes(vq)));
       if (!hit) return false;
     }
+    if (f.stock && f.stock !== 'all') {
+      const total = stockOf(p.id, 'br_lomas').qty + stockOf(p.id, 'br_banfield').qty;
+      if (f.stock === 'with' && total <= 0) return false;   // solo con stock
+      if (f.stock === 'zero' && total > 0) return false;      // solo sin stock (0 o negativo)
+    }
     return true;
   });
+
+  // Orden. Por defecto los más nuevos primero (created_at desc). Fallback estable por nombre.
+  const cmpName = (a, b) => (a.name || '').localeCompare(b.name || '', 'es', { sensitivity: 'base' });
+  const cmpDate = (a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''));
+  if (state.sort === 'oldest') list.sort((a, b) => -cmpDate(a, b) || cmpName(a, b));
+  else if (state.sort === 'name') list.sort(cmpName);
+  else list.sort((a, b) => cmpDate(a, b) || cmpName(a, b)); // newest (default)
 
   // Paginado: dibujar 15k filas de una vez es muy lento. Mostramos de a PAGE_SIZE
   // y el buscador/filtros operan sobre TODA la lista.
@@ -415,6 +428,16 @@ async function renderProducts(container, forceReload = false) {
           <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
         </div>
         <input id="f-variant" class="ing-input max-w-[160px]" placeholder="Variante (talle…)" value="${escapeAttr(f.variant || '')}" />
+        <select id="f-stock" class="ing-filter" title="Filtrar por stock">
+          <option value="all" ${f.stock==='all'?'selected':''}>Todo el stock</option>
+          <option value="with" ${f.stock==='with'?'selected':''}>Con stock</option>
+          <option value="zero" ${f.stock==='zero'?'selected':''}>Sin stock (0)</option>
+        </select>
+        <select id="f-sort" class="ing-filter" title="Ordenar">
+          <option value="newest" ${state.sort==='newest'?'selected':''}>Más nuevos</option>
+          <option value="oldest" ${state.sort==='oldest'?'selected':''}>Más viejos</option>
+          <option value="name" ${state.sort==='name'?'selected':''}>Nombre A-Z</option>
+        </select>
         <label class="flex items-center gap-2 text-sm font-bold cursor-pointer">
           <input id="f-meli" type="checkbox" ${f.onlyMeli?'checked':''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" /> Sólo MELI
         </label>
@@ -502,7 +525,9 @@ async function renderProducts(container, forceReload = false) {
   });
   container.querySelector('#f-meli').addEventListener('change', e => { state.filters.onlyMeli = e.target.checked; state.page = 0; renderProducts(container); });
   container.querySelector('#f-variant').addEventListener('input', e => { state.filters.variant = e.target.value; state.page = 0; scheduleFilterRender(container, 'f-variant'); });
-  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false, variant:'' }; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-stock').addEventListener('change', e => { state.filters.stock = e.target.value; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-sort').addEventListener('change', e => { state.sort = e.target.value; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false, variant:'', stock:'all' }; state.page = 0; renderProducts(container); });
 
   container.querySelector('#btn-new').addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-cols').addEventListener('click', () => openColumnsModal(cols, container));
@@ -1561,6 +1586,7 @@ async function bulkEditFields(container) {
   const cats = [...(state.cache?.categories || [])].sort(byName);
   const brs  = [...(state.cache?.brands || [])].sort(byName);
   const sups = [...(state.cache?.suppliers || [])].sort(byName);
+  const subs = [...(state.cache?.subcats || [])].sort(byName);
   const opts = (arr) => arr.map((x) => `<option value="${x.id}">${escapeAttr(x.name)}</option>`).join('');
   // Cada fila: checkbox "cambiar" + control (deshabilitado hasta tildar).
   const row = (key, label, controlHTML) => `
@@ -1574,12 +1600,20 @@ async function bulkEditFields(container) {
   const bodyHTML = `
     <p class="text-sm text-[#7d6c5c] mb-3">Tildá los campos que querés cambiar en los <b>${n}</b> productos seleccionados. Los que no tildes quedan como están.</p>
     ${row('category_id', 'Categoría', `<select data-f="category_id" class="ing-input w-full" disabled><option value="">— sin categoría —</option>${opts(cats)}</select>`)}
+    ${row('subcategory_id', 'Subcategoría', `<select data-f="subcategory_id" class="ing-input w-full" disabled><option value="">— sin subcategoría —</option>${opts(subs)}</select>`)}
     ${row('brand_id', 'Marca', `<select data-f="brand_id" class="ing-input w-full" disabled><option value="">— sin marca —</option>${opts(brs)}</select>`)}
     ${row('supplier_id', 'Proveedor', `<select data-f="supplier_id" class="ing-input w-full" disabled><option value="">— sin proveedor —</option>${opts(sups)}</select>`)}
     ${row('cost', 'Costo', `<input data-f="cost" type="text" inputmode="decimal" class="ing-input w-full" placeholder="Ej: 1500" disabled />`)}
     ${row('price', 'Precio', `<input data-f="price" type="text" inputmode="decimal" class="ing-input w-full" placeholder="Ej: 3000" disabled />`)}
     ${row('margin_pct', '% Margen', `<input data-f="margin_pct" type="text" inputmode="decimal" class="ing-input w-full" placeholder="Ej: 100 (recalcula el precio)" disabled />`)}
+    ${row('promotional_price', 'Precio promo', `<input data-f="promotional_price" type="text" inputmode="decimal" class="ing-input w-full" placeholder="Ej: 2500 (0 = sin promo)" disabled />`)}
     ${row('published_meli', 'Publicar en MELI', `<select data-f="published_meli" class="ing-input w-full" disabled><option value="1">Sí</option><option value="0">No</option></select>`)}
+    ${row('published_tn', 'Publicar en Tienda Nube', `<select data-f="published_tn" class="ing-input w-full" disabled><option value="1">Sí</option><option value="0">No</option></select>`)}
+    ${row('description', 'Descripción', `<textarea data-f="description" class="ing-input w-full" rows="2" placeholder="Texto para todos los seleccionados" disabled></textarea>`)}
+    ${row('weight', 'Peso (kg)', `<input data-f="weight" type="text" inputmode="decimal" class="ing-input w-full" placeholder="Ej: 0.5" disabled />`)}
+    ${row('width', 'Ancho (cm)', `<input data-f="width" type="text" inputmode="decimal" class="ing-input w-full" disabled />`)}
+    ${row('height', 'Alto (cm)', `<input data-f="height" type="text" inputmode="decimal" class="ing-input w-full" disabled />`)}
+    ${row('depth', 'Profundidad (cm)', `<input data-f="depth" type="text" inputmode="decimal" class="ing-input w-full" disabled />`)}
     <div id="be-progress" class="text-sm font-bold text-[#7d6c5c] mt-3 hidden"></div>`;
   const footerHTML = `
     <button class="ing-btn-secondary" data-act="cancel">Cancelar</button>
@@ -1613,9 +1647,17 @@ async function bulkEditFields(container) {
             const p = await P.byId(id);
             if (!p) { failed++; continue; }
             if ('category_id' in changes) p.category_id = changes.category_id || null;
+            if ('subcategory_id' in changes) p.subcategory_id = changes.subcategory_id || null;
             if ('brand_id' in changes) p.brand_id = changes.brand_id || null;
             if ('supplier_id' in changes) p.supplier_id = changes.supplier_id || null;
             if ('published_meli' in changes) p.published_meli = changes.published_meli === '1';
+            if ('published_tn' in changes) p.published_tn = changes.published_tn === '1';
+            if ('description' in changes) p.description = changes.description;
+            if ('promotional_price' in changes) { const v = parseNumAR(changes.promotional_price); p.promotional_price = (v != null && v > 0) ? v : null; }
+            if ('weight' in changes) { const v = parseNumAR(changes.weight); p.weight = v != null ? v : null; }
+            if ('width' in changes) { const v = parseNumAR(changes.width); p.width = v != null ? v : null; }
+            if ('height' in changes) { const v = parseNumAR(changes.height); p.height = v != null ? v : null; }
+            if ('depth' in changes) { const v = parseNumAR(changes.depth); p.depth = v != null ? v : null; }
             if ('cost' in changes) { const v = parseNumAR(changes.cost); if (v != null) p.cost = v; }
             // %Margen tiene prioridad: recalcula el precio desde el costo. Si no, precio directo.
             if ('margin_pct' in changes) {
