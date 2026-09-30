@@ -123,7 +123,7 @@ export async function mount(el) {
 
 function renderShell() {
   return `
-    <div class="w-full space-y-6">
+    <div class="max-w-5xl mx-auto space-y-6">
       <header class="flex items-center justify-between">
         <div>
           <h1 class="text-3xl font-black text-[#241a0d]">Conflictos de sincronizaci\u00f3n</h1>

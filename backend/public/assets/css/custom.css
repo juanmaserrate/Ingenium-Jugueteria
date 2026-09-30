@@ -178,6 +178,8 @@ html.dark .ing-table td { border-bottom-color: #2a2219; color: #f3ece3; }
 html.dark .ing-table tbody tr:hover { background: rgba(216,47,30,.08); }
 
 /* Sidebar / Topbar / Modales */
+html.dark #sidebar { background: #1a1714 !important; box-shadow: 40px 0 40px rgba(0,0,0,.3); }
+html.dark #topbar { background: rgba(18,16,14,.85) !important; border-bottom-color: #2a2219 !important; }
 html.dark .modal-content { background: #1e1a16; color: #f3ece3; }
 html.dark .modal-backdrop { background: rgba(0,0,0,.65); }
 html.dark .toast { background: #1e1a16; color: #f3ece3; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
@@ -190,7 +192,3 @@ html.dark ::-webkit-scrollbar-thumb:hover { background: #5c4a36; }
 /* Inputs nativos select/checkbox heredan contraste */
 html.dark select.ing-input option { background: #1e1a16; color: #f3ece3; }
 html.dark input[type="date"], html.dark input[type="month"], html.dark input[type="time"] { color-scheme: dark; }
-
-/* Oculta la barra de scroll horizontal del nav del header (se puede scrollear igual). */
-.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-.no-scrollbar::-webkit-scrollbar { display: none; }
