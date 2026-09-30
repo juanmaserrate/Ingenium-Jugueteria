@@ -399,3 +399,50 @@ export async function linkByBarcode(opts: { dryRun?: boolean } = {}): Promise<Li
   }
   return rep;
 }
+
+// Chequeo de códigos desalineados: para cada producto ENLAZADO a TN, compara el código
+// local (barcode/código de la variante o, si no tiene, el código del producto) contra el
+// código de barras que tiene esa variante en Tienda Nube. Lista las diferencias para
+// revisarlas/corregirlas. Solo lectura (baja el catálogo de TN por API). Puede tardar
+// un par de minutos si el catálogo es grande.
+export async function findCodeMismatches() {
+  const norm = (s: unknown) => String(s ?? '').trim();
+  const dump = await dumpTnCatalog();
+  const byVar = new Map<string, any>();
+  for (const r of dump.rows) byVar.set(String(r.tnVariantId), r);
+
+  const products = await prisma.product.findMany({
+    where: { active: true, variants: { some: { tnMapping: { isNot: null } } } },
+    include: { variants: { include: { tnMapping: true } } },
+  });
+
+  const items: any[] = [];
+  let comparados = 0;
+  for (const p of products) {
+    for (const v of p.variants) {
+      if (!v.tnMapping) continue;
+      const tnVariantId = String(v.tnMapping.tnVariantId);
+      const tn = byVar.get(tnVariantId);
+      // El código local "que vale" para escanear: barcode/código de la variante; si no
+      // tiene, el código del producto (caso más común en este sistema).
+      const localCode = norm(v.barcode || v.code || (v.isDefault ? p.code : ''));
+      const base = { productId: p.id, name: p.name, localCode, tnProductId: v.tnMapping.tnProductId, tnVariantId };
+      if (!tn) { items.push({ ...base, tnBarcode: null, reason: 'variante no existe en TN (posible mal vínculo)' }); continue; }
+      comparados++;
+      const tnBarcode = norm(tn.barcode);
+      const tnSku = norm(tn.sku);
+      if (!tnBarcode && !tnSku) continue; // TN sin barcode ni SKU → no hay con qué comparar
+      // Coincide si el código local matchea el barcode O el SKU de TN.
+      if (localCode && (localCode === tnBarcode || localCode === tnSku)) continue;
+      items.push({
+        ...base,
+        tnBarcode: tnBarcode || null,
+        tnSku: tnSku || null,
+        tnName: tn.name || null,
+        reason: !localCode ? 'producto local sin código' : 'código local distinto al de TN',
+      });
+    }
+  }
+  items.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  return { enlazados: products.length, comparados, desalineados: items.length, items };
+}

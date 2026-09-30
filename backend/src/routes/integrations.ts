@@ -15,7 +15,7 @@ import { requireRole } from '../auth/jwt.js';
 import { confirmSale } from '../services/sales.js';
 import { enqueueSync } from '../sync/queue.js';
 import { getTnClient } from '../tiendanube/client.js';
-import { linkByBarcode, dumpTnCatalog, linkManual, linkManualVariants, unlinkProduct } from '../tiendanube/link.js';
+import { linkByBarcode, dumpTnCatalog, linkManual, linkManualVariants, unlinkProduct, findCodeMismatches } from '../tiendanube/link.js';
 
 // Una orden de TN deja de necesitar asignación cuando ya está cancelada/cerrada o
 // enviada/entregada/retirada. Chequeamos el estado ACTUAL en TN (el payload guardado es
@@ -102,6 +102,12 @@ export async function integrationsRoutes(app: FastifyInstance) {
     // Vuelca el catálogo de TN (API, barcodes completos) para cruzar offline.
     r.get('/integrations/tiendanube/catalog-dump', async () => {
       return dumpTnCatalog();
+    });
+
+    // Chequeo de códigos desalineados local ↔ Tienda Nube (para detectar casos como
+    // "El erudito"/"Puzzle noche estrellada"). Solo admin; puede tardar un par de minutos.
+    r.get('/integrations/tiendanube/code-mismatch', adminOnly, async () => {
+      return findCodeMismatches();
     });
 
     // Productos creados en TN desde `since` (YYYY-MM-DD, hora Argentina) que NO
