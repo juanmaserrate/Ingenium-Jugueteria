@@ -17,6 +17,22 @@ import { enqueueSync } from '../sync/queue.js';
 import { getTnClient } from '../tiendanube/client.js';
 import { linkByBarcode, dumpTnCatalog, linkManual, linkManualVariants, unlinkProduct } from '../tiendanube/link.js';
 
+// Una orden de TN deja de necesitar asignación cuando ya está cancelada/cerrada o
+// enviada/entregada/retirada. Chequeamos el estado ACTUAL en TN (el payload guardado es
+// del momento del pago y queda viejo). Cacheamos el resultado en memoria un rato para no
+// pegarle a TN en cada auto-refresh (la pantalla refresca cada 30s).
+const TN_SHIPPED_STATES = new Set(['shipped', 'fulfilled', 'delivered']);
+const tnDoneCache = new Map<string, { checkedAt: number; done: boolean }>();
+const TN_DONE_TTL_MS = 5 * 60 * 1000;
+
+function tnOrderIsDone(order: any): boolean {
+  const status = String(order?.status ?? '');
+  if (status === 'cancelled' || status === 'closed') return true;
+  if (TN_SHIPPED_STATES.has(String(order?.shipping_status ?? ''))) return true;
+  if (order?.shipped_at) return true;
+  return false;
+}
+
 export async function integrationsRoutes(app: FastifyInstance) {
   // Status p\u00fablico (sin auth) para el ping del frontend
   app.get('/integrations/status', async () => {
@@ -319,10 +335,43 @@ export async function integrationsRoutes(app: FastifyInstance) {
     // --- TN Orders Pending ---
     r.get('/tn-orders', async (req) => {
       const q = req.query as { status?: string };
-      return prisma.tnOrderPending.findMany({
-        where: { status: q.status ?? 'pending' },
+      const status = q.status ?? 'pending';
+      const orders = await prisma.tnOrderPending.findMany({
+        where: { status },
         orderBy: { receivedAt: 'desc' },
+        take: 500,
       });
+      // Solo la vista de PENDIENTES se depura contra TN: si una orden ya está
+      // enviada/retirada/cerrada/cancelada en TN, deja de necesitar asignación → la
+      // ocultamos y la marcamos resuelta (fulfilled/cancelled) para que no reaparezca.
+      if (status !== 'pending') return orders;
+      const tn = await getTnClient();
+      if (!tn) return orders; // sin TN no podemos verificar → mostramos lo que hay
+      const visible: typeof orders = [];
+      for (const o of orders) {
+        try {
+          const cached = tnDoneCache.get(o.tnOrderId);
+          let done: boolean;
+          let curStatus = '';
+          if (cached && Date.now() - cached.checkedAt < TN_DONE_TTL_MS) {
+            done = cached.done;
+          } else {
+            const cur = await tn.getOrder(o.tnOrderId);
+            done = tnOrderIsDone(cur);
+            curStatus = String(cur?.status ?? '');
+            tnDoneCache.set(o.tnOrderId, { checkedAt: Date.now(), done });
+          }
+          if (done) {
+            const newStatus = curStatus === 'cancelled' ? 'cancelled' : 'fulfilled';
+            await prisma.tnOrderPending.update({ where: { id: o.id }, data: { status: newStatus } }).catch(() => {});
+          } else {
+            visible.push(o);
+          }
+        } catch {
+          visible.push(o); // si falla la consulta a TN, no la ocultamos
+        }
+      }
+      return visible;
     });
 
     r.post('/tn-orders/:id/assign', async (req) => {
