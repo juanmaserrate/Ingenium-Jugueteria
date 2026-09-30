@@ -28,8 +28,8 @@ const DEFAULT_ADMIN = {
 // Usuarios que matchean con el seed local del frontend (IndexedDB).
 // Permiten que el login por PIN obtenga un JWT válido del backend.
 const FRONTEND_USERS = [
-  { id: 'u_lomas',    branchId: 'br_lomas',    name: 'Lomas',    lastname: '', role: 'admin', pin: '1111' },
-  { id: 'u_banfield', branchId: 'br_banfield', name: 'Banfield', lastname: '', role: 'admin', pin: '2222' },
+  { id: 'u_lomas',    branchId: 'br_lomas',    name: 'Lomas',    lastname: '', role: 'manager', pin: '1111' },
+  { id: 'u_banfield', branchId: 'br_banfield', name: 'Banfield', lastname: '', role: 'manager', pin: '2222' },
 ];
 
 function hashPin(pin: string) {

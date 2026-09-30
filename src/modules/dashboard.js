@@ -11,7 +11,59 @@ const charts = new Map();       // canvasId -> Chart instance
 let refreshTimer = null;
 const state = { branch: activeBranchId() || '', branches: [] };
 
+// Contraseña del Panel para los usuarios NO admin (por sucursal). El admin entra
+// directo. Es un candado simple del lado del cliente para que los operadores no
+// vean el Panel sin la clave; se desbloquea una vez por sesión del navegador.
+const PANEL_PASSWORDS = { br_lomas: 'genio', br_banfield: 'genio', _default: 'genio' };
+
+async function ensurePanelAccess() {
+  const session = currentSession();
+  if (session?.role === 'admin') return true;
+  try { if (sessionStorage.getItem('panel_unlocked') === '1') return true; } catch {}
+  const branchId = activeBranchId() || '';
+  const expected = PANEL_PASSWORDS[branchId] || PANEL_PASSWORDS._default;
+  const { openModal } = await import('../components/modal.js');
+  const ok = await new Promise((resolve) => {
+    openModal({
+      title: 'Panel protegido',
+      size: 'sm',
+      closeOnBackdrop: false,
+      bodyHTML: `
+        <p class="text-[#241a0d] text-base mb-4">Ingresá la contraseña para ver el Panel.</p>
+        <input id="panel-pass" type="password" class="ing-input w-full" placeholder="Contraseña" autocomplete="off" />
+        <p id="panel-pass-err" class="text-red-600 text-sm mt-2 hidden">Contraseña incorrecta</p>
+      `,
+      footerHTML: `
+        <button class="ing-btn-secondary" data-act="cancel">Cancelar</button>
+        <button class="ing-btn-primary" data-act="ok">Entrar</button>
+      `,
+      onOpen: (root, close) => {
+        const input = root.querySelector('#panel-pass');
+        const err = root.querySelector('#panel-pass-err');
+        const submit = () => {
+          if ((input.value || '') === expected) close(true);
+          else { err.classList.remove('hidden'); input.value = ''; input.focus(); }
+        };
+        root.querySelector('[data-act="ok"]').addEventListener('click', submit);
+        root.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+        setTimeout(() => input.focus(), 60);
+      },
+    }).then((v) => resolve(v === true));
+  });
+  if (ok) {
+    try { sessionStorage.setItem('panel_unlocked', '1'); } catch {}
+    return true;
+  }
+  // Cancelado o incorrecto → lo sacamos del Panel y lo mandamos al POS.
+  const { navigate } = await import('../core/router.js');
+  navigate('/pos');
+  return false;
+}
+
 export async function mount(el) {
+  // Candado del Panel: los usuarios no-admin necesitan contraseña.
+  if (!(await ensurePanelAccess())) return () => {};
   state.branch = activeBranchId() || '';
   try { state.branches = await api('/auth/branches'); } catch { state.branches = []; }
   renderShell(el);

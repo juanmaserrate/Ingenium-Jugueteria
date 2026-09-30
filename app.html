@@ -122,7 +122,8 @@
     await mountTopbar(document.getElementById('topbar'));
 
     setRouterContainer(document.getElementById('router-outlet'));
-    startRouter('/dashboard');
+    // Al iniciar sesión se abre siempre en el POS (no en el Panel).
+    startRouter('/pos');
 
     // Welcome toast
     toast(`Hola ${session.user_name} · ${session.branch_name}`, 'success');

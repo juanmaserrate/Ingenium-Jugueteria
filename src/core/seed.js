@@ -36,11 +36,13 @@ export async function runSeed({ force = false } = {}) {
   await put('branches', banfield);
 
   // --- Usuarios iniciales ---
-  // Uno por sucursal, ambos admin para que puedan configurar todo desde Settings.
+  // Uno por sucursal, operadores (rol manager = encargado): tienen casi todas las
+  // funciones salvo el alternador de sucursal y la gestión de usuarios, y el Panel
+  // les pide contraseña. El único admin es el usuario 'admin'.
   // PINs temporales — cambiarlos desde Configuración → Usuarios al primer uso real.
   const users = [
-    { id: 'u_lomas',    name: 'Lomas',    lastname: '', branch_id: lomas.id,    role: 'admin', pin: '1111' },
-    { id: 'u_banfield', name: 'Banfield', lastname: '', branch_id: banfield.id, role: 'admin', pin: '2222' },
+    { id: 'u_lomas',    name: 'Lomas',    lastname: '', branch_id: lomas.id,    role: 'manager', pin: '1111' },
+    { id: 'u_banfield', name: 'Banfield', lastname: '', branch_id: banfield.id, role: 'manager', pin: '2222' },
   ];
   for (const u of users) await put('users', u);
 

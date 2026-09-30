@@ -122,6 +122,7 @@ async function loginLocal(branchId, userId, pin) {
 export function logout(reason = 'manual') {
   localStorage.removeItem(SESSION_KEY);
   localStorage.removeItem(LAST_ACTIVITY_KEY);
+  try { sessionStorage.removeItem('panel_unlocked'); } catch {}
   setToken(null);
   if (reason === 'idle') {
     location.href = './index.html?expired=1';
