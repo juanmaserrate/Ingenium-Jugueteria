@@ -22,17 +22,15 @@
 </head>
 <body class="bg-background text-secondary min-h-screen">
 
-  <!-- Header superior: navegación (izq) + controles (der). Full width para dejar todo
-       el ancho de la pantalla a los módulos. -->
-  <header class="sticky top-0 z-40 w-full bg-white/80 dark:bg-[#1a1410]/80 backdrop-blur-xl border-b border-[#fff1e6] dark:border-[#2a2018]">
-    <div class="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 lg:px-5 py-2">
-      <div id="sidebar" class="flex items-center gap-1 min-w-0 flex-1"></div>
-      <div id="topbar" class="flex items-center shrink-0 ml-auto"></div>
-    </div>
+  <!-- Header de dos filas, full width. Fila 1 (marca + usuario): gradiente rojo.
+       Fila 2 (categorías + Nueva venta): rojo más oscuro. Deja todo el ancho libre. -->
+  <header class="sticky top-0 z-40 w-full shadow-lg">
+    <div id="topbar" class="w-full flex items-center justify-between gap-3 px-4 lg:px-6 py-2.5 text-white bg-gradient-to-r from-[#e0402e] via-[#d82f1e] to-[#a50e04]"></div>
+    <div id="sidebar" class="w-full flex items-center justify-between gap-3 px-4 lg:px-6 py-1.5 text-white bg-[#a50e04] border-t border-white/10"></div>
   </header>
 
   <!-- Main a todo el ancho -->
-  <main class="min-h-[calc(100vh-3.5rem)]">
+  <main class="min-h-[calc(100vh-6.5rem)]">
     <div id="router-outlet" class="p-4 lg:p-6"></div>
   </main>
 

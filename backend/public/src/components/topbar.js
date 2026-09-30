@@ -69,50 +69,45 @@ export async function mountTopbar(el) {
     // sucursal fija (la ven junto a su nombre, abajo a la derecha).
     const isAdmin = session?.role === 'admin';
 
+    const uname = session?.user_name || 'Usuario';
+    const initials = uname.split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('').toUpperCase() || 'U';
+    const iconBtn = 'w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition-colors';
     el.innerHTML = `
-      <div class="flex items-center gap-3 lg:gap-4">
+      <!-- Marca -->
+      <a href="#/dashboard" class="flex items-center gap-3 shrink-0 min-w-0">
+        <div class="w-9 h-9 rounded-xl bg-white/15 flex items-center justify-center font-black text-lg tracking-tight shrink-0">I</div>
+        <div class="leading-tight min-w-0">
+          <div class="font-black text-base sm:text-lg tracking-tight truncate">Ingenium</div>
+          <div class="text-[9px] sm:text-[10px] font-bold uppercase tracking-[0.18em] text-white/70 truncate">Sistema de Ventas</div>
+        </div>
+      </a>
+      <!-- Controles -->
+      <div class="flex items-center gap-2 shrink-0">
         ${isAdmin ? `
-        <div class="flex gap-2 items-center">
+        <div class="hidden sm:flex gap-1 items-center bg-white/10 rounded-full p-0.5">
           ${branches.map(b => `
-            <button data-branch="${b.id}" class="tb-branch px-4 py-1.5 rounded-full text-xs font-bold transition-all ${b.id === activeId ? 'bg-[#d82f1e] text-white shadow' : 'text-[#7d6c5c] hover:bg-[#fff1e6]'}">${b.name}</button>
+            <button data-branch="${b.id}" class="tb-branch px-3 py-1 rounded-full text-xs font-bold transition-all ${b.id === activeId ? 'bg-white text-[#b41005] shadow' : 'text-white/80 hover:bg-white/10'}">${b.name}</button>
           `).join('')}
         </div>` : ''}
-        <div class="flex items-center gap-2 px-4 py-1.5 bg-[#fff1e6] rounded-full border border-[#e3ceba]">
-          <span class="material-symbols-outlined text-[#d82f1e] text-lg">admin_panel_settings</span>
-          <span class="text-xs font-bold text-[#b41005]">${ROLE_LABELS[session?.role] || (session?.role || '').toUpperCase()}</span>
-        </div>
-        <a href="#/cash" title="${cashOpen ? 'Caja abierta' : 'Caja cerrada — abrir en Caja'}" class="flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-bold transition-all ${cashOpen ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100'}">
-          <span class="material-symbols-outlined text-base">${cashOpen ? 'lock_open' : 'lock'}</span>
+        <a href="#/cash" title="${cashOpen ? 'Caja abierta' : 'Caja cerrada — abrir en Caja'}" class="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/12 hover:bg-white/20 text-xs font-bold transition-colors">
+          <span class="w-2 h-2 rounded-full ${cashOpen ? 'bg-green-300' : 'bg-red-300'}"></span>
           ${cashOpen ? 'Caja abierta' : 'Caja cerrada'}
         </a>
-        <div class="flex items-center gap-2">
-          <button id="tb-refresh" title="${_hasUpdates ? 'Hay datos nuevos en el servidor — tocá para actualizar' : 'Actualizar: traer los últimos cambios del servidor'}" class="relative p-2.5 ${_hasUpdates ? 'text-[#d82f1e]' : 'text-[#7d6c5c]'} hover:bg-[#fff1e6] rounded-full transition-all">
-            <span class="material-symbols-outlined">refresh</span>
-            ${_hasUpdates ? `<span class="absolute top-1 right-1 bg-[#d82f1e] w-2.5 h-2.5 rounded-full ring-2 ring-white"></span>` : ''}
-          </button>
-          <button id="tb-theme" title="Modo oscuro / claro" class="p-2.5 text-[#7d6c5c] hover:bg-[#fff1e6] rounded-full transition-all">
-            <span class="material-symbols-outlined">${document.documentElement.classList.contains('dark') ? 'light_mode' : 'dark_mode'}</span>
-          </button>
-          <button id="tb-bell" class="relative p-2.5 text-[#7d6c5c] hover:bg-[#fff1e6] rounded-full transition-all">
-            <span class="material-symbols-outlined">notifications</span>
-            ${unread > 0 ? `<span class="absolute top-1 right-1 bg-[#d82f1e] text-white text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center">${unread > 9 ? '9+' : unread}</span>` : ''}
-          </button>
-          <button class="p-2.5 text-[#7d6c5c] hover:bg-[#fff1e6] rounded-full transition-all" onclick="location.hash='/settings'">
-            <span class="material-symbols-outlined">settings</span>
-          </button>
-          <div class="flex items-center gap-2 pl-2 border-l border-[#e3ceba]">
-            <div class="text-right hidden sm:block">
-              <div class="text-xs font-bold text-[#241a0d] dark:text-[#fff1e6] leading-tight">${session?.user_name || ''}</div>
-              <div class="text-[10px] text-[#7d6c5c]">${currentBranch?.name || ''}</div>
-            </div>
-            <div class="w-9 h-9 rounded-full border-2 border-[#d82f1e]/20 p-0.5 bg-[#fff1e6] flex items-center justify-center">
-              <span class="material-symbols-outlined text-[#d82f1e]">person</span>
-            </div>
-            <button id="tb-logout" title="Cerrar sesión" class="p-2.5 text-[#7d6c5c] hover:bg-red-50 hover:text-red-600 rounded-full transition-all">
-              <span class="material-symbols-outlined">logout</span>
-            </button>
-          </div>
-        </div>
+        <button id="tb-refresh" title="${_hasUpdates ? 'Hay datos nuevos — tocá para actualizar' : 'Actualizar desde el servidor'}" class="relative ${iconBtn}">
+          <span class="material-symbols-outlined text-[20px]">refresh</span>
+          ${_hasUpdates ? `<span class="absolute top-0.5 right-0.5 bg-yellow-300 w-2.5 h-2.5 rounded-full ring-2 ring-[#d82f1e]"></span>` : ''}
+        </button>
+        <button id="tb-theme" title="Modo oscuro / claro" class="${iconBtn}">
+          <span class="material-symbols-outlined text-[20px]">${document.documentElement.classList.contains('dark') ? 'light_mode' : 'dark_mode'}</span>
+        </button>
+        <button id="tb-bell" class="relative ${iconBtn}">
+          <span class="material-symbols-outlined text-[20px]">notifications</span>
+          ${unread > 0 ? `<span class="absolute top-0.5 right-0.5 bg-yellow-300 text-[#b41005] text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center ring-2 ring-[#d82f1e]">${unread > 9 ? '9+' : unread}</span>` : ''}
+        </button>
+        <button id="tb-logout" title="Cerrar sesión" class="${iconBtn}">
+          <span class="material-symbols-outlined text-[20px]">logout</span>
+        </button>
+        <div class="w-9 h-9 rounded-full bg-white/20 border border-white/25 flex items-center justify-center font-black text-sm shrink-0" title="${esc(uname)}${currentBranch ? ' · ' + esc(currentBranch.name) : ''} · ${esc(ROLE_LABELS[session?.role] || session?.role || '')}">${esc(initials)}</div>
       </div>
     `;
 

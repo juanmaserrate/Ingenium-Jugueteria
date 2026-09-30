@@ -52,14 +52,13 @@ function groupHTML(group, currentPath) {
   }).join('');
   return `
     <div class="nav-group relative">
-      <button data-navtoggle class="flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-bold whitespace-nowrap transition-colors ${activeInGroup
-        ? 'bg-[#fff1e6] dark:bg-[#2a2018] text-[#d82f1e]'
-        : 'text-[#241a0d] dark:text-[#fff1e6] hover:bg-[#fff1e6] dark:hover:bg-[#2a2018]'}">
-        <span class="material-symbols-outlined text-[20px]">${group.icon}</span>
-        <span class="hidden md:inline">${group.section}</span>
-        <span class="material-symbols-outlined text-[18px]">expand_more</span>
+      <button data-navtoggle class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-bold whitespace-nowrap transition-colors ${activeInGroup
+        ? 'bg-white/20 text-white'
+        : 'text-white/85 hover:bg-white/10 hover:text-white'}">
+        <span>${group.section}</span>
+        <span class="material-symbols-outlined text-[18px] opacity-80">expand_more</span>
       </button>
-      <div data-navmenu class="hidden absolute left-0 mt-1 min-w-[210px] bg-white dark:bg-[#1a1410] border border-[#e3ceba] dark:border-[#2a2018] rounded-2xl shadow-xl p-1.5 z-50 space-y-0.5">
+      <div data-navmenu class="hidden absolute left-0 mt-1.5 min-w-[220px] bg-white dark:bg-[#1a1410] border border-[#e3ceba] dark:border-[#2a2018] rounded-2xl shadow-2xl p-1.5 z-50 space-y-0.5">
         ${items}
       </div>
     </div>`;
@@ -69,15 +68,12 @@ export function mountSidebar(el, { onLogout }) {
   const render = () => {
     const path = location.hash.slice(1) || '/dashboard';
     el.innerHTML = `
-      <a href="#/dashboard" class="flex items-center shrink-0 pr-2">
-        <span class="text-xl font-black tracking-tighter text-[#d82f1e]">Ingenium</span>
-      </a>
-      <nav class="flex flex-wrap items-center gap-1">
+      <nav class="flex flex-wrap items-center gap-0.5 min-w-0">
         ${GROUPS.map(g => groupHTML(g, path)).join('')}
       </nav>
-      <button id="btn-new-sale" class="ml-1 shrink-0 bg-[#d82f1e] text-white font-bold px-3.5 py-2 rounded-full shadow-md flex items-center gap-1.5 hover:brightness-110 active:scale-95 transition-all text-sm">
+      <button id="btn-new-sale" class="shrink-0 bg-white text-[#d82f1e] font-bold px-4 py-1.5 rounded-full shadow flex items-center gap-1.5 hover:bg-[#fff1e6] active:scale-95 transition-all text-sm">
         <span class="material-symbols-outlined text-[18px]">add_circle</span>
-        <span class="hidden lg:inline">Nueva venta</span>
+        <span>Nueva venta</span>
       </button>`;
 
     // Desplegables: abrir/cerrar; solo uno abierto a la vez.
