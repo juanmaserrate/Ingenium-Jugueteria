@@ -466,3 +466,42 @@ export async function findCodeMismatches() {
     sin_vinculo_tn: noVinculo,
   };
 }
+
+// Pisa el barcode de la variante en Tienda Nube con el código local del sistema.
+// Útil cuando el código local es el correcto (p. ej. EAN-13 válido) y el de TN quedó
+// corrupto por la importación del Excel. Solo toca el barcode; no modifica stock/precio/fotos.
+export async function alignTnBarcode(productId: string) {
+  const product = await prisma.product.findUnique({
+    where: { id: productId },
+    include: { variants: { include: { tnMapping: true } } },
+  });
+  if (!product) throw new ValidationError('Producto no encontrado');
+  const results: Array<{ variantId: string; tnVariantId: string; from: string; to: string; ok: boolean; error?: string }> = [];
+  const tn = await requireTnClient();
+  for (const v of product.variants) {
+    if (!v.tnMapping) continue;
+    const localCode = String(v.barcode || v.code || (v.isDefault ? product.code : '') || '').trim();
+    if (!localCode) continue;
+    const tnProductId = String(v.tnMapping.tnProductId);
+    const tnVariantId = String(v.tnMapping.tnVariantId);
+    let before = '';
+    try {
+      try {
+        const cur = await tn.getProduct(tnProductId);
+        const cv = (cur?.variants || []).find((x: any) => String(x.id) === tnVariantId);
+        before = String(cv?.barcode ?? '');
+      } catch { /* si no se puede leer el actual, seguimos igual */ }
+      if (before === localCode) {
+        results.push({ variantId: v.id, tnVariantId, from: before, to: localCode, ok: true });
+        continue;
+      }
+      await tn.updateVariant(tnProductId, tnVariantId, { barcode: localCode });
+      results.push({ variantId: v.id, tnVariantId, from: before, to: localCode, ok: true });
+    } catch (e: any) {
+      results.push({ variantId: v.id, tnVariantId, from: before, to: localCode, ok: false, error: e?.response?.data ? JSON.stringify(e.response.data) : String(e?.message || e) });
+    }
+  }
+  const changed = results.filter((r) => r.ok && r.from !== r.to).length;
+  const failed = results.filter((r) => !r.ok).length;
+  return { productId, name: product.name, changed, failed, results };
+}
