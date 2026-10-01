@@ -216,9 +216,11 @@ export async function getBalance(params: { branchId?: string; from: string; to: 
   // Las SEÑAS usadas como pago NO computan en lo facturado (la plata ya entró al
   // crear la seña). Se descuenta del total facturado el monto pagado con seña.
   const senaPaid = payments.filter((p) => p.methodId === 'sena').reduce((s, p) => s + (p._sum.amount ?? 0), 0);
-  const facturado = (agg._sum.total ?? 0) - senaPaid;
+  // difference = returnedTotal - takenTotal. Positivo = plata reintegrada al cliente (devuelto);
+  // negativo = el cliente pagó la diferencia de un canje (entra como facturado adicional).
+  const cobradoEnCambios = returns.reduce((s, r) => s + Math.max(0, -(r.difference || 0)), 0);
+  const facturado = (agg._sum.total ?? 0) - senaPaid + cobradoEnCambios;
   const count = agg._count ?? 0;
-  // difference = returnedTotal - takenTotal; positivo = plata reintegrada al cliente.
   const devuelto = returns.reduce((s, r) => s + Math.max(0, r.difference || 0), 0);
   return {
     facturado, devuelto, neto: facturado - devuelto, count,

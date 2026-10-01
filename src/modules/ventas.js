@@ -145,8 +145,18 @@ function filtered() {
 
 function render(el) {
   const list = filtered();
-  const facturado = list.filter(e => e.kind === 'sale').reduce((s, e) => s + e.amount, 0);
-  const devuelto = list.filter(e => e.kind === 'return').reduce((s, e) => s + e.returnedTotal, 0);
+  // Ventas: suman al facturado. Devoluciones/cambios: impacta la DIFERENCIA neta, no lo
+  // devuelto bruto. inv = llevado − devuelto (+ el cliente pagó → entra a facturado;
+  // − se le devolvió al cliente → suma a devuelto). Así un canje donde el cliente paga la
+  // diferencia se refleja como ingreso y el neto cierra bien (antes ignoraba lo llevado).
+  let facturado = list.filter(e => e.kind === 'sale').reduce((s, e) => s + e.amount, 0);
+  let devuelto = 0;
+  for (const e of list) {
+    if (e.kind !== 'return') continue;
+    const inv = (e.takenTotal || 0) - (e.returnedTotal || 0);
+    if (inv >= 0) facturado += inv;      // el cliente pagó la diferencia
+    else devuelto += -inv;               // se le devolvió plata al cliente
+  }
   const neto = facturado - devuelto;
   const nVentas = list.filter(e => e.kind === 'sale').length;
   const nDev = list.filter(e => e.kind === 'return').length;
