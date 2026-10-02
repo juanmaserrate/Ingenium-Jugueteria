@@ -114,6 +114,20 @@ export async function integrationsRoutes(app: FastifyInstance) {
       const body = z.object({ productId: z.string() }).parse(req.body);
       return alignTnBarcode(body.productId);
     });
+    // Diagnóstico: fulfillment-orders de una orden TN (para verificar el modelo de armado/envío).
+    r.get('/integrations/tiendanube/order/:id/fulfillment-orders', adminOnly, async (req) => {
+      const { id } = req.params as { id: string };
+      const tn = await getTnClient();
+      if (!tn) return { error: 'TN no conectada' };
+      const fos = await tn.listFulfillmentOrders(id).catch((e: any) => ({ error: e?.response?.status || String(e?.message || e), data: e?.response?.data }));
+      return { tnOrderId: id, fulfillmentOrders: fos };
+    });
+    // Marca manualmente una orden TN como EMPAQUETADA (no enviada). Para operación/pruebas.
+    r.post('/integrations/tiendanube/order/:id/pack', adminOnly, async (req) => {
+      const { id } = req.params as { id: string };
+      const { packTnOrder } = await import('../tiendanube/sync.js');
+      return packTnOrder(id);
+    });
 
     // Productos creados en TN desde `since` (YYYY-MM-DD, hora Argentina) que NO
     // están enlazados a un producto del sistema. Solo lectura (para revisar antes

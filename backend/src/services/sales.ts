@@ -266,9 +266,9 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
     await enqueueSync('push_stock', { variantId: vid });
   }
 
-  // If this sale comes from TN → fulfill the order
+  // Si la venta viene de TN → marcar la orden como EMPAQUETADA (armada), no enviada.
   if (input.tnOrderId) {
-    await enqueueSync('fulfill_tn_order', { tnOrderId: input.tnOrderId, saleId: sale });
+    await enqueueSync('pack_tn_order', { tnOrderId: input.tnOrderId, saleId: sale });
   }
 
   return getSale(sale);

@@ -90,6 +90,16 @@ export class TnClient {
       .post(`/orders/${tnOrderId}/fulfill`, { notify_customer: false })
       .then((r) => r.data);
   }
+  // --- Fulfillment Orders (modelo nuevo de armado/envío de TN) ---
+  // Lista las fulfillment-orders de una orden (cada una con su id ULID y status
+  // UNPACKED/IN_PREPARATION/PACKED/DISPATCHED/READY_FOR_PICKUP/DELIVERED).
+  listFulfillmentOrders(tnOrderId: string | number) {
+    return this.http.get(`/orders/${tnOrderId}/fulfillment-orders`).then((r) => r.data);
+  }
+  // Cambia el status de una fulfillment-order (ej: 'PACKED' = empaquetada/armada).
+  updateFulfillmentOrder(tnOrderId: string | number, fulfillmentOrderId: string, data: any) {
+    return this.http.patch(`/orders/${tnOrderId}/fulfillment-orders/${fulfillmentOrderId}`, data).then((r) => r.data);
+  }
   closeOrder(tnOrderId: string | number) {
     return this.http.post(`/orders/${tnOrderId}/close`).then((r) => r.data);
   }

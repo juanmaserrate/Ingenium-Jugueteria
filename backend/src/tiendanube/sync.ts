@@ -221,12 +221,44 @@ export const syncHandlers = {
     return { ok: true };
   },
 
+  // Al facturar una venta web la marcamos como EMPAQUETADA (armada), NO enviada.
+  // Usamos el modelo nuevo de TN (fulfillment-orders): PATCH status = 'PACKED'.
+  // Si la orden/tienda no tiene fulfillment-orders, NO la marcamos enviada (que es lo
+  // que queremos evitar): la dejamos como está.
+  async pack_tn_order(payload: { tnOrderId: string; saleId: string }) {
+    return packTnOrder(payload.tnOrderId);
+  },
+  // Alias para compatibilidad con jobs ya encolados antes del cambio: también empaqueta
+  // (ya NO envía).
   async fulfill_tn_order(payload: { tnOrderId: string; saleId: string }) {
-    const tn = await getTnClient();
-    if (!tn) throw new Error('TN not connected');
-    await tn.fulfillOrder(payload.tnOrderId);
-    return { ok: true };
+    return packTnOrder(payload.tnOrderId);
   },
 };
+
+// Empaqueta (marca como armada) una orden de TN sin marcarla como enviada.
+export async function packTnOrder(tnOrderId: string) {
+  const tn = await getTnClient();
+  if (!tn) throw new Error('TN not connected');
+  const fos = await tn.listFulfillmentOrders(tnOrderId);
+  const list: any[] = Array.isArray(fos) ? fos : (fos ? [fos] : []);
+  if (!list.length) {
+    // Orden sin fulfillment-orders (modelo viejo): no la marcamos enviada a propósito.
+    return { ok: true, fulfillmentOrders: 0, packed: 0, note: 'sin fulfillment-orders; no se marca nada' };
+  }
+  let packed = 0;
+  const detail: Array<{ id: string; from: string; to?: string; skipped?: boolean }> = [];
+  for (const fo of list) {
+    const st = String(fo?.status ?? '').toUpperCase();
+    // Solo empaquetar las que todavía no avanzaron (no retroceder una ya despachada/entregada).
+    if (st === 'UNPACKED' || st === 'IN_PREPARATION' || st === '') {
+      await tn.updateFulfillmentOrder(tnOrderId, String(fo.id), { status: 'PACKED' });
+      packed++;
+      detail.push({ id: String(fo.id), from: st || 'UNPACKED', to: 'PACKED' });
+    } else {
+      detail.push({ id: String(fo.id), from: st, skipped: true });
+    }
+  }
+  return { ok: true, fulfillmentOrders: list.length, packed, detail };
+}
 
 export type SyncOperation = keyof typeof syncHandlers;
