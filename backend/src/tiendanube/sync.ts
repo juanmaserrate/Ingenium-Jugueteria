@@ -221,6 +221,23 @@ export const syncHandlers = {
     return { ok: true };
   },
 
+  // Pisa SOLO el barcode de la variante en TN con el código del sistema (sin tocar
+  // precio/stock/promo). Se usa para alinear masivamente los enlazados cuyo barcode en TN
+  // no coincide con el código local. Valida que el código local sea un barcode real.
+  async push_barcode(payload: { variantId: string }) {
+    const tn = await getTnClient();
+    if (!tn) throw new Error('TN not connected');
+    const variant = await prisma.variant.findUnique({
+      where: { id: payload.variantId },
+      include: { product: true, tnMapping: true },
+    });
+    if (!variant || !variant.tnMapping) return { skipped: 'no mapping' };
+    const local = String(variant.barcode || variant.code || (variant.isDefault ? variant.product.code : '') || '').trim();
+    if (!/^\d{8,14}$/.test(local)) return { skipped: 'local no es barcode válido', local };
+    await tn.updateVariant(variant.tnMapping.tnProductId, variant.tnMapping.tnVariantId, { barcode: local });
+    return { ok: true, to: local };
+  },
+
   // Al facturar una venta web la marcamos como EMPAQUETADA (armada), NO enviada.
   // Usamos el modelo nuevo de TN (fulfillment-orders): PATCH status = 'PACKED'.
   // Si la orden/tienda no tiene fulfillment-orders, NO la marcamos enviada (que es lo

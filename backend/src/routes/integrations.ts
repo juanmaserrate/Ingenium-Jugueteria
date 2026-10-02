@@ -15,7 +15,7 @@ import { requireRole } from '../auth/jwt.js';
 import { confirmSale } from '../services/sales.js';
 import { enqueueSync } from '../sync/queue.js';
 import { getTnClient } from '../tiendanube/client.js';
-import { linkByBarcode, dumpTnCatalog, linkManual, linkManualVariants, unlinkProduct, findCodeMismatches, alignTnBarcode } from '../tiendanube/link.js';
+import { linkByBarcode, dumpTnCatalog, linkManual, linkManualVariants, unlinkProduct, findCodeMismatches, alignTnBarcode, enqueueAlignAllBarcodes } from '../tiendanube/link.js';
 
 // Una orden de TN deja de necesitar asignación cuando ya está cancelada/cerrada o
 // enviada/entregada/retirada. Chequeamos el estado ACTUAL en TN (el payload guardado es
@@ -113,6 +113,12 @@ export async function integrationsRoutes(app: FastifyInstance) {
     r.post('/integrations/tiendanube/align-barcode', adminOnly, async (req) => {
       const body = z.object({ productId: z.string() }).parse(req.body);
       return alignTnBarcode(body.productId);
+    });
+    // Alineación MASIVA: pisa el barcode de TN con el código del sistema en todos los
+    // enlazados que no coinciden. dryRun=true solo cuenta (no toca nada).
+    r.post('/integrations/tiendanube/align-all-barcodes', adminOnly, async (req) => {
+      const body = z.object({ dryRun: z.boolean().optional() }).parse(req.body ?? {});
+      return enqueueAlignAllBarcodes({ dryRun: body.dryRun });
     });
     // Diagnóstico: lee un producto en TN (precio y promo por variante) para verificar sync.
     r.get('/integrations/tiendanube/product/:tnId/raw', adminOnly, async (req) => {

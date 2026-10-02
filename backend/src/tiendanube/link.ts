@@ -505,3 +505,51 @@ export async function alignTnBarcode(productId: string) {
   const failed = results.filter((r) => !r.ok).length;
   return { productId, name: product.name, changed, failed, results };
 }
+
+// Alinea MASIVAMENTE el barcode en TN al código del sistema, para todos los enlazados
+// cuyo barcode en TN no coincide. Solo considera códigos locales que sean barcodes reales
+// (8-14 dígitos): los que tienen código interno/placeholder (ej "SP-B") se omiten y se
+// reportan para revisar a mano, así no corrompemos TN. Encola un job liviano push_barcode
+// por variante (el worker los procesa con su backoff de rate-limit). dryRun = solo cuenta.
+export async function enqueueAlignAllBarcodes(opts: { dryRun?: boolean } = {}) {
+  const stripLead = (s: string) => s.replace(/^0+/, '') || '0';
+  const isBarcode = (s: string) => /^[0-9]{8,14}$/.test(s);
+  const dump = await dumpTnCatalog();
+  const byVar = new Map<string, any>();
+  for (const r of dump.rows) byVar.set(String(r.tnVariantId), r);
+
+  const products = await prisma.product.findMany({
+    where: { active: true, variants: { some: { tnMapping: { isNot: null } } } },
+    include: { variants: { include: { tnMapping: true } } },
+  });
+
+  const candidates: string[] = [];
+  const localInvalido: Array<{ productId: string; name: string; local: string }> = [];
+  let enlazados = 0, yaCoincide = 0;
+  for (const p of products) {
+    for (const v of p.variants) {
+      if (!v.tnMapping) continue;
+      enlazados++;
+      const local = String(v.barcode || v.code || (v.isDefault ? p.code : '') || '').trim();
+      if (!isBarcode(local)) { localInvalido.push({ productId: p.id, name: p.name, local }); continue; }
+      const tnBarcode = String(byVar.get(String(v.tnMapping.tnVariantId))?.barcode ?? '').trim();
+      // "Coincide" = mismo número ignorando ceros a la izquierda (no vale la pena actualizar).
+      if (isBarcode(tnBarcode) && stripLead(local) === stripLead(tnBarcode)) { yaCoincide++; continue; }
+      candidates.push(v.id);
+    }
+  }
+
+  const { enqueueSync } = await import('../sync/queue.js');
+  if (!opts.dryRun) {
+    for (const vid of candidates) await enqueueSync('push_barcode', { variantId: vid });
+  }
+  return {
+    dryRun: !!opts.dryRun,
+    enlazados,
+    yaCoincide,
+    aActualizar: candidates.length,
+    localInvalido: localInvalido.length,
+    localInvalidoSample: localInvalido.slice(0, 40),
+    encolados: opts.dryRun ? 0 : candidates.length,
+  };
+}
