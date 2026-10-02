@@ -234,7 +234,9 @@ export async function updateProduct(id: string, data: Partial<ProductInput>, use
       cost: data.cost ?? undefined,
       marginPct: data.marginPct ?? undefined,
       price: data.price ?? undefined,
-      promotionalPrice: data.promotionalPrice ?? undefined,
+      // null explícito = QUITAR la promo (se limpia en DB y se baja de TN). Solo se
+      // ignora cuando el campo no viene (undefined).
+      promotionalPrice: data.promotionalPrice === undefined ? undefined : data.promotionalPrice,
       weight: data.weight ?? undefined,
       width: data.width ?? undefined,
       height: data.height ?? undefined,

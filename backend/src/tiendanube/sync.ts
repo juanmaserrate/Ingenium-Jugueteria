@@ -102,7 +102,7 @@ export const syncHandlers = {
     if (!variant || !variant.product.tnMapping) return { skipped: 'product not on TN' };
     const tnVariant = await tn.createVariant(
       variant.product.tnMapping.tnProductId,
-      variantToTn(variant, variant.product.price, variant.product.cost),
+      variantToTn(variant, variant.product.price, variant.product.cost, variant.product.promotionalPrice),
     );
     await prisma.variantTnMapping.create({
       data: {
@@ -127,7 +127,7 @@ export const syncHandlers = {
     await tn.updateVariant(
       variant.tnMapping.tnProductId,
       variant.tnMapping.tnVariantId,
-      variantToTn(variant, variant.product.price, variant.product.cost),
+      variantToTn(variant, variant.product.price, variant.product.cost, variant.product.promotionalPrice),
     );
     await prisma.variantTnMapping.update({
       where: { variantId: variant.id },

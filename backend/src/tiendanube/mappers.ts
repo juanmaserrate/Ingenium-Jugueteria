@@ -55,12 +55,16 @@ export function productToTn(product: Product & { variants: Variant[] }) {
   };
 }
 
-export function variantToTn(variant: Variant, fallbackPrice: number, fallbackCost: number) {
+export function variantToTn(variant: Variant, fallbackPrice: number, fallbackCost: number, promotionalPrice?: number | null) {
+  // promotional_price se guarda a nivel producto en Ingenium pero en TN es por variante.
+  // Mandamos el valor cuando hay promo (>0) y null para LIMPIAR una promo previa en TN.
+  const promo = promotionalPrice && promotionalPrice > 0 ? promotionalPrice.toString() : null;
   return {
     // OJO: NO mandar `stock` acá. El stock se sincroniza SIEMPRE aparte con
     // push_stock (valor absoluto). Si mandáramos stock:0 en un update de variante,
     // pisaríamos el stock real de TN a 0 hasta el próximo push_stock.
     price: (variant.priceOverride ?? fallbackPrice).toString(),
+    promotional_price: promo,
     stock_management: true,
     sku: variant.code ?? null,
     barcode: variant.barcode ?? null,

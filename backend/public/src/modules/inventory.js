@@ -464,6 +464,7 @@ async function renderProducts(container, forceReload = false) {
         <button id="bulk-meli-on" class="text-xs ing-btn-secondary !py-1.5 !px-3">Publicar en MELI</button>
         <button id="bulk-meli-off" class="text-xs ing-btn-secondary !py-1.5 !px-3">Despublicar MELI</button>
         <button id="bulk-price-pct" class="text-xs ing-btn-secondary !py-1.5 !px-3">Ajuste % precio</button>
+        <button id="bulk-promo-pct" class="text-xs ing-btn-secondary !py-1.5 !px-3">Promo −% del precio</button>
         <button id="bulk-delete" class="text-xs px-3 py-1.5 rounded-full bg-red-50 text-red-600 font-bold hover:bg-red-100">Eliminar</button>
         <button id="bulk-clear" class="text-xs text-[#7d6c5c] hover:underline ml-auto">Deseleccionar</button>
       </div>
@@ -666,6 +667,7 @@ async function renderProducts(container, forceReload = false) {
   bulkBar.querySelector('#bulk-meli-on').addEventListener('click', () => bulkSetMeli(true, container));
   bulkBar.querySelector('#bulk-meli-off').addEventListener('click', () => bulkSetMeli(false, container));
   bulkBar.querySelector('#bulk-price-pct').addEventListener('click', () => bulkPricePct(container));
+  bulkBar.querySelector('#bulk-promo-pct').addEventListener('click', () => bulkPromoPct(container));
   bulkBar.querySelector('#bulk-delete').addEventListener('click', () => bulkDelete(container));
 }
 
@@ -1566,6 +1568,26 @@ async function bulkPricePct(container) {
     await P.save(p);
   }
   toast(`${state.selected.size} precios actualizados`, 'success');
+  state.selected.clear();
+  renderProducts(container);
+}
+
+// Setea el precio promocional de TN = precio normal − X% (por producto).
+// Ese promo se publica en Tienda Nube; el POS siempre cobra el precio normal.
+async function bulkPromoPct(container) {
+  const pctStr = prompt('Descuento % sobre el PRECIO para la promo de Tienda Nube (ej: 10 = precio −10%).\nPoné 0 para QUITAR la promo.');
+  if (pctStr === null) return;
+  const pct = Number(pctStr);
+  if (Number.isNaN(pct) || pct < 0 || pct >= 100) { toast('Valor inválido (0 a 99)', 'error'); return; }
+  let done = 0;
+  for (const id of state.selected) {
+    const p = await P.byId(id);
+    if (!p) continue;
+    p.promotional_price = pct === 0 ? null : +(Number(p.price) * (1 - pct / 100)).toFixed(2);
+    await P.save(p);
+    done++;
+  }
+  toast(pct === 0 ? `Promo quitada en ${done} producto(s)` : `Promo = precio −${pct}% en ${done} producto(s)`, 'success');
   state.selected.clear();
   renderProducts(container);
 }
