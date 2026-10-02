@@ -57,8 +57,9 @@ export function productToTn(product: Product & { variants: Variant[] }) {
 
 export function variantToTn(variant: Variant, fallbackPrice: number, fallbackCost: number, promotionalPrice?: number | null) {
   // promotional_price se guarda a nivel producto en Ingenium pero en TN es por variante.
-  // Mandamos el valor cuando hay promo (>0) y null para LIMPIAR una promo previa en TN.
-  const promo = promotionalPrice && promotionalPrice > 0 ? promotionalPrice.toString() : null;
+  // Mandamos el valor cuando hay promo (>0). Para LIMPIAR una promo previa en TN hay que
+  // mandar string vacío "": TN ignora null en el PUT (lo trata como "no cambiar").
+  const promo = promotionalPrice && promotionalPrice > 0 ? promotionalPrice.toString() : '';
   return {
     // OJO: NO mandar `stock` acá. El stock se sincroniza SIEMPRE aparte con
     // push_stock (valor absoluto). Si mandáramos stock:0 en un update de variante,
