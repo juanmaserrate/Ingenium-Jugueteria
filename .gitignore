@@ -33,3 +33,6 @@ Thumbs.db
 # Claude / tooling local
 .claude/
 qa/
+
+# Backups de la base (datos sensibles, no versionar)
+backups/
