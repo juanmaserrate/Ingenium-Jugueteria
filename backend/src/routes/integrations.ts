@@ -114,6 +114,16 @@ export async function integrationsRoutes(app: FastifyInstance) {
       const body = z.object({ productId: z.string() }).parse(req.body);
       return alignTnBarcode(body.productId);
     });
+    // Diagnóstico: lee un producto en TN (precio y promo por variante) para verificar sync.
+    r.get('/integrations/tiendanube/product/:tnId/raw', adminOnly, async (req) => {
+      const { tnId } = req.params as { tnId: string };
+      const tn = await getTnClient();
+      if (!tn) return { error: 'TN no conectada' };
+      const p = await tn.getProduct(tnId).catch((e: any) => ({ error: e?.response?.status || String(e?.message || e) }));
+      if ((p as any)?.error) return p;
+      const variants = ((p as any).variants || []).map((v: any) => ({ id: v.id, price: v.price, promotional_price: v.promotional_price, sku: v.sku, barcode: v.barcode }));
+      return { tnProductId: tnId, name: (p as any).name, variants };
+    });
     // Diagnóstico: fulfillment-orders de una orden TN (para verificar el modelo de armado/envío).
     r.get('/integrations/tiendanube/order/:id/fulfillment-orders', adminOnly, async (req) => {
       const { id } = req.params as { id: string };
