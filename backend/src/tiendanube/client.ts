@@ -85,6 +85,15 @@ export class TnClient {
   getOrder(tnOrderId: string | number) {
     return this.http.get(`/orders/${tnOrderId}`).then((r) => r.data);
   }
+  // Lista órdenes con filtros (para el respaldo: traer las pagadas abiertas y reconciliar
+  // las que se perdieron por un webhook). Params típicos: {status:'open',
+  // payment_status:'paid', per_page, page, created_at_min}. Devuelve [] en 404 (fin de páginas).
+  listOrders(params: Record<string, string | number> = {}) {
+    return this.http.get(`/orders`, { params }).then((r) => r.data).catch((e: any) => {
+      if (e?.response?.status === 404) return [];
+      throw e;
+    });
+  }
   fulfillOrder(tnOrderId: string | number) {
     return this.http
       .post(`/orders/${tnOrderId}/fulfill`, { notify_customer: false })

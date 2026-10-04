@@ -20,6 +20,18 @@ export async function handleOrderPaid(event: any) {
   if (existing) return { skipped: 'already received' };
 
   const order = await tn.getOrder(tnOrderId);
+  return ingestPaidOrder(order);
+}
+
+/**
+ * Crea la orden pendiente local + la notificación a partir de una orden de TN ya
+ * traída. Idempotente por tnOrderId. Lo usa el webhook `order/paid` y el respaldo
+ * (reconcileTnOrders) que lista las pagadas desde la API por si se perdió un webhook.
+ */
+export async function ingestPaidOrder(order: any) {
+  const tnOrderId = String(order.id);
+  const existing = await prisma.tnOrderPending.findUnique({ where: { tnOrderId } });
+  if (existing) return { skipped: 'already received' };
 
   // Cliente
   if (order.customer?.email) {

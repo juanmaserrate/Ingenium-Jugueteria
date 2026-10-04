@@ -2,6 +2,7 @@
 
 import { api, ApiError } from '../core/api.js';
 import { toast } from '../core/notifications.js';
+import { activeBranchId } from '../core/auth.js';
 
 // Escapa texto antes de meterlo en innerHTML. Los nombres/emails vienen del checkout
 // de Tienda Nube (comprador anónimo), así que hay que tratarlos como no confiables.
@@ -85,7 +86,9 @@ function renderOrder(o, branches) {
     )
     .join('');
 
-  const branchOpts = branches.map((b) => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');
+  // Por defecto, la sucursal activa (donde está el operador): Lomas o Banfield.
+  const active = activeBranchId();
+  const branchOpts = branches.map((b) => `<option value="${esc(b.id)}" ${b.id === active ? 'selected' : ''}>${esc(b.name)}</option>`).join('');
 
   return `
     <div class="bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-5 space-y-3">

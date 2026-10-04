@@ -15,6 +15,7 @@ import { requireRole } from '../auth/jwt.js';
 import { confirmSale } from '../services/sales.js';
 import { enqueueSync } from '../sync/queue.js';
 import { getTnClient } from '../tiendanube/client.js';
+import { ingestPaidOrder } from '../tiendanube/webhooks.js';
 import { linkByBarcode, dumpTnCatalog, linkManual, linkManualVariants, unlinkProduct, relinkProduct, findCodeMismatches, alignTnBarcode, enqueueAlignAllBarcodes } from '../tiendanube/link.js';
 
 // Una orden de TN deja de necesitar asignación cuando ya está cancelada/cerrada o
@@ -31,6 +32,51 @@ function tnOrderIsDone(order: any): boolean {
   if (TN_SHIPPED_STATES.has(String(order?.shipping_status ?? ''))) return true;
   if (order?.shipped_at) return true;
   return false;
+}
+
+// --- Respaldo de órdenes (reconcilia webhooks perdidos) ---
+// Trae de la API de TN las órdenes PAGADAS y ABIERTAS recientes e ingresa las que faltan
+// localmente. Solo entran las que están "por enviar / por retirar" (pago recibido y NO
+// enviadas/entregadas/canceladas/cerradas), igual que el filtro de la vista de pendientes.
+// Con throttle en memoria para no pegarle de más a TN pase lo que pase la frecuencia de poll.
+let lastReconcileAt = 0;
+let reconcileInFlight = false;
+const RECONCILE_THROTTLE_MS = 3 * 60 * 1000;
+
+async function reconcileTnOrders(): Promise<{ scanned: number; ingested: number; skippedDone: number } | null> {
+  const tn = await getTnClient();
+  if (!tn) return null;
+  const sinceIso = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(); // últimos 60 días
+  let scanned = 0, ingested = 0, skippedDone = 0;
+  for (let page = 1; page <= 10; page++) {
+    let batch: any;
+    try {
+      batch = await tn.listOrders({ status: 'open', payment_status: 'paid', per_page: 50, page, created_at_min: sinceIso });
+    } catch {
+      break;
+    }
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    for (const order of batch) {
+      scanned++;
+      if (tnOrderIsDone(order)) { skippedDone++; continue; } // ya enviada/retirada/cerrada
+      const tnOrderId = String(order.id);
+      const existing = await prisma.tnOrderPending.findUnique({ where: { tnOrderId } });
+      if (existing) continue;
+      try { await ingestPaidOrder(order); ingested++; } catch { /* no frenar el resto */ }
+    }
+    if (batch.length < 50) break;
+  }
+  return { scanned, ingested, skippedDone };
+}
+
+// Dispara el reconcile como mucho 1 vez cada RECONCILE_THROTTLE_MS. No bloquea: si ya
+// pasó el tiempo, corre en background y devuelve enseguida (el refresh siguiente ve el resultado).
+function maybeReconcile() {
+  if (reconcileInFlight) return;
+  if (Date.now() - lastReconcileAt < RECONCILE_THROTTLE_MS) return;
+  lastReconcileAt = Date.now();
+  reconcileInFlight = true;
+  reconcileTnOrders().catch(() => {}).finally(() => { reconcileInFlight = false; });
 }
 
 export async function integrationsRoutes(app: FastifyInstance) {
@@ -386,7 +432,16 @@ export async function integrationsRoutes(app: FastifyInstance) {
     });
 
     // --- TN Orders Pending ---
+    // Conteo liviano de pendientes (para el badge del sidebar). Dispara el respaldo
+    // throttled para captar las que se perdieron por webhook, aun desde otras pantallas.
+    r.get('/tn-orders/pending-count', async () => {
+      maybeReconcile();
+      const count = await prisma.tnOrderPending.count({ where: { status: 'pending' } });
+      return { count };
+    });
+
     r.get('/tn-orders', async (req) => {
+      maybeReconcile(); // respaldo: ingiere pagadas no-enviadas que falten (throttled)
       const q = req.query as { status?: string };
       const status = q.status ?? 'pending';
       const orders = await prisma.tnOrderPending.findMany({

@@ -2,6 +2,20 @@
 // admin:true → módulo solo para el admin (oculto al encargado).
 
 import { isAdmin } from '../core/auth.js';
+import { api } from '../core/api.js';
+import { toast } from '../core/notifications.js';
+
+// Conteo de ventas web pendientes de asignación (badge en el ítem "Ventas Web").
+let webPendingCount = 0;
+
+function badgeFor(item, active) {
+  if (item.path !== '/ventas-web' || webPendingCount <= 0) return '';
+  const n = webPendingCount > 99 ? '99+' : webPendingCount;
+  const cls = active
+    ? 'bg-white text-[#d82f1e]'
+    : 'bg-[#d82f1e] text-white';
+  return `<span class="ml-auto ${cls} text-[10px] font-black min-w-[18px] h-[18px] px-1 rounded-full inline-flex items-center justify-center">${n}</span>`;
+}
 
 const NAV = [
   { section: 'Operación' },
@@ -60,11 +74,13 @@ function renderNav(currentPath) {
       return `<a href="#${item.path}" class="bg-[#d82f1e] text-white rounded-full mx-3 px-4 py-2 shadow-md flex items-center gap-3 transition-transform active:scale-95">
         <span class="material-symbols-outlined text-[20px]">${item.icon}</span>
         <span class="font-bold text-[0.85rem]">${item.label}</span>
+        ${badgeFor(item, true)}
       </a>`;
     }
     return `<a href="#${item.path}" class="text-[#241a0d] dark:text-[#fff1e6] opacity-85 hover:opacity-100 px-6 py-2 flex items-center gap-3 hover:bg-[#f5dfca] dark:hover:bg-[#2a2018] transition-all duration-200">
       <span class="material-symbols-outlined text-[20px]">${item.icon}</span>
       <span class="font-semibold text-[0.85rem]">${item.label}</span>
+      ${badgeFor(item, false)}
     </a>`;
   }).join('');
 }
@@ -104,4 +120,22 @@ export function mountSidebar(el, { onLogout }) {
 
   render();
   window.addEventListener('hashchange', render);
+
+  // Poll del conteo de ventas web pendientes → actualiza el badge y avisa (toast) cuando
+  // entra una nueva mientras el sistema está abierto. El respaldo del backend (reconcile)
+  // se dispara desde este mismo endpoint, así se captan las órdenes de webhooks perdidos.
+  let prev = null;
+  const pollWeb = async () => {
+    try {
+      const { count } = await api('/api/tn-orders/pending-count');
+      if (typeof count !== 'number') return;
+      if (prev !== null && count > prev) {
+        toast(`Nueva venta web — asigná sucursal (${count} pendiente${count > 1 ? 's' : ''})`, 'info');
+      }
+      prev = count;
+      if (count !== webPendingCount) { webPendingCount = count; render(); }
+    } catch { /* sin conexión / sin TN: no molestar */ }
+  };
+  pollWeb();
+  setInterval(pollWeb, 60_000);
 }
