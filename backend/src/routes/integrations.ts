@@ -440,6 +440,13 @@ export async function integrationsRoutes(app: FastifyInstance) {
       return { count };
     });
 
+    // Sincronización manual de órdenes (ignora el throttle): trae de TN las pagadas abiertas
+    // e ingresa las que falten. Devuelve el reporte. Útil como "traer ahora" y para diagnóstico.
+    r.post('/tn-orders/sync', adminOnly, async () => {
+      const rep = await reconcileTnOrders();
+      return rep ?? { error: 'TN no conectada' };
+    });
+
     r.get('/tn-orders', async (req) => {
       maybeReconcile(); // respaldo: ingiere pagadas no-enviadas que falten (throttled)
       const q = req.query as { status?: string };
