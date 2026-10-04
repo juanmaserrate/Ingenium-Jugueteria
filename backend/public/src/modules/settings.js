@@ -337,9 +337,15 @@ async function renderPayments(container) {
   container.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     const ok = await confirmModal({ title: 'Borrar', message: '¿Eliminar método de pago?', danger: true, confirmLabel: 'Borrar' });
     if (!ok) return;
-    methods.splice(Number(b.dataset.del), 1);
-    await Settings.setConfig('payment_methods', methods);
-    toast('Eliminado', 'success'); renderPayments(container);
+    const removed = methods.splice(Number(b.dataset.del), 1);
+    try {
+      await Settings.setConfig('payment_methods', methods);
+      toast('Eliminado', 'success');
+    } catch (e) {
+      methods.splice(Number(b.dataset.del), 0, ...removed); // revertir si falló
+      toast(e?.message || 'No se pudo eliminar', 'error');
+    }
+    renderPayments(container);
   }));
 }
 
@@ -370,10 +376,17 @@ async function editMethod(container, methods, index) {
           affects_cash: el.querySelector('#pm-ac').checked,
         };
         if (!updated.name) { toast('Nombre requerido', 'warn'); return; }
+        const prev = isNew ? null : methods[index];
         if (isNew) methods.push(updated);
         else methods[index] = updated;
-        await Settings.setConfig('payment_methods', methods);
-        toast('Guardado', 'success'); close(true);
+        try {
+          await Settings.setConfig('payment_methods', methods);
+          toast('Guardado', 'success'); close(true);
+        } catch (e) {
+          // revertir el cambio optimista si el guardado falló (ej: sin permiso)
+          if (isNew) methods.pop(); else methods[index] = prev;
+          toast(e?.message || 'No se pudo guardar el método de pago', 'error');
+        }
       });
     },
   });

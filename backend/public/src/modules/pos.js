@@ -561,8 +561,8 @@ function renderSide(root, totals) {
     side.querySelector(`#pos-${k}`).addEventListener('change', (ev) => { sale[map[k]] = Math.max(0, Number(ev.target.value) || 0); persistDraft(); renderCart(root); });
   });
   side.querySelector('#pos-add-pay').addEventListener('click', () => {
-    const defaultMethod = state.methods[0]?.id || 'cash';
-    sale.payments.push({ method_id: defaultMethod, amount: round2(Math.max(0, pending)) });
+    // Sin método por defecto: el cajero elige la forma de pago conscientemente.
+    sale.payments.push({ method_id: '', amount: round2(Math.max(0, pending)) });
     persistDraft(); renderCart(root);
   });
   side.querySelectorAll('[data-pay-method]').forEach(s => s.addEventListener('change', (ev) => { const i = Number(s.dataset.payMethod); sale.payments[i].method_id = ev.target.value; persistDraft(); renderCart(root); }));
@@ -581,7 +581,92 @@ function renderSide(root, totals) {
     t.sale = emptySale();
     persistDraft(); renderCart(root);
   });
-  side.querySelector('#pos-confirm').addEventListener('click', () => confirmSale(root));
+  side.querySelector('#pos-confirm').addEventListener('click', () => openCobroModal(root));
+}
+
+// ===== Modal de cobro (se abre al "Confirmar venta") =====
+// Pregunta la(s) forma(s) de pago (permite mixto), sin efectivo por defecto, y recién
+// al "Cobrar y confirmar" ejecuta la venta.
+async function openCobroModal(root) {
+  const sale = activeSale();
+  if (!sale) return;
+  if (!sale.items.length) { toast('El carrito está vacío', 'warn'); return; }
+  const totals = Sales.computeTotals(sale);
+  // Arrancar con una fila vacía (sin método) si no hay pagos cargados.
+  if (!sale.payments.length) sale.payments = [{ method_id: '', amount: round2(totals.total) }];
+
+  const bodyHTML = () => {
+    const paid = round2((sale.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0));
+    const pending = round2(totals.total - paid);
+    const exact = Math.abs(pending) <= 0.01;
+    const allChosen = sale.payments.length > 0 && !sale.payments.some(p => !p.method_id);
+    const canConfirm = allChosen && exact;
+    const estado = pending > 0.01
+      ? `<span class="text-orange-600 font-bold">Falta ${money(pending)}</span>`
+      : pending < -0.01
+        ? `<span class="text-orange-600 font-bold">Se pasó ${money(-pending)} — ajustá los montos</span>`
+        : `<span class="text-green-700 font-bold">Monto exacto ✓</span>`;
+    return `
+      <div class="space-y-4">
+        <div class="bg-[#fff8f4] rounded-xl p-3 flex justify-between items-center">
+          <span class="font-black text-[#241a0d]">TOTAL A COBRAR</span>
+          <span class="font-black text-2xl text-[#d82f1e]">${money(totals.total)}</span>
+        </div>
+        <div>
+          <div class="text-xs font-bold text-[#7d6c5c] uppercase mb-1">Pago rápido (un solo medio)</div>
+          <div class="flex flex-wrap gap-2">
+            ${state.methods.map(m => `<button type="button" data-quick="${m.id}" class="ing-btn-secondary text-sm !py-1.5 !px-3">${escapeHtml(m.name)}</button>`).join('')}
+          </div>
+        </div>
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <div class="text-xs font-bold text-[#7d6c5c] uppercase">Formas de pago (podés combinar)</div>
+            <button type="button" data-add class="text-xs font-bold text-[#d82f1e] flex items-center gap-1"><span class="material-symbols-outlined text-sm">add</span> Agregar</button>
+          </div>
+          <div class="space-y-2">${sale.payments.map((p, i) => payRow(p, i)).join('')}</div>
+          <div class="mt-2 text-sm flex justify-between"><span class="text-[#7d6c5c]">Pagado ${money(paid)}</span>${estado}</div>
+        </div>
+        <button type="button" data-cobrar ${canConfirm ? '' : 'disabled'} class="w-full ing-btn-primary text-base py-3 flex items-center justify-center gap-2 ${canConfirm ? '' : 'opacity-50 cursor-not-allowed'}">
+          <span class="material-symbols-outlined">check_circle</span> Cobrar y confirmar venta
+        </button>
+      </div>`;
+  };
+
+  await openModal({
+    title: 'Cobro',
+    size: 'sm',
+    bodyHTML: `<div id="cobro-body">${bodyHTML()}</div>`,
+    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button>`,
+    onOpen: (el, close) => {
+      const redraw = () => { el.querySelector('#cobro-body').innerHTML = bodyHTML(); wire(); };
+      const wire = () => {
+        el.querySelectorAll('[data-quick]').forEach(b => b.addEventListener('click', () => {
+          // Preserva pagos fijos (vale/seña) y cubre el resto con el medio elegido.
+          const fixed = sale.payments.filter(p => p.method_id === 'credit_note' || p.method_id === 'sena');
+          const fixedPaid = round2(fixed.reduce((s, p) => s + (Number(p.amount) || 0), 0));
+          const rest = round2(Math.max(0, totals.total - fixedPaid));
+          sale.payments = [...fixed, ...(rest > 0 ? [{ method_id: b.dataset.quick, amount: rest }] : [])];
+          persistDraft(); redraw();
+        }));
+        el.querySelector('[data-add]')?.addEventListener('click', () => {
+          const paid = round2((sale.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0));
+          sale.payments.push({ method_id: '', amount: round2(Math.max(0, totals.total - paid)) });
+          persistDraft(); redraw();
+        });
+        el.querySelectorAll('[data-pay-method]').forEach(s => s.addEventListener('change', (ev) => { sale.payments[Number(s.dataset.payMethod)].method_id = ev.target.value; persistDraft(); redraw(); }));
+        el.querySelectorAll('[data-pay-amount]').forEach(inp => inp.addEventListener('change', (ev) => { sale.payments[Number(inp.dataset.payAmount)].amount = Math.max(0, Number(ev.target.value) || 0); persistDraft(); redraw(); }));
+        el.querySelectorAll('[data-pay-remove]').forEach(b => b.addEventListener('click', () => { sale.payments.splice(Number(b.dataset.payRemove), 1); persistDraft(); redraw(); }));
+        el.querySelector('[data-cobrar]')?.addEventListener('click', async () => {
+          close(true);
+          await confirmSale(root);
+        });
+      };
+      el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
+      wire();
+    },
+  });
+  // Al cerrar el modal (cobrar o cancelar) refrescamos el panel para reflejar los pagos.
+  renderCart(root);
 }
 
 function payRow(p, i) {
@@ -610,6 +695,7 @@ function payRow(p, i) {
   return `
     <div class="flex gap-2 items-center">
       <select data-pay-method="${i}" class="ing-input flex-1">
+        <option value="" disabled ${!p.method_id ? 'selected' : ''}>— Forma de pago —</option>
         ${state.methods.map(m => `<option value="${m.id}" ${p.method_id === m.id ? 'selected' : ''}>${m.name}${m.surcharge_pct ? ` (+${m.surcharge_pct}%)` : ''}</option>`).join('')}
       </select>
       <input data-pay-amount="${i}" type="number" step="0.01" min="0" value="${p.amount || 0}" class="ing-input w-28 text-right font-bold" />
@@ -685,14 +771,12 @@ async function _confirmSaleInner(root) {
   if (!sale.items.length) { toast('El carrito está vacío', 'warn'); return; }
   const totals = Sales.computeTotals(sale);
   const paid = (sale.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  // Ya NO se asume efectivo: la forma de pago se elige en el modal de cobro.
+  if (!sale.payments || !sale.payments.length) { toast('Agregá la forma de pago', 'warn'); return; }
+  if (sale.payments.some(p => !p.method_id)) { toast('Elegí la forma de pago', 'warn'); return; }
   if (Math.abs(paid - totals.total) > 0.01) {
-    // Si no cargó pagos, asumir efvo
-    if (!sale.payments.length) {
-      sale.payments = [{ method_id: 'cash', amount: totals.total }];
-    } else {
-      toast(`Los pagos (${money(paid)}) no coinciden con el total (${money(totals.total)})`, 'error');
-      return;
-    }
+    toast(`Los pagos (${money(paid)}) no coinciden con el total (${money(totals.total)})`, 'error');
+    return;
   }
 
   const br = activeBranchId();
