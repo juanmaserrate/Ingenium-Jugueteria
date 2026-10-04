@@ -69,6 +69,15 @@ export async function productsRoutes(app: FastifyInstance) {
     return findByBarcode(barcode) ?? null;
   });
 
+  // Historial de movimientos de stock de un producto (ventas, compras, ajustes,
+  // transferencias, devoluciones) con balance por sucursal.
+  app.get('/products/:id/movements', async (req) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { limit?: string };
+    const { getProductMovements } = await import('../services/movements.js');
+    return getProductMovements(id, { limit: q.limit ? Number(q.limit) : undefined });
+  });
+
   app.post('/products', async (req) => {
     const body = productSchema.parse(req.body);
     return createProduct(body, req.user.userId);

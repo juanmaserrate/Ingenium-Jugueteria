@@ -6,7 +6,7 @@ import * as P from '../repos/products.js';
 import { api } from '../core/api.js';
 import { Categories, Brands, Suppliers, Subcategories } from '../repos/catalog.js';
 import { getAll, newId, put, del, tx, stockId, get } from '../core/db.js';
-import { money } from '../core/format.js';
+import { money, fmtDateTime } from '../core/format.js';
 import { openModal, confirmModal } from '../components/modal.js';
 import { toast } from '../core/notifications.js';
 import { activeBranchId, currentSession } from '../core/auth.js';
@@ -490,6 +490,7 @@ async function renderProducts(container, forceReload = false) {
               ${visibleCols.map(c => `<td class="${c.align==='right'?'text-right':c.align==='center'?'text-center':''}" ${c.editable?`data-editable="${c.editable}" data-field="${c.field||c.id}"`:''}>${c.render(p)}</td>`).join('')}
               <td class="text-right">
                 <button data-tnlink="${p.id}" title="${p.linked_tn ? 'Vinculado a Tienda Nube (click para desvincular)' : 'Vincular con Tienda Nube'}" class="${p.linked_tn ? '' : 'opacity-0 group-hover:opacity-100'} p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base ${p.linked_tn ? 'text-green-600' : 'text-[#7d6c5c]'}">${p.linked_tn ? 'link' : 'add_link'}</span></button>
+                <button data-hist="${p.id}" title="Historial de movimientos" class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base text-[#7d6c5c]">history</span></button>
                 <button data-edit="${p.id}" class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base text-[#7d6c5c]">edit</span></button>
                 <button data-del="${p.id}"  class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 rounded-full transition-all"><span class="material-symbols-outlined text-base text-red-500">delete</span></button>
               </td>
@@ -575,6 +576,7 @@ async function renderProducts(container, forceReload = false) {
     const p = list.find(x => x.id === b.dataset.edit);
     openProductForm(p, container);
   }));
+  container.querySelectorAll('[data-hist]').forEach(b => b.addEventListener('click', () => openMovements(b.dataset.hist)));
   // Desplegar/plegar el detalle de variantes (chevron)
   container.querySelectorAll('[data-vexp]').forEach(b => b.addEventListener('click', () => {
     const pid = b.dataset.vexp;
@@ -1593,6 +1595,55 @@ async function bulkPromoPct(container) {
   toast(pct === 0 ? `Promo quitada en ${done} producto(s)` : `Promo = precio −${pct}% en ${done} producto(s)`, 'success');
   state.selected.clear();
   renderProducts(container);
+}
+
+// Historial de movimientos de stock de un producto (ventas, compras, ajustes,
+// transferencias, devoluciones) con saldo por sucursal.
+async function openMovements(productId) {
+  const BR = { br_lomas: 'Lomas', br_banfield: 'Banfield' };
+  const brName = (id) => BR[id] || String(id || '').replace('br_', '');
+  const chip = { venta: 'bg-red-50 text-red-600', compra: 'bg-green-50 text-green-700', ajuste: 'bg-amber-50 text-amber-700', transferencia: 'bg-[#eaf3ff] text-[#2563eb]', devolucion: 'bg-indigo-50 text-indigo-700' };
+  const label = { venta: 'Venta', compra: 'Compra', ajuste: 'Ajuste', transferencia: 'Transfer.', devolucion: 'Devol.' };
+  await openModal({
+    title: 'Historial de movimientos',
+    size: 'xl',
+    bodyHTML: `<div id="mov-body" class="text-sm text-[#7d6c5c]">Cargando…</div>`,
+    footerHTML: `<button class="ing-btn-primary" data-act="ok">Cerrar</button>`,
+    onOpen: async (el, close) => {
+      el.querySelector('[data-act="ok"]').addEventListener('click', () => close(true));
+      try {
+        const data = await api(`/api/products/${encodeURIComponent(productId)}/movements`);
+        const sb = data.stockByBranch || {};
+        const header = `
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div class="font-bold text-[#241a0d]">${escapeAttr(data.product?.name || '')} <span class="font-mono text-xs text-[#7d6c5c]">${escapeAttr(data.product?.code || '')}</span></div>
+            <div class="text-xs font-bold text-[#241a0d]">Stock actual: Lomas <span class="text-[#d82f1e]">${sb.br_lomas ?? 0}</span> · Banfield <span class="text-[#d82f1e]">${sb.br_banfield ?? 0}</span></div>
+          </div>`;
+        const body = el.querySelector('#mov-body');
+        if (!data.movements || !data.movements.length) { body.innerHTML = header + '<div class="py-6 text-center">Sin movimientos registrados.</div>'; return; }
+        body.innerHTML = header + `
+          <div class="ing-card overflow-auto max-h-[60vh]">
+            <table class="ing-table w-full text-sm">
+              <thead><tr><th>Fecha</th><th>Tipo</th><th>Sucursal</th><th>Detalle</th><th class="text-right">Cant.</th><th class="text-right">Saldo</th></tr></thead>
+              <tbody>
+                ${data.movements.map((m, i) => `
+                  <tr class="${i % 2 ? 'ing-row-alt' : ''}">
+                    <td class="whitespace-nowrap">${fmtDateTime(m.datetime)}</td>
+                    <td><span class="px-2 py-0.5 rounded-full text-[11px] font-bold ${chip[m.type] || 'bg-[#fff1e6] text-[#7d6c5c]'}">${label[m.type] || m.type}</span></td>
+                    <td>${brName(m.branchId)}</td>
+                    <td class="text-xs">${escapeAttr(m.ref || '')}${m.detail ? ' · ' + escapeAttr(m.detail) : ''}${m.variantName ? ' · ' + escapeAttr(m.variantName) : ''}</td>
+                    <td class="text-right font-bold ${m.delta >= 0 ? 'text-green-700' : 'text-red-600'}">${m.delta >= 0 ? '+' : ''}${m.delta}</td>
+                    <td class="text-right font-bold text-[#241a0d]">${m.balance}</td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+          <div class="text-[11px] text-[#7d6c5c] mt-2">${data.count} movimiento(s). El "Saldo" es el stock de esa sucursal justo después del movimiento.</div>`;
+      } catch (e) {
+        el.querySelector('#mov-body').innerHTML = `<div class="text-red-600 py-4">No se pudo cargar el historial: ${escapeAttr(e?.message || '')}</div>`;
+      }
+    },
+  });
 }
 
 async function bulkDelete(container) {
