@@ -340,13 +340,15 @@ export async function deleteProduct(id: string, userId?: string, opts: { keepTn?
 }
 
 export async function findByBarcode(barcode: string) {
+  // Solo productos ACTIVOS: un producto dado de baja (active=false, p. ej. soft-delete
+  // con historial) no debe resolver por escaneo igual que no aparece en el inventario.
   const variant = await prisma.variant.findFirst({
-    where: { OR: [{ barcode }, { code: barcode }] },
+    where: { product: { active: true }, OR: [{ barcode }, { code: barcode }] },
     include: { product: true, stocks: true },
   });
   if (variant) return variant;
   const product = await prisma.product.findFirst({
-    where: { code: barcode },
+    where: { active: true, code: barcode },
     include: { variants: { include: { stocks: true } } },
   });
   return product;
