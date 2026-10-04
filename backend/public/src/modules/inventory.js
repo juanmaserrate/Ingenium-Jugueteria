@@ -417,11 +417,37 @@ async function renderProducts(container, forceReload = false) {
 
     <!-- Toolbar -->
     <div class="ing-card mb-4">
+      <!-- Fila principal: búsqueda + Filtrar + orden + acciones -->
       <div class="flex flex-wrap gap-3 items-center">
         <div class="relative flex-1 min-w-[240px]">
           <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[#d82f1e]">search</span>
-          <input id="f-search" class="ing-input pl-10" placeholder="Buscar por nombre o código..." value="${f.search}" />
+          <input id="f-search" class="ing-input pl-10 w-full" placeholder="Buscar por nombre o código..." value="${f.search}" />
         </div>
+        <button id="btn-filters" class="ing-btn-secondary text-sm" title="Mostrar/ocultar filtros">
+          <span class="material-symbols-outlined align-middle text-base">tune</span> Filtrar
+        </button>
+        <select id="f-sort" class="ing-filter" title="Ordenar">
+          <option value="newest" ${state.sort==='newest'?'selected':''}>Más nuevos</option>
+          <option value="oldest" ${state.sort==='oldest'?'selected':''}>Más viejos</option>
+          <option value="name" ${state.sort==='name'?'selected':''}>Nombre A-Z</option>
+        </select>
+        <div class="flex-1"></div>
+        <button id="btn-cols" class="ing-btn-secondary text-sm">
+          <span class="material-symbols-outlined align-middle text-base">view_column</span> Columnas
+        </button>
+        <button id="btn-export" class="ing-btn-secondary text-sm">
+          <span class="material-symbols-outlined align-middle text-base">download</span> XLSX
+        </button>
+        <button id="btn-refresh" class="ing-btn-secondary text-sm" title="Actualizar datos desde el servidor">
+          <span class="material-symbols-outlined align-middle text-base">sync</span>
+        </button>
+        ${canEdit ? `<button id="btn-new" class="ing-btn-primary text-sm">
+          <span class="material-symbols-outlined align-middle text-base">add</span> Nuevo
+        </button>` : ''}
+      </div>
+
+      <!-- Panel de filtros: se abre con "Filtrar". Queda abierto si hay filtros activos. -->
+      <div id="filter-panel" class="${(f.category||f.brand||f.supplier||(f.variant&&f.variant.trim())||(f.stock&&f.stock!=='all')||f.stockMax!=null||f.onlyMeli)?'':'hidden'} mt-3 pt-3 border-t border-[#fff1e6] flex flex-wrap gap-3 items-center">
         <div class="combo-wrap relative w-[180px]" data-combo="category">
           <input id="f-category" class="ing-input w-full" autocomplete="off" placeholder="Todas las categorías" />
           <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
@@ -441,28 +467,10 @@ async function renderProducts(container, forceReload = false) {
           <option value="zero" ${f.stock==='zero'?'selected':''}>Sin stock (0)</option>
         </select>
         <input id="f-stock-max" type="number" min="0" inputmode="numeric" class="ing-filter w-28" placeholder="Stock ≤" title="Mostrar productos con stock total menor o igual a esta cantidad" value="${f.stockMax != null ? f.stockMax : ''}" />
-        <select id="f-sort" class="ing-filter" title="Ordenar">
-          <option value="newest" ${state.sort==='newest'?'selected':''}>Más nuevos</option>
-          <option value="oldest" ${state.sort==='oldest'?'selected':''}>Más viejos</option>
-          <option value="name" ${state.sort==='name'?'selected':''}>Nombre A-Z</option>
-        </select>
         <label class="flex items-center gap-2 text-sm font-bold cursor-pointer">
           <input id="f-meli" type="checkbox" ${f.onlyMeli?'checked':''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" /> Sólo MELI
         </label>
         <button id="f-clear" class="text-xs text-[#d82f1e] font-bold hover:underline">Limpiar</button>
-        <div class="flex-1"></div>
-        <button id="btn-cols" class="ing-btn-secondary text-sm">
-          <span class="material-symbols-outlined align-middle text-base">view_column</span> Columnas
-        </button>
-        <button id="btn-export" class="ing-btn-secondary text-sm">
-          <span class="material-symbols-outlined align-middle text-base">download</span> XLSX
-        </button>
-        <button id="btn-refresh" class="ing-btn-secondary text-sm" title="Actualizar datos desde el servidor">
-          <span class="material-symbols-outlined align-middle text-base">sync</span>
-        </button>
-        ${canEdit ? `<button id="btn-new" class="ing-btn-primary text-sm">
-          <span class="material-symbols-outlined align-middle text-base">add</span> Nuevo
-        </button>` : ''}
       </div>
 
       <!-- Bulk actions bar -->
@@ -495,10 +503,10 @@ async function renderProducts(container, forceReload = false) {
               <td class="whitespace-nowrap">${canEdit ? `<input type="checkbox" class="row-check rounded text-[#d82f1e] focus:ring-[#d82f1e]" ${state.selected.has(p.id)?'checked':''} />` : ''}${p.has_variants ? `<button data-vexp="${p.id}" title="Ver variantes" class="ml-1 align-middle"><span class="material-symbols-outlined text-base text-[#7d6c5c] hover:text-[#d82f1e] transition-transform ${state.expandedVariants.has(p.id)?'rotate-90':''}" data-vchev="${p.id}">chevron_right</span></button>` : ''}</td>
               ${visibleCols.map(c => `<td class="${c.align==='right'?'text-right':c.align==='center'?'text-center':''}" ${c.editable && canEdit?`data-editable="${c.editable}" data-field="${c.field||c.id}"`:''}>${c.render(p)}</td>`).join('')}
               <td class="text-right">
-                ${canEdit ? `<button data-tnlink="${p.id}" title="${p.linked_tn ? 'Vinculado a Tienda Nube (click para desvincular)' : 'Vincular con Tienda Nube'}" class="${p.linked_tn ? '' : 'opacity-0 group-hover:opacity-100'} p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base ${p.linked_tn ? 'text-green-600' : 'text-[#7d6c5c]'}">${p.linked_tn ? 'link' : 'add_link'}</span></button>` : ''}
-                <button data-hist="${p.id}" title="Historial de movimientos" class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base text-[#7d6c5c]">history</span></button>
-                ${canEdit ? `<button data-edit="${p.id}" class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base text-[#7d6c5c]">edit</span></button>
-                <button data-del="${p.id}"  class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 rounded-full transition-all"><span class="material-symbols-outlined text-base text-red-500">delete</span></button>` : ''}
+                ${canEdit ? `<button data-tnlink="${p.id}" title="${p.linked_tn ? 'Vinculado a Tienda Nube (click para desvincular)' : 'Vincular con Tienda Nube'}" class="p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base ${p.linked_tn ? 'text-green-600' : 'text-[#7d6c5c]'}">${p.linked_tn ? 'link' : 'add_link'}</span></button>` : ''}
+                <button data-hist="${p.id}" title="Historial de movimientos" class="p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base text-[#7d6c5c]">history</span></button>
+                ${canEdit ? `<button data-edit="${p.id}" title="Editar" class="p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base text-[#7d6c5c]">edit</span></button>
+                <button data-del="${p.id}" title="Eliminar" class="p-1.5 hover:bg-red-50 rounded-full transition-all"><span class="material-symbols-outlined text-base text-red-500">delete</span></button>` : ''}
               </td>
             </tr>
             ${p.has_variants ? variantDetailRow(p, visibleCols.length) : ''}
@@ -517,6 +525,10 @@ async function renderProducts(container, forceReload = false) {
 
   // Filtros
   container.querySelector('#f-search').addEventListener('input', e => { state.filters.search = e.target.value; state.page = 0; scheduleFilterRender(container, 'f-search'); });
+  // Botón "Filtrar": muestra/oculta el panel de filtros (al estilo Tienda Nube).
+  container.querySelector('#btn-filters')?.addEventListener('click', () => {
+    container.querySelector('#filter-panel')?.classList.toggle('hidden');
+  });
   // Comboboxes filtrables (escribir/autocompletar/desplegar) + crear al vuelo. Alfabéticos.
   mountCombo(container.querySelector('[data-combo="category"]'), {
     options: categories, selectedId: f.category, allLabel: 'Todas las categorías',
