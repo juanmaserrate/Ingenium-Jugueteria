@@ -220,17 +220,26 @@ function render(el) {
   renderCart(el);
 
   const search = el.querySelector('#pos-search');
-  search.addEventListener('input', () => renderSearchResults(el));
+  // El lector de código de barras teclea rapidísimo y manda un Enter al instante.
+  // Guardamos cuándo entró el último caracter para distinguir ese Enter "automático"
+  // (llega a < SCAN_ENTER_MS del último tecleo) del Enter MANUAL del operador (llega
+  // tras una pausa, cuando ya miró el desplegable y el stock). El del lector NO agrega:
+  // solo deja el código escrito y los resultados abiertos; agrega el operador a mano.
+  const SCAN_ENTER_MS = 150;
+  let lastInputTs = 0;
+  search.addEventListener('input', () => { lastInputTs = Date.now(); renderSearchResults(el); });
   search.addEventListener('keydown', async (ev) => {
-    if (ev.key === 'Enter') {
-      const q = search.value.trim();
-      if (!q) return;
-      // Si hay match único por code → agregar directo (con selector de variante si corresponde)
-      const match = state.products.filter(p => p.code?.toLowerCase() === q.toLowerCase() || p.barcode === q);
-      if (match.length === 1) { pickAndAdd(match[0], el); return; }
-      const first = el.querySelector('#pos-search-results [data-pid]');
-      if (first) { const pid = first.dataset.pid; const p = state.products.find(x => x.id === pid); if (p) pickAndAdd(p, el); }
-    }
+    if (ev.key !== 'Enter') return;
+    // Enter disparado por el lector (pegado al tecleo) → ignorar, no agregar.
+    if (Date.now() - lastInputTs < SCAN_ENTER_MS) { ev.preventDefault(); return; }
+    const q = search.value.trim();
+    if (!q) return;
+    // Enter manual del operador: si hay match único por code/barcode → agregar directo
+    // (con selector de variante si corresponde); si no, agrega el primer resultado.
+    const match = state.products.filter(p => p.code?.toLowerCase() === q.toLowerCase() || p.barcode === q);
+    if (match.length === 1) { pickAndAdd(match[0], el); return; }
+    const first = el.querySelector('#pos-search-results [data-pid]');
+    if (first) { const pid = first.dataset.pid; const p = state.products.find(x => x.id === pid); if (p) pickAndAdd(p, el); }
   });
   el.querySelector('#pos-open-picker').addEventListener('click', () => openCatalogPicker(el));
   search.focus();
