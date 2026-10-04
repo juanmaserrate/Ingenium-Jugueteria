@@ -15,7 +15,7 @@ import { requireRole } from '../auth/jwt.js';
 import { confirmSale } from '../services/sales.js';
 import { enqueueSync } from '../sync/queue.js';
 import { getTnClient } from '../tiendanube/client.js';
-import { linkByBarcode, dumpTnCatalog, linkManual, linkManualVariants, unlinkProduct, findCodeMismatches, alignTnBarcode, enqueueAlignAllBarcodes } from '../tiendanube/link.js';
+import { linkByBarcode, dumpTnCatalog, linkManual, linkManualVariants, unlinkProduct, relinkProduct, findCodeMismatches, alignTnBarcode, enqueueAlignAllBarcodes } from '../tiendanube/link.js';
 
 // Una orden de TN deja de necesitar asignación cuando ya está cancelada/cerrada o
 // enviada/entregada/retirada. Chequeamos el estado ACTUAL en TN (el payload guardado es
@@ -324,6 +324,18 @@ export async function integrationsRoutes(app: FastifyInstance) {
     r.post('/integrations/tiendanube/unlink', adminOnly, async (req) => {
       const body = z.object({ productId: z.string() }).parse(req.body);
       return unlinkProduct(body.productId);
+    });
+    // Re-enlazar: desvincula el vínculo actual y enlaza a OTRO producto de TN en un paso,
+    // eligiendo con qué datos quedarse ('tn' = traer descripción/precio desde TN;
+    // 'system' = publicar nombre/descripción/precio del sistema en TN).
+    r.post('/integrations/tiendanube/relink', adminOnly, async (req) => {
+      const body = z.object({
+        productId: z.string(),
+        tnProductId: z.string(),
+        tnVariantId: z.string().optional(),
+        dataSource: z.enum(['tn', 'system']),
+      }).parse(req.body);
+      return relinkProduct(body);
     });
 
     r.patch('/integrations/tiendanube/settings', async (req) => {

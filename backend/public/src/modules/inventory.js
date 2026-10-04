@@ -654,10 +654,37 @@ async function renderProducts(container, forceReload = false) {
     const p = list.find(x => x.id === b.dataset.tnlink);
     if (!p) return;
     if (p.linked_tn) {
-      const ok = await confirmModal({ title: 'Desvincular de Tienda Nube', message: `¿Desvincular "${p.name}" de Tienda Nube? (deja de sincronizar stock)`, danger: true, confirmLabel: 'Desvincular' });
-      if (!ok) return;
-      try { await P.unlinkTn(p.id); toast('Desvinculado de Tienda Nube', 'success'); renderProducts(container); }
-      catch (e) { toast('No se pudo desvincular', 'error'); }
+      // Ya enlazado → ofrecer cambiar el producto de TN asociado (arreglar mal vínculo) o desvincular.
+      const action = await openModal({
+        title: `Tienda Nube · ${p.name}`,
+        size: 'sm',
+        bodyHTML: `
+          <p class="text-sm text-[#7d6c5c] mb-3">Este producto ya está vinculado a Tienda Nube. ¿Qué querés hacer?</p>
+          <div class="space-y-2">
+            <button data-act="relink" class="w-full flex items-center gap-3 px-3 py-3 border border-[#e3ceba] rounded-xl hover:border-[#d82f1e] hover:bg-[#fff8f4] text-left">
+              <span class="material-symbols-outlined text-[#d82f1e]">sync_alt</span>
+              <span><span class="font-bold block text-sm">Cambiar producto de TN asociado</span><span class="text-xs text-[#7d6c5c]">Lo enlaza a otro producto de TN y elegís con qué datos quedarte</span></span>
+            </button>
+            <button data-act="unlink" class="w-full flex items-center gap-3 px-3 py-3 border border-[#e3ceba] rounded-xl hover:border-red-400 hover:bg-red-50 text-left">
+              <span class="material-symbols-outlined text-red-500">link_off</span>
+              <span><span class="font-bold block text-sm">Desvincular</span><span class="text-xs text-[#7d6c5c]">Deja de sincronizar con Tienda Nube</span></span>
+            </button>
+          </div>`,
+        footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button>`,
+        onOpen: (el, close) => {
+          el.querySelector('[data-act="relink"]').addEventListener('click', () => close('relink'));
+          el.querySelector('[data-act="unlink"]').addEventListener('click', () => close('unlink'));
+          el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
+        },
+      });
+      if (action === 'relink') {
+        openTnLinkModal(p, container);
+      } else if (action === 'unlink') {
+        const ok = await confirmModal({ title: 'Desvincular de Tienda Nube', message: `¿Desvincular "${p.name}" de Tienda Nube? (deja de sincronizar stock)`, danger: true, confirmLabel: 'Desvincular' });
+        if (!ok) return;
+        try { await P.unlinkTn(p.id); toast('Desvinculado de Tienda Nube', 'success'); renderProducts(container); }
+        catch (e) { toast('No se pudo desvincular', 'error'); }
+      }
     } else {
       openTnLinkModal(p, container);
     }
@@ -1484,7 +1511,7 @@ async function openTnLinkModal(product, container) {
     bodyHTML: `
       <input id="tnl-q" class="ing-input w-full mb-2" placeholder="Buscar en Tienda Nube (nombre, barcode o SKU)…" />
       <div id="tnl-list" class="max-h-[55vh] overflow-auto border border-[#fff1e6] rounded-xl divide-y divide-[#fff1e6]"><div class="p-4 text-center text-[#7d6c5c]">Cargando catálogo de Tienda Nube…</div></div>
-      <p class="text-xs text-[#7d6c5c] mt-2">Elegí el producto de TN que corresponde. Se vincula y el stock se sincroniza automáticamente.</p>`,
+      <p class="text-xs text-[#7d6c5c] mt-2">Elegí el producto de TN que corresponde. Después te preguntamos con qué datos quedarte (los de TN o los del sistema). El stock se sincroniza automáticamente.</p>`,
     footerHTML: `<button class="ing-btn-secondary" data-act="close">Cerrar</button>`,
     onOpen: async (el, close) => {
       el.querySelector('[data-act="close"]').addEventListener('click', () => close(null));
@@ -1499,25 +1526,20 @@ async function openTnLinkModal(product, container) {
         else { const seed = (product.name || '').toLowerCase().slice(0, 12); rows = catalog.filter(r => (r.name || '').toLowerCase().includes(seed)); }
         rows = rows.slice(0, 60);
         listEl.innerHTML = rows.length ? rows.map(r => `
-          <button data-tnp="${r.tnProductId}" data-tnv="${r.tnVariantId}" class="w-full flex items-center justify-between gap-3 px-3 py-2 hover:bg-[#fff8f4] text-left">
+          <button data-tnp="${r.tnProductId}" data-tnv="${r.tnVariantId}" data-name="${escapeAttr(r.name)}" class="w-full flex items-center justify-between gap-3 px-3 py-2 hover:bg-[#fff8f4] text-left">
             <div class="min-w-0"><div class="font-bold text-sm break-words leading-tight">${escapeAttr(r.name)}</div><div class="text-xs text-[#7d6c5c] font-mono">${escapeAttr(r.barcode || r.sku || '')}${r.isVariant ? ' · (con variantes)' : ''}</div></div>
             <div class="font-bold text-[#d82f1e] whitespace-nowrap">${r.price ? ('$' + r.price) : ''}</div>
           </button>`).join('') : '<div class="p-4 text-center text-[#7d6c5c]">Sin resultados</div>';
         listEl.querySelectorAll('[data-tnp]').forEach(btn => btn.addEventListener('click', async () => {
+          const tnName = btn.dataset.name || 'el producto de Tienda Nube';
+          // Preguntar con qué datos quedarse antes de enlazar.
+          const dataSource = await askTnDataDirection(product.name, tnName);
+          if (!dataSource) return; // canceló → sigue en el picker
           try {
-            if (product.has_variants) {
-              // Producto con variantes: emparejar variante↔variante en el backend.
-              const rep = await P.linkTnVariants(product.id, btn.dataset.tnp);
-              const nl = (rep.unmatchedLocal || []).length, nt = (rep.unmatchedTn || []).length;
-              if (nl || nt) {
-                toast(`Vinculadas ${rep.linked} variante(s). Sin casar: ${nl} del sistema, ${nt} de TN (revisar).`, 'info');
-              } else {
-                toast(`Vinculadas ${rep.linked} variante(s) con Tienda Nube`, 'success');
-              }
-            } else {
-              await P.linkTn(product.id, btn.dataset.tnp, btn.dataset.tnv);
-              toast('Vinculado a Tienda Nube', 'success');
-            }
+            const r = await P.relinkTn(product.id, btn.dataset.tnp, btn.dataset.tnv || undefined, dataSource);
+            const detalle = dataSource === 'tn' ? 'datos tomados de Tienda Nube' : 'nombre/descripción/precio del sistema publicados en TN';
+            const nvar = r?.linked || 1;
+            toast(`Vinculado${nvar > 1 ? ` (${nvar} variantes)` : ''} — ${detalle}`, 'success');
             close(true); renderProducts(container);
           } catch (e) { toast('No se pudo vincular: ' + (e.message || ''), 'error'); }
         }));
@@ -1525,6 +1547,32 @@ async function openTnLinkModal(product, container) {
       const qIn = el.querySelector('#tnl-q');
       qIn.addEventListener('input', () => draw(qIn.value));
       draw(''); qIn.focus();
+    },
+  });
+}
+
+// Pregunta con qué datos quedarse al (re)enlazar. Devuelve 'tn' | 'system' | null.
+function askTnDataDirection(systemName, tnName) {
+  return openModal({
+    title: '¿Con qué datos me quedo?',
+    size: 'sm',
+    bodyHTML: `
+      <p class="text-sm text-[#7d6c5c] mb-3">Vas a enlazar <b>${escapeAttr(systemName)}</b> con <b>${escapeAttr(tnName)}</b>. Elegí qué datos deben prevalecer:</p>
+      <div class="space-y-2">
+        <button data-dir="tn" class="w-full flex items-center gap-3 px-3 py-3 border border-[#e3ceba] rounded-xl hover:border-[#d82f1e] hover:bg-[#fff8f4] text-left">
+          <span class="material-symbols-outlined text-[#2563eb]">cloud_download</span>
+          <span><span class="font-bold block text-sm">Datos de Tienda Nube</span><span class="text-xs text-[#7d6c5c]">El sistema reemplaza su <b>descripción y precio</b> por los de TN</span></span>
+        </button>
+        <button data-dir="system" class="w-full flex items-center gap-3 px-3 py-3 border border-[#e3ceba] rounded-xl hover:border-[#d82f1e] hover:bg-[#fff8f4] text-left">
+          <span class="material-symbols-outlined text-[#d82f1e]">cloud_upload</span>
+          <span><span class="font-bold block text-sm">Datos del sistema</span><span class="text-xs text-[#7d6c5c]">Se publican en TN el <b>nombre, la descripción y el precio</b> del sistema</span></span>
+        </button>
+      </div>`,
+    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button>`,
+    onOpen: (el, close) => {
+      el.querySelector('[data-dir="tn"]').addEventListener('click', () => close('tn'));
+      el.querySelector('[data-dir="system"]').addEventListener('click', () => close('system'));
+      el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
     },
   });
 }

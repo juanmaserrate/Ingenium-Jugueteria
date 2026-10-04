@@ -232,6 +232,71 @@ export async function linkManualVariants(input: { productId: string; tnProductId
   };
 }
 
+/**
+ * Re-enlaza un producto del sistema a OTRO producto de TN en un solo paso (para
+ * arreglar vínculos equivocados) y aplica la dirección de datos elegida:
+ *  - dataSource 'tn'    → el sistema toma la DESCRIPCIÓN y el PRECIO del producto de TN.
+ *  - dataSource 'system'→ se publican en TN el NOMBRE, la DESCRIPCIÓN y el PRECIO del sistema.
+ * Desvincula primero los mapeos actuales del producto y después vincula al nuevo
+ * (producto simple → linkManual; con variantes → linkManualVariants, que empareja).
+ */
+export async function relinkProduct(input: {
+  productId: string;
+  tnProductId: string;
+  tnVariantId?: string;
+  dataSource: 'tn' | 'system';
+}) {
+  const product = await prisma.product.findUnique({
+    where: { id: input.productId },
+    include: { variants: true },
+  });
+  if (!product) throw new ValidationError('Producto no encontrado');
+
+  // a) Desvincular los mapeos actuales de ESTE producto (si tenía otro vínculo).
+  await prisma.variantTnMapping.deleteMany({ where: { variantId: { in: product.variants.map((v) => v.id) } } });
+  await prisma.productTnMapping.deleteMany({ where: { productId: product.id } });
+
+  // b) Vincular al nuevo producto de TN.
+  const hasVariants = product.variants.length > 1;
+  const linkResult = hasVariants
+    ? await linkManualVariants({ productId: input.productId, tnProductId: input.tnProductId })
+    : await linkManual({ productId: input.productId, tnProductId: input.tnProductId, tnVariantId: input.tnVariantId });
+  const linked = (linkResult as { linked?: number }).linked ?? 1;
+
+  // c) Dirección de datos.
+  const { enqueueSync } = await import('../sync/queue.js');
+  let pulled: { description: boolean; price: number } | null = null;
+  if (input.dataSource === 'tn') {
+    const tn = await requireTnClient();
+    const tp = await tn.getProduct(input.tnProductId);
+    const tnVariants: any[] = tp.variants ?? [];
+    const desc = tp.description?.es ?? (typeof tp.description === 'string' ? tp.description : null);
+    const defPrice = tnVariants[0] ? parseFloat(tnVariants[0].price) : NaN;
+    const price = Number.isFinite(defPrice) ? defPrice : product.price;
+    await prisma.product.update({
+      where: { id: product.id },
+      data: { description: desc ?? undefined, price },
+    });
+    // Para productos con variantes, pasar el precio de cada variante TN a su override local.
+    if (hasVariants) {
+      const maps = await prisma.variantTnMapping.findMany({ where: { variantId: { in: product.variants.map((v) => v.id) } } });
+      for (const m of maps) {
+        const tv = tnVariants.find((x) => String(x.id) === String(m.tnVariantId));
+        const p = tv ? parseFloat(tv.price) : NaN;
+        if (Number.isFinite(p)) await prisma.variant.update({ where: { id: m.variantId }, data: { priceOverride: p } });
+      }
+    }
+    pulled = { description: desc != null, price };
+  } else {
+    // sistema → TN: nombre+descripción (push_product_update) y precio/promo (push_variant_update).
+    await enqueueSync('push_product_update', { productId: product.id });
+    const maps = await prisma.variantTnMapping.findMany({ where: { variantId: { in: product.variants.map((v) => v.id) } } });
+    for (const m of maps) await enqueueSync('push_variant_update', { variantId: m.variantId });
+  }
+
+  return { ok: true, productId: product.id, tnProductId: String(input.tnProductId), linked, dataSource: input.dataSource, pulled };
+}
+
 // Vuelca el catálogo de TN (vía API, barcodes completos) como filas planas:
 // una por variante. Sirve para cruzar offline contra el consolidado.
 export async function dumpTnCatalog() {

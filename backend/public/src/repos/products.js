@@ -353,6 +353,20 @@ export async function unlinkTn(productId) {
   emit(EV.PRODUCT_UPDATED, { id: productId });
 }
 
+// Re-enlaza a OTRO producto de TN en un paso y elige la dirección de datos:
+// dataSource 'tn' → el sistema toma descripción+precio de TN; 'system' → publica
+// nombre+descripción+precio del sistema en TN. Sirve también para un vínculo nuevo.
+export async function relinkTn(productId, tnProductId, tnVariantId, dataSource) {
+  const r = await api('/api/integrations/tiendanube/relink', {
+    method: 'POST',
+    body: { productId, tnProductId, tnVariantId, dataSource },
+  });
+  const p = _cache.byId.get(productId);
+  if (p) { p.linked_tn = true; p.tn_product_id = tnProductId; }
+  emit(EV.PRODUCT_UPDATED, { id: productId });
+  return r;
+}
+
 // Sugerencias para autocompletar tipo y valores de variante, juntando lo del catálogo en cache.
 export function variantSuggestions() {
   const types = new Set();
