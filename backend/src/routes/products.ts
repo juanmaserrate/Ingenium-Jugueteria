@@ -78,13 +78,13 @@ export async function productsRoutes(app: FastifyInstance) {
     return getProductMovements(id, { limit: q.limit ? Number(q.limit) : undefined });
   });
 
-  app.post('/products', async (req) => {
+  app.post('/products', { preHandler: requireRole('admin') }, async (req) => {
     const body = productSchema.parse(req.body);
     return createProduct(body, req.user.userId);
   });
 
   // Alta masiva idempotente (importación del consolidado).
-  app.post('/products/bulk', async (req) => {
+  app.post('/products/bulk', { preHandler: requireRole('admin') }, async (req) => {
     const body = z.array(z.object({
       code: z.string().min(1),
       name: z.string().optional(),
@@ -97,7 +97,7 @@ export async function productsRoutes(app: FastifyInstance) {
   });
 
   // Asignación masiva de categoría/proveedor/marca por grupos de códigos.
-  app.post('/products/bulk-assign', async (req) => {
+  app.post('/products/bulk-assign', { preHandler: requireRole('admin') }, async (req) => {
     const body = z.array(z.object({
       categoryId: z.string().nullable().optional(),
       supplierId: z.string().nullable().optional(),
@@ -108,12 +108,12 @@ export async function productsRoutes(app: FastifyInstance) {
   });
 
   // Renombrado masivo por código (para traer los nombres completos de Tienda Nube).
-  app.post('/products/bulk-rename', async (req) => {
+  app.post('/products/bulk-rename', { preHandler: requireRole('admin') }, async (req) => {
     const body = z.array(z.object({ code: z.string().min(1), name: z.string().min(1) })).parse(req.body);
     return bulkRenameProducts(body);
   });
 
-  app.put('/products/:id', async (req) => {
+  app.put('/products/:id', { preHandler: requireRole('admin') }, async (req) => {
     const { id } = req.params as { id: string };
     const body = productSchema.partial().parse(req.body);
     return updateProduct(id, body, req.user.userId);

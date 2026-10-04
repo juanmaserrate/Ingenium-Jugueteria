@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { getStock, setStock, adjustStock, transferStock } from '../services/stock.js';
+import { requireRole } from '../auth/jwt.js';
 
 const setSchema = z.object({
   variantId: z.string(),
@@ -31,7 +32,7 @@ export async function stockRoutes(app: FastifyInstance) {
     return getStock(variantId, branchId);
   });
 
-  app.post('/stock/set', async (req) => {
+  app.post('/stock/set', { preHandler: requireRole('admin') }, async (req) => {
     const body = setSchema.parse(req.body);
     return setStock(body.variantId, body.branchId, body.qty, {
       userId: req.user.userId,
@@ -39,7 +40,7 @@ export async function stockRoutes(app: FastifyInstance) {
     });
   });
 
-  app.post('/stock/adjust', async (req) => {
+  app.post('/stock/adjust', { preHandler: requireRole('admin') }, async (req) => {
     const body = adjustSchema.parse(req.body);
     return adjustStock(body.variantId, body.branchId, body.delta, {
       userId: req.user.userId,
@@ -56,7 +57,7 @@ export async function stockRoutes(app: FastifyInstance) {
   // Descuento masivo de stock (histórico) SIN sincronizar a Tienda Nube.
   // Uso puntual: cargar ventas que ya fueron descontadas en TN, para que el
   // stock local coincida sin volver a descontarlas online. Clampa en 0.
-  app.post('/stock/bulk-discount', async (req) => {
+  app.post('/stock/bulk-discount', { preHandler: requireRole('admin') }, async (req) => {
     const body = z.object({
       reason: z.string().optional(),
       items: z.array(z.object({

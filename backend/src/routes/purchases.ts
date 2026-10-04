@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { requireRole } from '../auth/jwt.js';
 import {
   listPurchases,
   getPurchase,
@@ -65,12 +66,12 @@ export async function purchasesRoutes(app: FastifyInstance) {
     return computeSuccess(id);
   });
 
-  app.post('/purchases', async (req) => {
+  app.post('/purchases', { preHandler: requireRole('admin') }, async (req) => {
     const body = headerSchema.parse(req.body);
     return createPurchase(body, req.user.userId);
   });
 
-  app.put('/purchases/:id', async (req) => {
+  app.put('/purchases/:id', { preHandler: requireRole('admin') }, async (req) => {
     const { id } = req.params as { id: string };
     const body = updateSchema.parse(req.body);
     return updatePurchase(id, body as any, req.user.userId);
@@ -82,7 +83,7 @@ export async function purchasesRoutes(app: FastifyInstance) {
     return setPurchaseStatus(id, status, req.user.userId);
   });
 
-  app.post('/purchases/:id/cancel', async (req) => {
+  app.post('/purchases/:id/cancel', { preHandler: requireRole('admin') }, async (req) => {
     const { id } = req.params as { id: string };
     return setPurchaseStatus(id, 'cancelled', req.user.userId);
   });
@@ -94,14 +95,14 @@ export async function purchasesRoutes(app: FastifyInstance) {
   });
 
   // Escaneo de factura con IA (Claude). Devuelve líneas extraídas; no persiste.
-  app.post('/purchases/:id/scan', async (req) => {
+  app.post('/purchases/:id/scan', { preHandler: requireRole('admin') }, async (req) => {
     const { id } = req.params as { id: string };
     const { documentId } = z.object({ documentId: z.string() }).parse(req.body);
     return scanInvoice(id, documentId);
   });
 
   // Auto-match de líneas contra variantes existentes (barcode/SKU). No persiste.
-  app.post('/purchases/match', async (req) => {
+  app.post('/purchases/match', { preHandler: requireRole('admin') }, async (req) => {
     const body = z.object({
       lines: z.array(z.object({
         barcode: z.string().nullable().optional(),
@@ -111,14 +112,14 @@ export async function purchasesRoutes(app: FastifyInstance) {
     return autoMatch(body.lines);
   });
 
-  app.delete('/purchases/:id', async (req, reply) => {
+  app.delete('/purchases/:id', { preHandler: requireRole('admin') }, async (req, reply) => {
     const { id } = req.params as { id: string };
     await deletePurchase(id, req.user.userId);
     return reply.status(204).send();
   });
 
   // Subir factura (PDF o imagen) como documento de la compra.
-  app.post('/purchases/:id/documents', async (req) => {
+  app.post('/purchases/:id/documents', { preHandler: requireRole('admin') }, async (req) => {
     const { id } = req.params as { id: string };
     await getPurchase(id); // valida que exista (404 si no)
     const file = await (req as any).file();
@@ -128,7 +129,7 @@ export async function purchasesRoutes(app: FastifyInstance) {
   });
 
   // Imagen de producto en staging (para items que se publicarán en TN al recibir).
-  app.post('/purchases/:id/staging-image', async (req) => {
+  app.post('/purchases/:id/staging-image', { preHandler: requireRole('admin') }, async (req) => {
     const { id } = req.params as { id: string };
     await getPurchase(id);
     const file = await (req as any).file();

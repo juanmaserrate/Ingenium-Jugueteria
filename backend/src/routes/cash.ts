@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { assertBranchAccess } from '../auth/jwt.js';
+import { assertBranchAccess, requireRole } from '../auth/jwt.js';
 import { balance, openDay, closeDay, addExpense, move, listMovements, listExpenses, dayStatus,
   safeBalance, listSafeMovements, depositToSafe, withdrawFromSafe, addSafeExpense, adjustSafeBalance } from '../services/cash.js';
 
@@ -100,7 +100,8 @@ export async function cashRoutes(app: FastifyInstance) {
     const body = z.object({ amount: z.number().positive(), category: z.string().optional(), description: z.string().optional() }).parse(req.body);
     return addSafeExpense({ branchId, ...body, userId: req.user.userId });
   });
-  app.post('/cash/:branchId/safe/adjust', async (req) => {
+  // Ajustar el saldo de la caja de seguridad: solo admin (el encargado no puede).
+  app.post('/cash/:branchId/safe/adjust', { preHandler: requireRole('admin') }, async (req) => {
     const { branchId } = req.params as { branchId: string };
     assertBranchAccess(req.user, branchId);
     const body = z.object({ targetBalance: z.number(), description: z.string().optional() }).parse(req.body);

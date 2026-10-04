@@ -1,9 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { getDashboard, getBalance, getProfits, getContribution, getAudit } from '../services/metrics.js';
 import { ValidationError } from '../utils/errors.js';
+import { requireRole } from '../auth/jwt.js';
 
 export async function metricsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate);
+  // Panel / Saldo / Ganancias / Contribución / Historial = datos del negocio: solo admin.
+  app.addHook('preHandler', requireRole('admin'));
 
   // branchId ausente = consolidado (todas las sucursales). Para el no-admin forzamos SU
   // sucursal: no puede ver el consolidado ni otra sucursal.

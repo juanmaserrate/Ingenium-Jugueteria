@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { listTransfers, createTransfer, importTransferRecord, confirmTransfer, resolveTransfer } from '../services/transfers.js';
+import { requireRole, assertBranchAccess } from '../auth/jwt.js';
 
 const schema = z.object({
   fromBranch: z.string(),
@@ -19,6 +20,8 @@ export async function transfersRoutes(app: FastifyInstance) {
 
   app.post('/transfers', async (req) => {
     const body = schema.parse(req.body);
+    // El no-admin solo puede ORIGINAR transferencias desde su propia sucursal.
+    assertBranchAccess(req.user, body.fromBranch);
     return createTransfer({ ...body, userId: req.user.userId });
   });
 
@@ -40,8 +43,8 @@ export async function transfersRoutes(app: FastifyInstance) {
     return resolveTransfer(id, 'cancelled', { userId: req.user.userId, reason: body.reason });
   });
 
-  // Importa un remito viejo SIN mover stock (migración de registros locales).
-  app.post('/transfers/import', async (req) => {
+  // Importa un remito viejo SIN mover stock (migración de registros locales): solo admin.
+  app.post('/transfers/import', { preHandler: requireRole('admin') }, async (req) => {
     const body = z.object({
       fromBranch: z.string(),
       toBranch: z.string(),
