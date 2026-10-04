@@ -1084,6 +1084,7 @@ function customerBoxHTML(sale) {
   return `<div class="flex gap-2">
       <input id="cust-doc" class="ing-input flex-1" placeholder="N° de documento…" inputmode="numeric" />
       <button id="cust-find" class="ing-btn-secondary !px-3">Buscar</button>
+      <button id="cust-new" class="ing-btn-secondary !px-2" title="Crear cliente nuevo"><span class="material-symbols-outlined text-base align-middle">person_add</span></button>
     </div>
     <div class="text-[11px] text-[#7d6c5c] mt-1">Consumidor final · buscá o creá el cliente por documento</div>`;
 }
@@ -1126,6 +1127,10 @@ function wireCustomerBox(root, side, sale, totals) {
     } catch (e) { toast('Error buscando: ' + (e.message || ''), 'error'); }
   };
   box.querySelector('#cust-find')?.addEventListener('click', doFind);
+  box.querySelector('#cust-new')?.addEventListener('click', () => {
+    const v = (doc?.value || '').trim();
+    openCreateCustomer(v, (created) => { state.customers.push(created); sale.customer_id = created.id; persistDraft(); refresh(); });
+  });
   doc?.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); doFind(); } });
 }
 
@@ -1134,8 +1139,12 @@ async function openCreateCustomer(doc, onCreated) {
     title: 'Nuevo cliente',
     size: 'sm',
     bodyHTML: `
-      <label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1">Nombre y apellido *</label>
-      <input id="nc-name" class="ing-input w-full mb-3" placeholder="Nombre" />
+      <div class="grid grid-cols-2 gap-2 mb-3">
+        <div><label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1">Nombre *</label>
+          <input id="nc-name" class="ing-input w-full" placeholder="Nombre" /></div>
+        <div><label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1">Apellido *</label>
+          <input id="nc-lastname" class="ing-input w-full" placeholder="Apellido" /></div>
+      </div>
       <div class="grid grid-cols-3 gap-2 mb-3">
         <div class="col-span-1"><label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1">Tipo</label>
           <select id="nc-dtype" class="ing-input w-full"><option>DNI</option><option>CUIT</option><option>CUIL</option><option>Pasaporte</option></select></div>
@@ -1144,18 +1153,22 @@ async function openCreateCustomer(doc, onCreated) {
       </div>
       <label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1">Teléfono</label>
       <input id="nc-phone" class="ing-input w-full" placeholder="Opcional" />
+      <p class="text-[11px] text-[#7d6c5c] mt-2">Solo Nombre, Apellido y Documento son obligatorios.</p>
     `,
     footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="ok">Crear cliente</button>`,
     onOpen: (el, close) => {
       setTimeout(() => el.querySelector('#nc-name')?.focus(), 50);
       el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
       el.querySelector('[data-act="ok"]').addEventListener('click', async () => {
-        const name = el.querySelector('#nc-name').value.trim();
+        const nombre = el.querySelector('#nc-name').value.trim();
+        const apellido = el.querySelector('#nc-lastname').value.trim();
         const documentNumber = el.querySelector('#nc-doc').value.trim();
         const documentType = el.querySelector('#nc-dtype').value;
         const phone = el.querySelector('#nc-phone').value.trim() || null;
-        if (!name) { toast('El nombre es obligatorio', 'warn'); return; }
+        if (!nombre) { toast('El nombre es obligatorio', 'warn'); return; }
+        if (!apellido) { toast('El apellido es obligatorio', 'warn'); return; }
         if (!documentNumber) { toast('El documento es obligatorio', 'warn'); return; }
+        const name = `${nombre} ${apellido}`.trim();
         try {
           const created = await api('/api/customers', { method: 'POST', body: { name, documentNumber, documentType, phone } });
           close(true); toast('Cliente creado', 'success'); onCreated && onCreated(created);
