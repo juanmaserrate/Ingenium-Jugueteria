@@ -1635,8 +1635,9 @@ async function bulkPricePct(container) {
 async function bulkPromoPct(container) {
   const pctStr = prompt('Descuento % sobre el PRECIO para la promo de Tienda Nube (ej: 10 = precio −10%).\nPoné 0 para QUITAR la promo.');
   if (pctStr === null) return;
-  const pct = Number(pctStr);
-  if (Number.isNaN(pct) || pct < 0 || pct >= 100) { toast('Valor inválido (0 a 99)', 'error'); return; }
+  // Tolerante: acepta "10", "10%", "-10", "10 %" y coma decimal ("10,5"). Toma el valor absoluto.
+  const pct = Math.abs(Number(String(pctStr).trim().replace('%', '').replace(',', '.').replace(/\s+/g, '')));
+  if (!Number.isFinite(pct) || pct >= 100) { toast('Valor inválido (0 a 99)', 'error'); return; }
   let done = 0;
   for (const id of state.selected) {
     const p = await P.byId(id);
