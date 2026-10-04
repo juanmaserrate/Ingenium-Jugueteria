@@ -64,12 +64,15 @@ function mountCombo(wrap, { options, selectedId = '', allLabel = 'Todos', onPick
     if (it.dataset.create && onCreate) {
       const name = input.value.trim();
       if (!name) return;
-      try { const created = await onCreate(name); closeMenu(); onPick(created?.id || ''); }
+      try { const created = await onCreate(name); input.value = created?.name || name; closeMenu(); onPick(created?.id || ''); }
       catch { /* el repo ya avisa con toast */ }
       return;
     }
+    const pid = it.dataset.id || '';
+    // Reflejar la elección en el input visible (para usarlo sin re-render, p. ej. en formularios).
+    input.value = pid ? (sorted.find((o) => o.id === pid)?.name || '') : '';
     closeMenu();
-    onPick(it.dataset.id || '');
+    onPick(pid);
   });
 }
 
@@ -824,28 +827,32 @@ async function openProductForm(p, container) {
         <input name="price" type="text" inputmode="decimal" class="ing-input mt-1" value="${p?.price || 0}" />
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Categoría</span>
-        <select name="category_id" class="ing-input mt-1">
-          <option value="">--</option>
-          ${cats.map(c => `<option value="${c.id}" ${p?.category_id===c.id?'selected':''}>${c.name}</option>`).join('')}
-        </select>
+        <div class="combo-wrap relative mt-1" data-combo-form="category">
+          <input class="ing-input w-full combo-form-display" autocomplete="off" placeholder="--" />
+          <input type="hidden" name="category_id" value="${p?.category_id || ''}" />
+          <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
+        </div>
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Marca</span>
-        <select name="brand_id" class="ing-input mt-1">
-          <option value="">--</option>
-          ${brs.map(b => `<option value="${b.id}" ${p?.brand_id===b.id?'selected':''}>${b.name}</option>`).join('')}
-        </select>
+        <div class="combo-wrap relative mt-1" data-combo-form="brand">
+          <input class="ing-input w-full combo-form-display" autocomplete="off" placeholder="--" />
+          <input type="hidden" name="brand_id" value="${p?.brand_id || ''}" />
+          <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
+        </div>
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Proveedor</span>
-        <select name="supplier_id" class="ing-input mt-1">
-          <option value="">--</option>
-          ${sps.map(s => `<option value="${s.id}" ${p?.supplier_id===s.id?'selected':''}>${s.name}</option>`).join('')}
-        </select>
+        <div class="combo-wrap relative mt-1" data-combo-form="supplier">
+          <input class="ing-input w-full combo-form-display" autocomplete="off" placeholder="--" />
+          <input type="hidden" name="supplier_id" value="${p?.supplier_id || ''}" />
+          <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
+        </div>
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Subcategoría</span>
-        <select name="subcategory_id" class="ing-input mt-1">
-          <option value="">--</option>
-          ${subs.map(s => `<option value="${s.id}" ${p?.subcategory_id===s.id?'selected':''}>${s.name}</option>`).join('')}
-        </select>
+        <div class="combo-wrap relative mt-1" data-combo-form="subcategory">
+          <input class="ing-input w-full combo-form-display" autocomplete="off" placeholder="--" />
+          <input type="hidden" name="subcategory_id" value="${p?.subcategory_id || ''}" />
+          <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
+        </div>
       </label>
       <label class="col-span-2"><span class="text-xs font-black text-[#7d6c5c] uppercase">Código</span>
         <input name="code" class="ing-input mt-1" value="${p?.code || ''}" />
@@ -985,6 +992,31 @@ async function openProductForm(p, container) {
     closeOnBackdrop: false,
     onOpen: (el, close) => {
       const form = el.querySelector('#prod-form');
+
+      // Comboboxes escribibles para Categoría/Subcategoría/Marca/Proveedor (mismo UX que
+      // los filtros: se escribe, se acota, alfabético, y se puede crear al vuelo).
+      const mountFormCombo = (key, options, repo, cacheCol, singular) => {
+        const wrap = form.querySelector(`[data-combo-form="${key}"]`);
+        if (!wrap) return;
+        const hidden = wrap.querySelector('input[type="hidden"]');
+        mountCombo(wrap, {
+          options,
+          selectedId: hidden.value || '',
+          allLabel: `— sin ${singular} —`,
+          onPick: (id) => { hidden.value = id; },
+          onCreate: async (nm) => {
+            const r = await repo.save({ name: nm });
+            if (state.cache) state.cache[cacheCol] = [...(state.cache[cacheCol] || []), r];
+            toast(`${singular[0].toUpperCase() + singular.slice(1)} "${nm}" creada`, 'success');
+            return r;
+          },
+        });
+      };
+      mountFormCombo('category', [...(state.cache?.categories || [])], Categories, 'categories', 'categoría');
+      mountFormCombo('subcategory', [...(state.cache?.subcats || [])], Subcategories, 'subcats', 'subcategoría');
+      mountFormCombo('brand', [...(state.cache?.brands || [])], Brands, 'brands', 'marca');
+      mountFormCombo('supplier', [...(state.cache?.suppliers || [])], Suppliers, 'suppliers', 'proveedor');
+
       // Live recompute de precio cuando cambia costo o %
       const costIn = form.elements.cost, pctIn = form.elements.margin_pct, priceIn = form.elements.price;
       const nz = (s) => parseNumAR(s) ?? 0; // tolerante a formato AR (1.234,56)
@@ -1378,6 +1410,7 @@ async function openProductForm(p, container) {
           form.elements.brand_id.value = '';
           form.elements.supplier_id.value = '';
           form.elements.subcategory_id.value = '';
+          form.querySelectorAll('.combo-form-display').forEach((i) => { i.value = ''; });
         }
         setTimeout(() => form.elements.name.focus(), 30);
       };
