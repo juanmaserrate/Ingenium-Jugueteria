@@ -9,7 +9,7 @@ import { toast } from '../core/notifications.js';
 import { confirmModal } from '../components/modal.js';
 import { openTnProductModal } from '../components/tn-product-form.js';
 import { Suppliers } from '../repos/catalog.js';
-import { activeBranchId } from '../core/auth.js';
+import { activeBranchId, isAdmin } from '../core/auth.js';
 
 const state = {
   view: 'list',      // 'list' | 'editor'
@@ -28,6 +28,13 @@ const STATUS_CLASS = {
   received: 'bg-green-100 text-green-800',
   cancelled: 'bg-red-100 text-red-700',
 };
+
+// ¿Se pueden editar los items de esta compra con el rol actual?
+// Admin: en cualquier estado editable (draft/pending). Encargado: solo recepción (pending).
+function canEditItems(p) {
+  if (!p || p.status === 'received' || p.status === 'cancelled') return false;
+  return isAdmin() || p.status === 'pending';
+}
 
 export async function mount(el) {
   state.view = 'list';
@@ -56,15 +63,15 @@ async function renderList(el) {
         <h1 class="text-3xl font-black text-[#241a0d]">Compras</h1>
         <p class="text-sm text-[#7d6c5c] mt-1">Facturas de proveedores, ingreso de mercadería y % de éxito</p>
       </div>
-      <button id="btn-new" class="ing-btn-primary text-sm">
+      ${isAdmin() ? `<button id="btn-new" class="ing-btn-primary text-sm">
         <span class="material-symbols-outlined align-middle text-base">add</span> Nueva compra
-      </button>
+      </button>` : ''}
     </div>
     <div id="purchases-list" class="ing-card overflow-auto">
       <div class="text-center py-8 text-[#7d6c5c]">Cargando...</div>
     </div>
   `;
-  el.querySelector('#btn-new').addEventListener('click', () => openEditor(el, null));
+  el.querySelector('#btn-new')?.addEventListener('click', () => openEditor(el, null));
   await refreshList(el);
 }
 
@@ -193,6 +200,14 @@ function newRow(marginPct) {
 function renderEditor(el) {
   const p = state.purchase;
   const readonly = p.status === 'received' || p.status === 'cancelled';
+  const admin = isAdmin();
+  // El encargado solo opera la RECEPCIÓN de una compra pendiente (ver backend
+  // assertCanEditPurchase). El admin arma la factura y edita en cualquier estado editable.
+  const canEditInvoice = admin;                       // header, adjuntar, scan IA, márgenes, marcar pendiente
+  const reception = !admin && p.status === 'pending'; // encargado recibiendo
+  const itemsEditable = !readonly && (admin || reception);
+  const showScanBox = itemsEditable && p.status === 'pending'; // consola de escaneo de recepción
+  const headerDisabled = !canEditInvoice || readonly;
   const lomasName = state.branches.find((b) => b.id === 'br_lomas')?.name || 'Lomas';
   const banfName = state.branches.find((b) => b.id === 'br_banfield')?.name || 'Banfield';
 
@@ -206,34 +221,38 @@ function renderEditor(el) {
     </div>
 
     <!-- Header -->
+    ${reception ? `<div class="ing-card mb-4 bg-[#eaf3ff] border border-[#bcd6f5] text-[#2563eb] text-sm font-bold flex items-center gap-2">
+      <span class="material-symbols-outlined text-base">inventory_2</span>
+      Modo recepción — escaneá cada producto que llega, ajustá el reparto y confirmá con "Recibir mercadería".
+    </div>` : ''}
     <div class="ing-card mb-4 grid grid-cols-2 md:grid-cols-5 gap-3">
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Proveedor</span>
-        <select id="h-supplier" class="ing-input mt-1" ${readonly ? 'disabled' : ''}>
+        <select id="h-supplier" class="ing-input mt-1" ${headerDisabled ? 'disabled' : ''}>
           <option value="">— Sin proveedor —</option>
           ${state.suppliers.map((s) => `<option value="${s.id}" ${p.supplierId === s.id ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}
         </select>
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Tipo factura</span>
-        <select id="h-invoice-type" class="ing-input mt-1" ${readonly ? 'disabled' : ''}>
+        <select id="h-invoice-type" class="ing-input mt-1" ${headerDisabled ? 'disabled' : ''}>
           <option value="A" ${p.invoiceType === 'A' ? 'selected' : ''}>A</option>
           <option value="B" ${p.invoiceType === 'B' ? 'selected' : ''}>B</option>
           <option value="X" ${p.invoiceType === 'X' ? 'selected' : ''}>X</option>
         </select>
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">N° factura</span>
-        <input id="h-invoice-number" class="ing-input mt-1" value="${escapeHtml(p.invoiceNumber || '')}" ${readonly ? 'disabled' : ''} />
+        <input id="h-invoice-number" class="ing-input mt-1" value="${escapeHtml(p.invoiceNumber || '')}" ${headerDisabled ? 'disabled' : ''} />
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Sucursal</span>
-        <select id="h-branch" class="ing-input mt-1" ${readonly ? 'disabled' : ''}>
+        <select id="h-branch" class="ing-input mt-1" ${headerDisabled ? 'disabled' : ''}>
           ${state.branches.map((b) => `<option value="${b.id}" ${p.branchId === b.id ? 'selected' : ''}>${escapeHtml(b.name)}</option>`).join('')}
         </select>
       </label>
       <label><span class="text-xs font-black text-[#7d6c5c] uppercase">Margen global %</span>
-        <input id="h-margin" type="number" step="0.01" class="ing-input mt-1" value="${p.marginPctDefault ?? 100}" ${readonly ? 'disabled' : ''} />
+        <input id="h-margin" type="number" step="0.01" class="ing-input mt-1" value="${p.marginPctDefault ?? 100}" ${headerDisabled ? 'disabled' : ''} />
       </label>
     </div>
 
-    ${readonly ? '' : `
+    ${!canEditInvoice ? '' : `
     <!-- Factura adjunta + controles globales -->
     <div class="ing-card mb-4 flex flex-wrap items-center gap-3">
       <label class="inline-flex items-center gap-2 cursor-pointer px-3 py-2 bg-white border border-[#e3ceba] rounded-xl hover:bg-[#fff1e6]">
@@ -252,6 +271,22 @@ function renderEditor(el) {
       <button id="btn-split" class="ing-btn-secondary text-xs">Repartir stock</button>
       <button id="btn-add-row" class="ing-btn-primary text-xs"><span class="material-symbols-outlined align-middle text-sm">add</span> Fila</button>
     </div>`}
+
+    ${reception ? `
+    <!-- Controles de recepción (encargado) -->
+    <div class="ing-card mb-4 flex flex-wrap items-center gap-3">
+      <button id="btn-split" class="ing-btn-secondary text-xs">Repartir stock</button>
+      <button id="btn-add-row" class="ing-btn-secondary text-xs"><span class="material-symbols-outlined align-middle text-sm">add</span> Fila manual</button>
+    </div>` : ''}
+
+    ${showScanBox ? `
+    <!-- Consola de escaneo de recepción -->
+    <div class="ing-card mb-4 flex items-center gap-3 bg-[#fff8f0]">
+      <span class="material-symbols-outlined text-[#d82f1e]">barcode_scanner</span>
+      <input id="recv-scan" type="text" autocomplete="off" placeholder="Escaneá un código de barras y Enter…"
+        class="flex-1 bg-white border border-[#e3ceba] focus:border-[#d82f1e] rounded-xl px-3 py-2 text-base font-mono" />
+      <span id="recv-scan-msg" class="text-xs text-[#7d6c5c] min-w-[160px]"></span>
+    </div>` : ''}
 
     <!-- Tabla de items -->
     <div class="ing-card overflow-auto">
@@ -288,8 +323,8 @@ function renderEditor(el) {
     <!-- Footer acciones -->
     <div class="mt-4 flex justify-end gap-3">
       ${readonly ? `<div class="text-sm text-[#7d6c5c] self-center">Compra ${STATUS_LABEL[p.status]?.toLowerCase()} — solo lectura</div>` : `
-        <button id="btn-save" class="ing-btn-secondary">Guardar borrador</button>
-        ${p.status === 'draft' ? '<button id="btn-pending" class="ing-btn-secondary">Marcar pendiente</button>' : ''}
+        ${itemsEditable ? `<button id="btn-save" class="ing-btn-secondary">${reception ? 'Guardar cambios' : 'Guardar borrador'}</button>` : ''}
+        ${admin && p.status === 'draft' ? '<button id="btn-pending" class="ing-btn-secondary">Marcar pendiente</button>' : ''}
         ${p.status === 'pending' ? '<button id="btn-receive" class="ing-btn-primary">Recibir mercadería</button>' : ''}
       `}
     </div>
@@ -349,24 +384,24 @@ async function loadSuccessPanel(el) {
 function wireEditorControls(el) {
   const margin = () => Number(el.querySelector('#h-margin').value) || 0;
 
-  el.querySelector('#btn-add-row').addEventListener('click', () => {
+  el.querySelector('#btn-add-row')?.addEventListener('click', () => {
     state.rows.push(newRow(margin()));
     renderRows(el);
   });
-  el.querySelector('#btn-apply-margin').addEventListener('click', () => {
+  el.querySelector('#btn-apply-margin')?.addEventListener('click', () => {
     const m = margin();
     state.rows.forEach((r) => { r.marginPct = m; r.salePrice = round2(r.unitCost * (1 + m / 100)); });
     renderRows(el);
   });
-  el.querySelector('#btn-round-10').addEventListener('click', () => {
+  el.querySelector('#btn-round-10')?.addEventListener('click', () => {
     state.rows.forEach((r) => { r.salePrice = Math.round(r.salePrice / 10) * 10; });
     renderRows(el);
   });
-  el.querySelector('#btn-round-100').addEventListener('click', () => {
+  el.querySelector('#btn-round-100')?.addEventListener('click', () => {
     state.rows.forEach((r) => { r.salePrice = Math.round(r.salePrice / 100) * 100; });
     renderRows(el);
   });
-  el.querySelector('#btn-split').addEventListener('click', () => {
+  el.querySelector('#btn-split')?.addEventListener('click', () => {
     state.rows.forEach((r) => {
       const q = Math.max(0, Math.trunc(r.qtyOrdered || 0));
       r.qtyLomas = Math.ceil(q / 2);     // mayor a Lomas si impar
@@ -374,6 +409,9 @@ function wireEditorControls(el) {
     });
     renderRows(el);
   });
+
+  // Consola de escaneo de recepción: reconocer físicamente cada producto.
+  wireReceptionScan(el);
 
   // Adjuntar factura (scan IA llega en Fase 5; por ahora solo guarda el documento)
   const docInput = el.querySelector('#doc-input');
@@ -445,6 +483,8 @@ function wireEditorControls(el) {
         el.querySelector('#h-invoice-number').value = res.invoiceNumber;
       }
       renderRows(el);
+      // Persistir el preview automáticamente (queda "almacenado" sin depender de Guardar manual).
+      try { await savePurchase(el, { silent: true }); } catch { /* el usuario puede Guardar a mano */ }
       toast(`${scanned.length} línea(s) extraída(s)${res.scanStatus === 'partial' ? ' — revisá las dudosas' : ''}`, 'success');
     } catch (err) {
       if (err instanceof ApiError && err.code === 'SCAN_UNAVAILABLE') {
@@ -491,10 +531,79 @@ function wireEditorControls(el) {
   });
 }
 
+// Consola de escaneo de recepción: al escanear un barcode, si coincide con una fila
+// la resalta (reconocido); si está en la DB pero no en la lista, agrega la fila con sus
+// datos; si no existe, agrega una fila nueva en blanco para completar.
+function wireReceptionScan(el) {
+  const input = el.querySelector('#recv-scan');
+  if (!input) return;
+  const msg = el.querySelector('#recv-scan-msg');
+  const setMsg = (t, cls = 'text-[#7d6c5c]') => { if (msg) { msg.className = `text-xs min-w-[160px] ${cls}`; msg.textContent = t; } };
+  const margin = () => Number(el.querySelector('#h-margin')?.value) || 100;
+  setTimeout(() => input.focus(), 50);
+
+  const flashRow = (idx) => {
+    const tr = el.querySelector(`tr[data-idx="${idx}"]`);
+    if (!tr) return;
+    tr.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    tr.classList.add('ring-2', 'ring-[#d82f1e]', 'bg-[#fff1e6]');
+    setTimeout(() => tr.classList.remove('ring-2', 'ring-[#d82f1e]', 'bg-[#fff1e6]'), 1500);
+  };
+
+  const handle = async (code) => {
+    const barcode = (code || '').trim();
+    if (!barcode) return;
+    // 1) ¿Ya está en la lista?
+    const idx = state.rows.findIndex((r) => (r.barcode || '').trim() === barcode);
+    if (idx >= 0) {
+      flashRow(idx);
+      setMsg(`✓ reconocido: ${state.rows[idx].rawName || barcode}`, 'text-green-700 font-bold');
+      return;
+    }
+    // 2) Buscar en la DB
+    setMsg('Buscando…');
+    let res = null;
+    try {
+      [res] = await api('/api/purchases/match', { method: 'POST', body: { lines: [{ barcode }] } });
+    } catch { /* best-effort */ }
+    const m = margin();
+    if (res && res.variantId) {
+      const unitCost = res.currentCost || 0;
+      state.rows.push({
+        id: null, variantId: res.variantId, productId: res.productId, matchType: res.matchType,
+        rawName: res.productName || '', barcode, sku: '',
+        qtyOrdered: 1, unitCost, marginPct: m, salePrice: round2(unitCost * (1 + m / 100)),
+        qtyLomas: 0, qtyBanfield: 0, tnConfig: null, publishTn: false,
+      });
+      renderRows(el);
+      flashRow(state.rows.length - 1);
+      setMsg(`+ agregado (existente): ${res.productName || barcode}`, 'text-green-700 font-bold');
+    } else {
+      const row = newRow(m);
+      row.barcode = barcode;
+      state.rows.push(row);
+      renderRows(el);
+      const newIdx = state.rows.length - 1;
+      flashRow(newIdx);
+      // Foco en el nombre del producto nuevo para completarlo.
+      el.querySelector(`tr[data-idx="${newIdx}"] input[data-field="rawName"]`)?.focus();
+      setMsg('nuevo — completá nombre, costo y precio', 'text-blue-700 font-bold');
+    }
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const code = input.value;
+    input.value = '';
+    handle(code).finally(() => { input.focus(); });
+  });
+}
+
 function renderRows(el) {
   const body = el.querySelector('#items-body');
   const emptyEl = el.querySelector('#items-empty');
-  const readonly = state.purchase.status === 'received' || state.purchase.status === 'cancelled';
+  const readonly = !canEditItems(state.purchase); // "readonly" = no editable con el rol actual
   if (!body) return;
   if (state.rows.length === 0) {
     body.innerHTML = '';
