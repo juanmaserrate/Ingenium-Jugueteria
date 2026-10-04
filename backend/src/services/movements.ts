@@ -55,7 +55,7 @@ export async function getProductMovements(productId: string, opts: { limit?: num
     if (delta === 0) continue;
     const desc = a.description || '';
     const isCompra = /^Compra #/i.test(desc);
-    movs.push({ datetime: a.datetime, type: isCompra ? 'compra' : 'ajuste', branchId, variantId: vid, variantName: vName.get(vid) || '', delta, ref: isCompra ? desc : 'Ajuste', detail: isCompra ? '' : desc, userId: a.userId });
+    movs.push({ datetime: a.datetime, type: isCompra ? 'compra' : 'ajuste', branchId, variantId: vid, variantName: vName.get(vid) || '', delta, ref: isCompra ? desc : '', detail: isCompra ? '' : desc, userId: a.userId });
   }
 
   // --- Transferencias (confirmadas) ---

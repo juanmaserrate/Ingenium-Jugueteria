@@ -1631,7 +1631,7 @@ async function openMovements(productId) {
                     <td class="whitespace-nowrap">${fmtDateTime(m.datetime)}</td>
                     <td><span class="px-2 py-0.5 rounded-full text-[11px] font-bold ${chip[m.type] || 'bg-[#fff1e6] text-[#7d6c5c]'}">${label[m.type] || m.type}</span></td>
                     <td>${brName(m.branchId)}</td>
-                    <td class="text-xs">${escapeAttr(m.ref || '')}${m.detail ? ' · ' + escapeAttr(m.detail) : ''}${m.variantName ? ' · ' + escapeAttr(m.variantName) : ''}</td>
+                    <td class="text-xs">${[m.ref, m.detail, m.variantName].filter(Boolean).map(escapeAttr).join(' · ')}</td>
                     <td class="text-right font-bold ${m.delta >= 0 ? 'text-green-700' : 'text-red-600'}">${m.delta >= 0 ? '+' : ''}${m.delta}</td>
                     <td class="text-right font-bold text-[#241a0d]">${m.balance}</td>
                   </tr>`).join('')}
