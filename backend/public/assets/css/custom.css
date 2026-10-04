@@ -142,6 +142,15 @@ html.dark .bg-\[\#fff1e6\] { background: #2a2219 !important; }
 html.dark .bg-\[\#f5dfca\] { background: #33291e !important; }
 html.dark .bg-\[\#e3ceba\] { background: #3a2e22 !important; }
 html.dark .bg-\[\#d4bca6\] { background: #4a3a2a !important; }
+/* Superficies claras que faltaban cubrir (quedaban en blanco en modo oscuro) */
+html.dark .bg-\[\#fff8f0\] { background: #1a1714 !important; }
+html.dark .bg-\[\#fffdfb\] { background: #1e1a16 !important; }
+html.dark .bg-white\/60 { background: rgba(30,26,22,.6) !important; }
+/* Badges de color (violeta / azul) + su texto para que contrasten en oscuro */
+html.dark .bg-\[\#f3e8ff\] { background: #2a2140 !important; }
+html.dark .text-\[\#7c3aed\] { color: #c4a8ff !important; }
+html.dark .bg-\[\#eaf3ff\] { background: #152335 !important; }
+html.dark .text-\[\#2563eb\] { color: #8ab4ff !important; }
 
 /* Texto claro sobre fondo oscuro */
 html.dark .text-\[\#241a0d\] { color: #f3ece3 !important; }   /* texto principal */
@@ -192,3 +201,12 @@ html.dark ::-webkit-scrollbar-thumb:hover { background: #5c4a36; }
 /* Inputs nativos select/checkbox heredan contraste */
 html.dark select.ing-input option { background: #1e1a16; color: #f3ece3; }
 html.dark input[type="date"], html.dark input[type="month"], html.dark input[type="time"] { color-scheme: dark; }
+
+/* ---- Zebra striping sutil en filas del inventario ---- */
+/* Va al final a propósito: el hover queda declarado DESPUÉS del zebra para ganarle. */
+.ing-table tbody tr.ing-row-alt { background: #fcf5ef; }
+html.dark .ing-table tbody tr.ing-row-alt { background: rgba(255,255,255,.03); }
+.ing-table tbody tr:hover,
+.ing-table tbody tr.ing-row-alt:hover { background: #f6e7d7; }
+html.dark .ing-table tbody tr:hover,
+html.dark .ing-table tbody tr.ing-row-alt:hover { background: rgba(216,47,30,.14); }

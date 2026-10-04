@@ -197,7 +197,7 @@ const state = {
   tab: 'products',
   selected: new Set(),
   page: 0,
-  filters: { search: '', category: '', brand: '', supplier: '', onlyMeli: false, variant: '', stock: 'all' },
+  filters: { search: '', category: '', brand: '', supplier: '', onlyMeli: false, variant: '', stock: 'all', stockMax: null },
   sort: 'newest', // newest | oldest | name — por defecto los más nuevos primero
   expandedVariants: new Set(), // productos con el detalle de variantes desplegado
   visibleCols: new Set(['code', 'name', 'category', 'brand', 'supplier', 'cost', 'price', 'margin', 'stock_lomas', 'stock_banfield', 'total', 'meli']),
@@ -340,10 +340,11 @@ async function renderProducts(container, forceReload = false) {
         Object.entries(v.attributes || {}).some(([k, val]) => `${k} ${val}`.toLowerCase().includes(vq)));
       if (!hit) return false;
     }
-    if (f.stock && f.stock !== 'all') {
+    if ((f.stock && f.stock !== 'all') || f.stockMax != null) {
       const total = stockOf(p.id, 'br_lomas').qty + stockOf(p.id, 'br_banfield').qty;
       if (f.stock === 'with' && total <= 0) return false;   // solo con stock
       if (f.stock === 'zero' && total > 0) return false;      // solo sin stock (0 o negativo)
+      if (f.stockMax != null && total > f.stockMax) return false; // stock por cantidad: total <= máximo
     }
     return true;
   });
@@ -433,6 +434,7 @@ async function renderProducts(container, forceReload = false) {
           <option value="with" ${f.stock==='with'?'selected':''}>Con stock</option>
           <option value="zero" ${f.stock==='zero'?'selected':''}>Sin stock (0)</option>
         </select>
+        <input id="f-stock-max" type="number" min="0" inputmode="numeric" class="ing-filter w-28" placeholder="Stock ≤" title="Mostrar productos con stock total menor o igual a esta cantidad" value="${f.stockMax != null ? f.stockMax : ''}" />
         <select id="f-sort" class="ing-filter" title="Ordenar">
           <option value="newest" ${state.sort==='newest'?'selected':''}>Más nuevos</option>
           <option value="oldest" ${state.sort==='oldest'?'selected':''}>Más viejos</option>
@@ -482,8 +484,8 @@ async function renderProducts(container, forceReload = false) {
         </thead>
         <tbody>
           ${list.length === 0 ? `<tr><td colspan="${visibleCols.length+2}" class="text-center py-8 text-[#7d6c5c]">Sin productos que coincidan</td></tr>` :
-            pageRows.map(p => `
-            <tr data-id="${p.id}" class="group">
+            pageRows.map((p, i) => `
+            <tr data-id="${p.id}" class="group${i % 2 ? ' ing-row-alt' : ''}">
               <td class="whitespace-nowrap"><input type="checkbox" class="row-check rounded text-[#d82f1e] focus:ring-[#d82f1e]" ${state.selected.has(p.id)?'checked':''} />${p.has_variants ? `<button data-vexp="${p.id}" title="Ver variantes" class="ml-1 align-middle"><span class="material-symbols-outlined text-base text-[#7d6c5c] hover:text-[#d82f1e] transition-transform ${state.expandedVariants.has(p.id)?'rotate-90':''}" data-vchev="${p.id}">chevron_right</span></button>` : ''}</td>
               ${visibleCols.map(c => `<td class="${c.align==='right'?'text-right':c.align==='center'?'text-center':''}" ${c.editable?`data-editable="${c.editable}" data-field="${c.field||c.id}"`:''}>${c.render(p)}</td>`).join('')}
               <td class="text-right">
@@ -527,8 +529,9 @@ async function renderProducts(container, forceReload = false) {
   container.querySelector('#f-meli').addEventListener('change', e => { state.filters.onlyMeli = e.target.checked; state.page = 0; renderProducts(container); });
   container.querySelector('#f-variant').addEventListener('input', e => { state.filters.variant = e.target.value; state.page = 0; scheduleFilterRender(container, 'f-variant'); });
   container.querySelector('#f-stock').addEventListener('change', e => { state.filters.stock = e.target.value; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-stock-max').addEventListener('change', e => { const v = e.target.value.trim(); state.filters.stockMax = v === '' ? null : Math.max(0, Math.floor(Number(v) || 0)); state.page = 0; renderProducts(container); });
   container.querySelector('#f-sort').addEventListener('change', e => { state.sort = e.target.value; state.page = 0; renderProducts(container); });
-  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false, variant:'', stock:'all' }; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false, variant:'', stock:'all', stockMax:null }; state.page = 0; renderProducts(container); });
 
   container.querySelector('#btn-new').addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-cols').addEventListener('click', () => openColumnsModal(cols, container));
