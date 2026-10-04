@@ -135,29 +135,20 @@ export async function authRoutes(app: FastifyInstance) {
     if (!existing && !hasPin) throw new ValidationError('PIN requerido para crear el usuario');
     // Solo tocamos el PIN si vino uno nuevo; al actualizar sin PIN, se conserva.
     const pinData = hasPin ? { pinSalt: u.pinSalt!, pinHash: u.pinHash!, pinIters: u.pinIters! } : {};
-    const saved = await prisma.user.upsert({
-      where: { id: u.id },
-      create: {
-        id: u.id,
-        branchId: u.branchId,
-        name: u.name,
-        lastname: u.lastname,
-        role: u.role,
-        email: u.email,
-        active: u.active,
-        ...(pinData as { pinSalt: string; pinHash: string; pinIters: number }),
-      },
-      update: {
-        branchId: u.branchId,
-        name: u.name,
-        lastname: u.lastname,
-        role: u.role,
-        email: u.email,
-        active: u.active,
-        ...pinData,
-      },
-      select: { id: true, branchId: true, name: true, role: true, active: true },
-    });
+    const common = {
+      branchId: u.branchId,
+      name: u.name,
+      lastname: u.lastname,
+      role: u.role,
+      email: u.email,
+      active: u.active,
+    };
+    const select = { id: true, branchId: true, name: true, role: true, active: true } as const;
+    // Actualizar (conserva PIN si no vino) o crear (PIN garantizado por el check de arriba).
+    // No usamos upsert: su bloque `create` exigiría los campos de PIN aunque se haga update.
+    const saved = existing
+      ? await prisma.user.update({ where: { id: u.id }, data: { ...common, ...pinData }, select })
+      : await prisma.user.create({ data: { id: u.id, ...common, ...(pinData as { pinSalt: string; pinHash: string; pinIters: number }) }, select });
     return { ok: true, user: saved };
   });
 
