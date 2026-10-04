@@ -48,6 +48,7 @@ const PAGE_LABELS = {
 
 const ROLE_LABELS = {
   admin: 'ADMIN',
+  encargado: 'ENCARGADO',
   cashier: 'CAJERO',
   manager: 'ENCARGADO',
   seller: 'VENDEDOR',

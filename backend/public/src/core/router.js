@@ -1,6 +1,15 @@
 // Router por hash: #/pos, #/inventory, etc.
 // Cada módulo exporta un mount(container, params) y un unmount() opcional.
 
+import { isAdmin } from './auth.js';
+
+// Rutas solo-admin: si un encargado entra por URL, se lo manda al POS.
+const ADMIN_ONLY = new Set([
+  '/dashboard', '/productos-pendientes', '/integraciones', '/conflictos',
+  '/balance', '/profits', '/contribution', '/checks',
+  '/employees', '/tasks', '/calendar', '/reports', '/history', '/settings',
+]);
+
 const routes = new Map();
 let currentUnmount = null;
 let container = null;
@@ -31,6 +40,12 @@ async function render(path) {
   // Split path y params "#/pos" o "#/sale/123"
   const [base, ...rest] = path.split('/').filter(Boolean);
   const key = `/${base || 'dashboard'}`;
+  // Guard de rol: el encargado no accede a módulos de administración ni por URL.
+  if (ADMIN_ONLY.has(key) && !isAdmin()) {
+    if (location.hash !== '#/pos') { location.hash = '/pos'; return; }
+    const target = routes.get('/pos');
+    if (target) { const mod = await target(); await (mod.mount || mod.default)(container, { params: [] }); return; }
+  }
   const loader = routes.get(key) || routes.get('/404');
   if (!loader) {
     container.innerHTML = `<div class="ing-stub"><span class="material-symbols-outlined">error</span><p>Ruta no encontrada: ${path}</p></div>`;

@@ -9,7 +9,7 @@ import { getAll, newId, put, del, tx, stockId, get } from '../core/db.js';
 import { money, fmtDateTime } from '../core/format.js';
 import { openModal, confirmModal } from '../components/modal.js';
 import { toast } from '../core/notifications.js';
-import { activeBranchId, currentSession } from '../core/auth.js';
+import { activeBranchId, currentSession, isAdmin } from '../core/auth.js';
 import * as Audit from '../core/audit.js';
 import { exportSimple } from '../core/xlsx.js';
 import { printHTML } from '../core/pdf.js';
@@ -132,7 +132,9 @@ function variantDetailRow(p, nCols) {
     const qL = v.stocks?.br_lomas?.qty ?? 0;
     const qB = v.stocks?.br_banfield?.qty ?? 0;
     const resv = (v.stocks?.br_lomas?.reserved ?? 0) + (v.stocks?.br_banfield?.reserved ?? 0);
-    const stkInput = (branch, val) => `<input type="number" min="0" step="1" value="${val}" data-vstock="${v.id}" data-vbranch="${branch}" data-pid="${p.id}" class="w-16 text-center border border-[#e3ceba] rounded-md py-0.5 focus:border-[#d82f1e] focus:ring-1 focus:ring-[#d82f1e]" />`;
+    const stkInput = (branch, val) => isAdmin()
+      ? `<input type="number" min="0" step="1" value="${val}" data-vstock="${v.id}" data-vbranch="${branch}" data-pid="${p.id}" class="w-16 text-center border border-[#e3ceba] rounded-md py-0.5 focus:border-[#d82f1e] focus:ring-1 focus:ring-[#d82f1e]" />`
+      : `<span class="font-bold">${val}</span>`;
     return `<tr>
       <td class="py-1 pr-4 font-bold text-[#241a0d]">${escapeAttr(val)}</td>
       <td class="py-1 pr-4 font-mono text-xs text-[#7d6c5c]">${escapeAttr(v.code || '')}</td>
@@ -309,6 +311,7 @@ async function renderProducts(container, forceReload = false) {
   }
 
   const { products, stocks, categories, brands, suppliers, branches } = state.cache;
+  const canEdit = isAdmin(); // el encargado ve el inventario pero NO lo modifica
 
   // Maps y helpers derivados del caché (O(n) lookup → O(1) map)
   const catMap = Object.fromEntries((categories || []).map(c => [c.id, c.name]));
@@ -454,13 +457,13 @@ async function renderProducts(container, forceReload = false) {
         <button id="btn-refresh" class="ing-btn-secondary text-sm" title="Actualizar datos desde el servidor">
           <span class="material-symbols-outlined align-middle text-base">sync</span>
         </button>
-        <button id="btn-new" class="ing-btn-primary text-sm">
+        ${canEdit ? `<button id="btn-new" class="ing-btn-primary text-sm">
           <span class="material-symbols-outlined align-middle text-base">add</span> Nuevo
-        </button>
+        </button>` : ''}
       </div>
 
       <!-- Bulk actions bar -->
-      <div id="bulk-bar" class="hidden mt-4 p-3 bg-[#fff1e6] rounded-2xl flex items-center gap-3 border border-[#e3ceba]">
+      ${canEdit ? `<div id="bulk-bar" class="hidden mt-4 p-3 bg-[#fff1e6] rounded-2xl flex items-center gap-3 border border-[#e3ceba]">
         <span id="bulk-count" class="text-sm font-black text-[#d82f1e]"></span>
         <button id="bulk-edit" class="text-xs ing-btn-primary !py-1.5 !px-3"><span class="material-symbols-outlined align-middle text-sm">edit_note</span> Editar campos</button>
         <button id="bulk-meli-on" class="text-xs ing-btn-secondary !py-1.5 !px-3">Publicar en MELI</button>
@@ -469,7 +472,7 @@ async function renderProducts(container, forceReload = false) {
         <button id="bulk-promo-pct" class="text-xs ing-btn-secondary !py-1.5 !px-3">Promo −% del precio</button>
         <button id="bulk-delete" class="text-xs px-3 py-1.5 rounded-full bg-red-50 text-red-600 font-bold hover:bg-red-100">Eliminar</button>
         <button id="bulk-clear" class="text-xs text-[#7d6c5c] hover:underline ml-auto">Deseleccionar</button>
-      </div>
+      </div>` : ''}
     </div>
 
     ${pagBar('top')}
@@ -477,7 +480,7 @@ async function renderProducts(container, forceReload = false) {
       <table class="ing-table w-full text-sm">
         <thead>
           <tr>
-            <th class="w-8"><input type="checkbox" id="check-all" class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" /></th>
+            <th class="w-8">${canEdit ? '<input type="checkbox" id="check-all" class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />' : ''}</th>
             ${visibleCols.map(c => `<th class="${c.align==='right'?'text-right':c.align==='center'?'text-center':''}">${c.label}</th>`).join('')}
             <th class="w-8"></th>
           </tr>
@@ -486,13 +489,13 @@ async function renderProducts(container, forceReload = false) {
           ${list.length === 0 ? `<tr><td colspan="${visibleCols.length+2}" class="text-center py-8 text-[#7d6c5c]">Sin productos que coincidan</td></tr>` :
             pageRows.map((p, i) => `
             <tr data-id="${p.id}" class="group${i % 2 ? ' ing-row-alt' : ''}">
-              <td class="whitespace-nowrap"><input type="checkbox" class="row-check rounded text-[#d82f1e] focus:ring-[#d82f1e]" ${state.selected.has(p.id)?'checked':''} />${p.has_variants ? `<button data-vexp="${p.id}" title="Ver variantes" class="ml-1 align-middle"><span class="material-symbols-outlined text-base text-[#7d6c5c] hover:text-[#d82f1e] transition-transform ${state.expandedVariants.has(p.id)?'rotate-90':''}" data-vchev="${p.id}">chevron_right</span></button>` : ''}</td>
-              ${visibleCols.map(c => `<td class="${c.align==='right'?'text-right':c.align==='center'?'text-center':''}" ${c.editable?`data-editable="${c.editable}" data-field="${c.field||c.id}"`:''}>${c.render(p)}</td>`).join('')}
+              <td class="whitespace-nowrap">${canEdit ? `<input type="checkbox" class="row-check rounded text-[#d82f1e] focus:ring-[#d82f1e]" ${state.selected.has(p.id)?'checked':''} />` : ''}${p.has_variants ? `<button data-vexp="${p.id}" title="Ver variantes" class="ml-1 align-middle"><span class="material-symbols-outlined text-base text-[#7d6c5c] hover:text-[#d82f1e] transition-transform ${state.expandedVariants.has(p.id)?'rotate-90':''}" data-vchev="${p.id}">chevron_right</span></button>` : ''}</td>
+              ${visibleCols.map(c => `<td class="${c.align==='right'?'text-right':c.align==='center'?'text-center':''}" ${c.editable && canEdit?`data-editable="${c.editable}" data-field="${c.field||c.id}"`:''}>${c.render(p)}</td>`).join('')}
               <td class="text-right">
-                <button data-tnlink="${p.id}" title="${p.linked_tn ? 'Vinculado a Tienda Nube (click para desvincular)' : 'Vincular con Tienda Nube'}" class="${p.linked_tn ? '' : 'opacity-0 group-hover:opacity-100'} p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base ${p.linked_tn ? 'text-green-600' : 'text-[#7d6c5c]'}">${p.linked_tn ? 'link' : 'add_link'}</span></button>
+                ${canEdit ? `<button data-tnlink="${p.id}" title="${p.linked_tn ? 'Vinculado a Tienda Nube (click para desvincular)' : 'Vincular con Tienda Nube'}" class="${p.linked_tn ? '' : 'opacity-0 group-hover:opacity-100'} p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base ${p.linked_tn ? 'text-green-600' : 'text-[#7d6c5c]'}">${p.linked_tn ? 'link' : 'add_link'}</span></button>` : ''}
                 <button data-hist="${p.id}" title="Historial de movimientos" class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base text-[#7d6c5c]">history</span></button>
-                <button data-edit="${p.id}" class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base text-[#7d6c5c]">edit</span></button>
-                <button data-del="${p.id}"  class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 rounded-full transition-all"><span class="material-symbols-outlined text-base text-red-500">delete</span></button>
+                ${canEdit ? `<button data-edit="${p.id}" class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base text-[#7d6c5c]">edit</span></button>
+                <button data-del="${p.id}"  class="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 rounded-full transition-all"><span class="material-symbols-outlined text-base text-red-500">delete</span></button>` : ''}
               </td>
             </tr>
             ${p.has_variants ? variantDetailRow(p, visibleCols.length) : ''}
@@ -534,7 +537,7 @@ async function renderProducts(container, forceReload = false) {
   container.querySelector('#f-sort').addEventListener('change', e => { state.sort = e.target.value; state.page = 0; renderProducts(container); });
   container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false, variant:'', stock:'all', stockMax:null }; state.page = 0; renderProducts(container); });
 
-  container.querySelector('#btn-new').addEventListener('click', () => openProductForm(null, container));
+  container.querySelector('#btn-new')?.addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-cols').addEventListener('click', () => openColumnsModal(cols, container));
   container.querySelector('#btn-refresh').addEventListener('click', async () => {
     state.cache = null; // Invalida caché para forzar recarga desde el servidor
@@ -565,7 +568,7 @@ async function renderProducts(container, forceReload = false) {
       updateBulkBar(container);
     });
   });
-  container.querySelector('#check-all').addEventListener('change', e => {
+  container.querySelector('#check-all')?.addEventListener('change', e => {
     state.selected = new Set(e.target.checked ? list.map(p => p.id) : []);
     renderProducts(container);
   });
@@ -665,15 +668,17 @@ async function renderProducts(container, forceReload = false) {
     td.addEventListener('dblclick', () => editInline(td, list, container));
   });
 
-  // Bulk buttons
+  // Bulk buttons (solo existen para el admin)
   const bulkBar = container.querySelector('#bulk-bar');
-  bulkBar.querySelector('#bulk-clear').addEventListener('click', () => { state.selected.clear(); renderProducts(container); });
-  bulkBar.querySelector('#bulk-edit').addEventListener('click', () => bulkEditFields(container));
-  bulkBar.querySelector('#bulk-meli-on').addEventListener('click', () => bulkSetMeli(true, container));
-  bulkBar.querySelector('#bulk-meli-off').addEventListener('click', () => bulkSetMeli(false, container));
-  bulkBar.querySelector('#bulk-price-pct').addEventListener('click', () => bulkPricePct(container));
-  bulkBar.querySelector('#bulk-promo-pct').addEventListener('click', () => bulkPromoPct(container));
-  bulkBar.querySelector('#bulk-delete').addEventListener('click', () => bulkDelete(container));
+  if (bulkBar) {
+    bulkBar.querySelector('#bulk-clear').addEventListener('click', () => { state.selected.clear(); renderProducts(container); });
+    bulkBar.querySelector('#bulk-edit').addEventListener('click', () => bulkEditFields(container));
+    bulkBar.querySelector('#bulk-meli-on').addEventListener('click', () => bulkSetMeli(true, container));
+    bulkBar.querySelector('#bulk-meli-off').addEventListener('click', () => bulkSetMeli(false, container));
+    bulkBar.querySelector('#bulk-price-pct').addEventListener('click', () => bulkPricePct(container));
+    bulkBar.querySelector('#bulk-promo-pct').addEventListener('click', () => bulkPromoPct(container));
+    bulkBar.querySelector('#bulk-delete').addEventListener('click', () => bulkDelete(container));
+  }
 }
 
 function stockCell(s) {

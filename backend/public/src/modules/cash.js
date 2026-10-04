@@ -4,7 +4,7 @@
 import * as Cash from '../repos/cash.js';
 import * as Settings from '../repos/settings.js';
 import { money, fmtDateTime, todayKey } from '../core/format.js';
-import { activeBranchId, currentSession } from '../core/auth.js';
+import { activeBranchId, currentSession, isAdmin } from '../core/auth.js';
 import { openModal, confirmModal } from '../components/modal.js';
 import { toast } from '../core/notifications.js';
 import { on, EV } from '../core/events.js';
@@ -357,7 +357,7 @@ async function renderSafe(container, el, branchId, registerBalance) {
         <button id="sf-deposit" class="ing-btn-primary flex items-center gap-2"><span class="material-symbols-outlined text-base">savings</span> Depositar</button>
         <button id="sf-withdraw" class="ing-btn-secondary flex items-center gap-2"><span class="material-symbols-outlined text-base">payments</span> Retirar</button>
         <button id="sf-expense" class="ing-btn-secondary flex items-center gap-2"><span class="material-symbols-outlined text-base">shopping_bag</span> Registrar gasto</button>
-        <button id="sf-adjust" class="ing-btn-secondary flex items-center gap-2"><span class="material-symbols-outlined text-base">tune</span> Reajustar saldo</button>
+        ${isAdmin() ? '<button id="sf-adjust" class="ing-btn-secondary flex items-center gap-2"><span class="material-symbols-outlined text-base">tune</span> Reajustar saldo</button>' : ''}
       </div>
     </div>
     <div class="ing-card overflow-hidden">
@@ -381,7 +381,7 @@ async function renderSafe(container, el, branchId, registerBalance) {
   container.querySelector('#sf-deposit').addEventListener('click', () => depositModal(el, registerBalance));
   container.querySelector('#sf-withdraw').addEventListener('click', () => withdrawModal(el, bal));
   container.querySelector('#sf-expense').addEventListener('click', () => safeExpenseModal(el, bal));
-  container.querySelector('#sf-adjust').addEventListener('click', () => adjustSafeModal(el, bal));
+  container.querySelector('#sf-adjust')?.addEventListener('click', () => adjustSafeModal(el, bal));
 }
 
 async function depositModal(el, registerBalance) {

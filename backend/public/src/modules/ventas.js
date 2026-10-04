@@ -8,7 +8,7 @@ import { api } from '../core/api.js';
 import { getAll } from '../core/db.js';
 import * as Settings from '../repos/settings.js';
 import { money, fmtDateTime, todayKey } from '../core/format.js';
-import { activeBranchId } from '../core/auth.js';
+import { activeBranchId, isAdmin } from '../core/auth.js';
 import { toast } from '../core/notifications.js';
 import { on, EV } from '../core/events.js';
 import { openModal, confirmModal } from '../components/modal.js';
@@ -201,7 +201,7 @@ function render(el) {
     <div class="ing-card p-2.5 mb-4">
       <div class="flex flex-wrap gap-1.5 items-center">
         <div class="flex gap-1">
-          ${['day', 'month', 'year', 'custom', 'all'].map(p => `<button data-period="${p}" class="px-2.5 py-1 text-xs font-bold rounded-md ${state.period === p ? 'bg-[#d82f1e] text-white' : 'bg-[#fff1e6] text-[#7d6c5c]'}">${{ day: 'Día', month: 'Mes', year: 'Año', custom: 'Rango', all: 'Todo' }[p]}</button>`).join('')}
+          ${(isAdmin() ? ['day', 'month', 'year', 'custom', 'all'] : ['day']).map(p => `<button data-period="${p}" class="px-2.5 py-1 text-xs font-bold rounded-md ${state.period === p ? 'bg-[#d82f1e] text-white' : 'bg-[#fff1e6] text-[#7d6c5c]'}">${{ day: 'Día', month: 'Mes', year: 'Año', custom: 'Rango', all: 'Todo' }[p]}</button>`).join('')}
         </div>
         ${dateInput}
         <select id="v-type" class="ing-filter">

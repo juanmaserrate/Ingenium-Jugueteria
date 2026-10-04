@@ -4,7 +4,7 @@
 
 import { api, ApiError } from '../core/api.js';
 import { money, money0, fmtDate, fmtDateTime, monthKey, todayKey } from '../core/format.js';
-import { activeBranchId, currentSession } from '../core/auth.js';
+import { activeBranchId, currentSession, isAdmin } from '../core/auth.js';
 import { on, EV } from '../core/events.js';
 
 const charts = new Map();       // canvasId -> Chart instance
@@ -62,8 +62,8 @@ async function ensurePanelAccess() {
 }
 
 export async function mount(el) {
-  // Candado del Panel: los usuarios no-admin necesitan contraseña.
-  if (!(await ensurePanelAccess())) return () => {};
+  // El Panel es solo del admin (el encargado no ve datos del negocio).
+  if (!isAdmin()) { const { navigate } = await import('../core/router.js'); navigate('/pos'); return () => {}; }
   state.branch = activeBranchId() || '';
   try { state.branches = await api('/auth/branches'); } catch { state.branches = []; }
   renderShell(el);

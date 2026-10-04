@@ -1,8 +1,11 @@
 // Sidebar navegación. Se ancla al hash actual y se resalta solo.
+// admin:true → módulo solo para el admin (oculto al encargado).
+
+import { isAdmin } from '../core/auth.js';
 
 const NAV = [
   { section: 'Operación' },
-  { path: '/dashboard',    label: 'Panel',            icon: 'dashboard' },
+  { path: '/dashboard',    label: 'Panel',            icon: 'dashboard', admin: true },
   { path: '/pos',          label: 'POS',              icon: 'point_of_sale' },
   { path: '/ventas',       label: 'Ventas',           icon: 'receipt_long' },
   { path: '/returns',      label: 'Devoluciones',     icon: 'assignment_return' },
@@ -14,30 +17,41 @@ const NAV = [
 
   { section: 'Tienda Nube' },
   { path: '/ventas-web',          label: 'Ventas Web',        icon: 'shopping_bag' },
-  { path: '/productos-pendientes',label: 'Productos TN',      icon: 'new_releases' },
-  { path: '/integraciones',       label: 'Integraciones',     icon: 'link' },
-  { path: '/conflictos',          label: 'Conflictos de sync',icon: 'sync_problem' },
+  { path: '/productos-pendientes',label: 'Productos TN',      icon: 'new_releases', admin: true },
+  { path: '/integraciones',       label: 'Integraciones',     icon: 'link', admin: true },
+  { path: '/conflictos',          label: 'Conflictos de sync',icon: 'sync_problem', admin: true },
 
   { section: 'Comercial' },
   { path: '/crm',          label: 'Clientes',         icon: 'group' },
-  { path: '/balance',      label: 'Saldo',            icon: 'trending_up' },
-  { path: '/profits',      label: 'Ganancias',        icon: 'paid' },
-  { path: '/contribution', label: 'Contribución',     icon: 'pie_chart' },
-  { path: '/checks',       label: 'Cheques',          icon: 'receipt_long' },
+  { path: '/balance',      label: 'Saldo',            icon: 'trending_up', admin: true },
+  { path: '/profits',      label: 'Ganancias',        icon: 'paid', admin: true },
+  { path: '/contribution', label: 'Contribución',     icon: 'pie_chart', admin: true },
+  { path: '/checks',       label: 'Cheques',          icon: 'receipt_long', admin: true },
 
   { section: 'Gente' },
-  { path: '/employees',    label: 'Empleados',        icon: 'badge' },
-  { path: '/tasks',        label: 'Tareas',           icon: 'task_alt' },
+  { path: '/employees',    label: 'Empleados',        icon: 'badge', admin: true },
+  { path: '/tasks',        label: 'Tareas',           icon: 'task_alt', admin: true },
 
   { section: 'Adicional' },
-  { path: '/calendar',     label: 'Calendario',       icon: 'calendar_month' },
-  { path: '/reports',      label: 'Reportes',         icon: 'summarize' },
-  { path: '/history',      label: 'Historial',        icon: 'history' },
-  { path: '/settings',     label: 'Configuración',    icon: 'settings' },
+  { path: '/calendar',     label: 'Calendario',       icon: 'calendar_month', admin: true },
+  { path: '/reports',      label: 'Reportes',         icon: 'summarize', admin: true },
+  { path: '/history',      label: 'Historial',        icon: 'history', admin: true },
+  { path: '/settings',     label: 'Configuración',    icon: 'settings', admin: true },
 ];
 
+// Items visibles según rol, sacando los headers de secciones que quedaron vacías.
+function visibleNav() {
+  const admin = isAdmin();
+  const kept = NAV.filter(item => item.section || !(item.admin && !admin));
+  return kept.filter((item, i) => {
+    if (!item.section) return true;
+    const next = kept[i + 1];
+    return next && !next.section; // header solo si lo sigue al menos un módulo
+  });
+}
+
 function renderNav(currentPath) {
-  return NAV.map(item => {
+  return visibleNav().map(item => {
     if (item.section) {
       return `<div class="px-6 pt-3 pb-1 text-[0.625rem] font-black text-[#7d6c5c] dark:text-[#c9b6a4] uppercase tracking-[0.18em]">${item.section}</div>`;
     }

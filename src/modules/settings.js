@@ -228,9 +228,10 @@ async function editUser(container, existing, branches) {
         </div>
         <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Rol</label>
           <select id="u-role" class="ing-input w-full mt-1">
-            <option value="admin" ${u.role==='admin'?'selected':''}>Admin</option>
-            <option value="manager" ${u.role==='manager'?'selected':''}>Manager</option>
-            <option value="seller" ${u.role==='seller'?'selected':''}>Vendedor</option>
+            <option value="admin" ${u.role==='admin'?'selected':''}>Administrador</option>
+            <option value="encargado" ${u.role==='encargado'?'selected':''}>Encargado</option>
+            ${u.role==='manager' ? '<option value="manager" selected>Manager (legacy)</option>' : ''}
+            ${u.role==='seller' ? '<option value="seller" selected>Vendedor (legacy)</option>' : ''}
           </select>
         </div>
         <div class="col-span-2"><label class="text-xs font-bold text-[#7d6c5c] uppercase">PIN (4 dígitos)</label><input id="u-pin" type="password" maxlength="6" placeholder="${isNew ? 'Ingresar PIN' : 'Dejar vacío para no cambiar'}" class="ing-input w-full mt-1" /></div>

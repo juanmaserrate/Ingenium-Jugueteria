@@ -34,6 +34,11 @@ export function isLoggedIn() {
   return !!currentSession();
 }
 
+// Rol de la sesión actual. 'manager' (legacy) se trata igual que 'encargado'.
+export function currentRole() { return currentSession()?.role || null; }
+export function isAdmin() { return currentRole() === 'admin'; }
+export function isEncargado() { const r = currentRole(); return r === 'encargado' || r === 'manager'; }
+
 // Bump timestamp de última actividad (llamado por el watcher en app.html).
 export function touchActivity() {
   localStorage.setItem(LAST_ACTIVITY_KEY, String(Date.now()));
