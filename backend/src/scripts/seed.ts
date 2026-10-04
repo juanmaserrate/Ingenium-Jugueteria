@@ -69,20 +69,12 @@ export async function runSeed() {
         active: true,
       },
     });
-  } else {
-    // Rehash con algoritmo compatible con el frontend (salt-as-bytes).
-    // Lo hacemos sólo si el hash actual no valida con el algoritmo nuevo
-    // para no tocar admins cuyo PIN haya sido cambiado manualmente.
-    const saltBuf = Buffer.from(existingAdmin.pinSalt, 'hex');
-    const expected = pbkdf2Sync(DEFAULT_ADMIN.pin, saltBuf, existingAdmin.pinIters, 32, 'sha256').toString('hex');
-    if (expected !== existingAdmin.pinHash) {
-      const pin = hashPin(DEFAULT_ADMIN.pin);
-      await prisma.user.update({
-        where: { id: DEFAULT_ADMIN.id },
-        data: { pinSalt: pin.pinSalt, pinHash: pin.pinHash, pinIters: pin.pinIters },
-      });
-    }
   }
+  // Admin EXISTENTE: no se toca. Antes había un "rehash" que, si el PIN no coincidía
+  // con el default '1234', lo reescribía al default — y eso pisaba en CADA arranque el PIN
+  // que el usuario hubiera cambiado (bug: reseteaba 'genio' → '1234' en cada deploy).
+  // La migración de algoritmo (salt-as-bytes) ya corrió hace tiempo; el seed solo crea
+  // el admin si falta y nunca reescribe su PIN/rol/nombre.
 
   const frontendUsersCreated: string[] = [];
   const frontendUsersRehashed: string[] = [];
@@ -106,17 +98,8 @@ export async function runSeed() {
       frontendUsersCreated.push(u.id);
       continue;
     }
-    // Rehash si el PIN por defecto ya no valida con el algoritmo nuevo.
-    const saltBuf = Buffer.from(existing.pinSalt, 'hex');
-    const expected = pbkdf2Sync(u.pin, saltBuf, existing.pinIters, 32, 'sha256').toString('hex');
-    if (expected !== existing.pinHash) {
-      const pin = hashPin(u.pin);
-      await prisma.user.update({
-        where: { id: u.id },
-        data: { pinSalt: pin.pinSalt, pinHash: pin.pinHash, pinIters: pin.pinIters },
-      });
-      frontendUsersRehashed.push(u.id);
-    }
+    // Usuario EXISTENTE (encargado): no se toca su PIN ni su rol. Antes se reescribía al
+    // default (1111/2222) en cada arranque si no coincidía → pisaba PINs/roles cambiados.
   }
 
   const legacyCleaned = await cleanupLegacyBranches();
