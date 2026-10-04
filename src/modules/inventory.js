@@ -388,8 +388,6 @@ async function renderProducts(container, forceReload = false) {
   // U-6: KPIs cross-sucursal sobre la lista filtrada.
   const sumLomas = list.reduce((s, p) => s + (stockOf(p.id, 'br_lomas').qty || 0), 0);
   const sumBanf  = list.reduce((s, p) => s + (stockOf(p.id, 'br_banfield').qty || 0), 0);
-  const lowStock = list.filter(p => (stockOf(p.id, 'br_lomas').qty + stockOf(p.id, 'br_banfield').qty) <= 2).length;
-  const outStockBoth = list.filter(p => stockOf(p.id, 'br_lomas').qty === 0 && stockOf(p.id, 'br_banfield').qty === 0).length;
 
   // Barra de paginación reutilizable (se muestra arriba y abajo de la tabla).
   const pagBar = (pos) => `
@@ -408,11 +406,10 @@ async function renderProducts(container, forceReload = false) {
 
   container.innerHTML = `
     <!-- U-6: banner de consolidado cross-sucursal -->
-    <div class="grid grid-cols-4 gap-3 mb-4">
+    <div class="grid grid-cols-3 gap-3 mb-4">
       <div class="ing-card p-4"><div class="text-[10px] font-black uppercase text-[#7d6c5c]">Productos visibles</div><div class="text-2xl font-black text-[#241a0d]">${list.length}</div></div>
       <div class="ing-card p-4"><div class="text-[10px] font-black uppercase text-[#7d6c5c]">Stock ${lomas?.name || 'Lomas'}</div><div class="text-2xl font-black text-[#d82f1e]">${sumLomas}</div></div>
       <div class="ing-card p-4"><div class="text-[10px] font-black uppercase text-[#7d6c5c]">Stock ${banf?.name || 'Banfield'}</div><div class="text-2xl font-black text-[#d82f1e]">${sumBanf}</div></div>
-      <div class="ing-card p-4"><div class="text-[10px] font-black uppercase text-[#7d6c5c]">Bajo / sin stock</div><div class="text-2xl font-black text-orange-600">${lowStock} <span class="text-sm font-bold text-red-600">· ${outStockBoth} en 0</span></div></div>
     </div>
 
     <!-- Toolbar -->
