@@ -227,6 +227,18 @@ html.dark #topbar { background: rgba(18,16,14,.85) !important; border-bottom-col
 html.dark .modal-content { background: #1e1a16; color: #f3ece3; }
 html.dark .modal-backdrop { background: rgba(0,0,0,.65); }
 html.dark .toast { background: #1e1a16; color: #f3ece3; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+/* Stub de módulo (cargando / error de carga) legible en dark. */
+html.dark .ing-stub { color: #c9b6a4; }
+html.dark .ing-stub .material-symbols-outlined { color: #ff7a6c; }
+/* KPIs del Panel: el color va inline (style="color:…"), así que el CSS por clase no lo
+   puede cambiar. En dark aclaramos con un filtro de brillo para que el rojo/verde/púrpura
+   tengan contraste sobre la card oscura. */
+html.dark .kpi-value, html.dark .kpi-icon { filter: brightness(1.45) saturate(1.05); }
+/* Columnas del kanban de Tareas: su fondo va inline (claro), así que en dark lo pisamos
+   por columna (data-col) con un tinte oscuro, conservando la distinción de color. */
+html.dark [data-col="todo"]  { background: #241d16 !important; }
+html.dark [data-col="doing"] { background: #2a2416 !important; }
+html.dark [data-col="done"]  { background: #16251c !important; }
 
 /* Scroll */
 html.dark ::-webkit-scrollbar-track { background: #1a1714; }
