@@ -9,7 +9,18 @@ import { on, EV } from '../core/events.js';
 
 const charts = new Map();       // canvasId -> Chart instance
 let refreshTimer = null;
+let lastChartEl = null, lastChartData = null; // para re-pintar los gráficos al cambiar de tema
 const state = { branch: activeBranchId() || '', branches: [] };
+
+// Colores de los gráficos según el tema (Chart.js por defecto usa texto/gridlines
+// oscuros, ilegibles en modo oscuro). text = ejes/leyendas, grid = líneas, sliceBorder
+// = separación entre porciones de torta/dona.
+function chartColors() {
+  const dark = document.documentElement.classList.contains('dark');
+  return dark
+    ? { text: '#c9b6a4', grid: 'rgba(255,255,255,.08)', sliceBorder: '#1e1a16' }
+    : { text: '#7d6c5c', grid: '#fff1e6', sliceBorder: '#ffffff' };
+}
 
 // Contraseña del Panel para los usuarios NO admin (por sucursal). El admin entra
 // directo. Es un candado simple del lado del cliente para que los operadores no
@@ -80,8 +91,18 @@ export async function mount(el) {
     on(EV.RETURN_CONFIRMED, handler),
     on(EV.BRANCH_CHANGED, handler),
   ];
+  // Re-pintar los gráficos con los colores del tema nuevo al toggle (sin re-fetch).
+  const onTheme = () => {
+    if (!lastChartEl || !lastChartData || !lastChartEl.isConnected) return;
+    renderSalesChart(lastChartEl, lastChartData.serie30 || []);
+    renderMethodsChart(lastChartEl, lastChartData.methods || []);
+    renderTopProductsChart(lastChartEl, lastChartData.topProducts || []);
+    renderCategoryChart(lastChartEl, lastChartData.byCategory || []);
+  };
+  window.addEventListener('ingenium:theme', onTheme);
   return () => {
     offs.forEach(f => f());
+    window.removeEventListener('ingenium:theme', onTheme);
     charts.forEach(c => { try { c.destroy(); } catch {} });
     charts.clear();
     if (refreshTimer) clearTimeout(refreshTimer);
@@ -299,6 +320,7 @@ async function refreshAll(el) {
   setKpi(el, 'kpi-expenses', money0(d.expensesMonth), `Devoluciones: ${money0(d.returnsMonth)}`);
   setKpi(el, 'kpi-birthdays', d.birthdays, `cumpleaños este mes`);
 
+  lastChartEl = el; lastChartData = d; // para re-pintar al cambiar de tema
   renderSalesChart(el, d.serie30 || []);
   renderMethodsChart(el, d.methods || []);
   renderTopProductsChart(el, d.topProducts || []);
@@ -324,6 +346,7 @@ function upsertChart(canvas, config) {
 function renderSalesChart(el, serie30) {
   const canvas = el.querySelector('#chart-sales');
   if (!canvas) return;
+  const C = chartColors();
   const labels = serie30.map(p => { const [, m, dd] = p.day.split('-'); return `${dd}/${m}`; });
   const data = serie30.map(p => Number((p.total || 0).toFixed(2)));
   const ctx = canvas.getContext('2d');
@@ -346,8 +369,8 @@ function renderSalesChart(el, serie30) {
         tooltip: { callbacks: { label: (ctx) => '$ ' + Number(ctx.parsed.y).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) } },
       },
       scales: {
-        x: { grid: { display: false }, ticks: { font: { size: 10 }, maxRotation: 0 } },
-        y: { grid: { color: '#fff1e6' }, ticks: { font: { size: 10 }, callback: v => '$ ' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v) } },
+        x: { grid: { display: false }, ticks: { color: C.text, font: { size: 10 }, maxRotation: 0 } },
+        y: { grid: { color: C.grid }, ticks: { color: C.text, font: { size: 10 }, callback: v => '$ ' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v) } },
       },
     },
   });
@@ -356,6 +379,7 @@ function renderSalesChart(el, serie30) {
 function renderMethodsChart(el, methods) {
   const canvas = el.querySelector('#chart-methods');
   if (!canvas) return;
+  const C = chartColors();
   const labels = methods.map(m => m.methodName || m.methodId || '—');
   const data = methods.map(m => Number((m.amount || 0).toFixed(2)));
   const palette = ['#d82f1e', '#f97316', '#eab308', '#16a34a', '#0ea5e9', '#8b5cf6', '#ec4899', '#64748b'];
@@ -363,12 +387,12 @@ function renderMethodsChart(el, methods) {
     type: 'doughnut',
     data: {
       labels: labels.length ? labels : ['Sin datos'],
-      datasets: [{ data: data.length ? data : [1], backgroundColor: labels.length ? palette.slice(0, labels.length) : ['#e3ceba'], borderWidth: 2, borderColor: '#fff' }],
+      datasets: [{ data: data.length ? data : [1], backgroundColor: labels.length ? palette.slice(0, labels.length) : ['#e3ceba'], borderWidth: 2, borderColor: C.sliceBorder }],
     },
     options: {
       responsive: true, maintainAspectRatio: false, cutout: '65%',
       plugins: {
-        legend: { display: labels.length > 0, position: 'bottom', labels: { font: { size: 11 }, padding: 10, boxWidth: 12 } },
+        legend: { display: labels.length > 0, position: 'bottom', labels: { color: C.text, font: { size: 11 }, padding: 10, boxWidth: 12 } },
         tooltip: { enabled: labels.length > 0, callbacks: { label: (ctx) => `${ctx.label}: $ ${Number(ctx.parsed).toLocaleString('es-AR', { minimumFractionDigits: 2 })}` } },
       },
     },
@@ -378,6 +402,7 @@ function renderMethodsChart(el, methods) {
 function renderTopProductsChart(el, topProducts) {
   const canvas = el.querySelector('#chart-top');
   if (!canvas) return;
+  const C = chartColors();
   const labels = topProducts.map(p => { const n = p.name || ''; return n.length > 22 ? n.slice(0, 20) + '…' : n; });
   const data = topProducts.map(p => p.qty || 0);
   upsertChart(canvas, {
@@ -391,8 +416,8 @@ function renderTopProductsChart(el, topProducts) {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: {
-        x: { grid: { color: '#fff1e6' }, ticks: { font: { size: 10 }, precision: 0 } },
-        y: { grid: { display: false }, ticks: { font: { size: 10 } } },
+        x: { grid: { color: C.grid }, ticks: { color: C.text, font: { size: 10 }, precision: 0 } },
+        y: { grid: { display: false }, ticks: { color: C.text, font: { size: 10 } } },
       },
     },
   });
@@ -401,6 +426,7 @@ function renderTopProductsChart(el, topProducts) {
 function renderCategoryChart(el, byCategory) {
   const canvas = el.querySelector('#chart-cat');
   if (!canvas) return;
+  const C = chartColors();
   const labels = byCategory.map(c => c.name);
   const data = byCategory.map(c => Number((c.total || 0).toFixed(2)));
   const palette = ['#d82f1e', '#f97316', '#eab308', '#16a34a', '#0ea5e9', '#8b5cf6', '#ec4899', '#64748b', '#14b8a6', '#a855f7'];
@@ -408,12 +434,12 @@ function renderCategoryChart(el, byCategory) {
     type: 'pie',
     data: {
       labels: labels.length ? labels : ['Sin ventas'],
-      datasets: [{ data: data.length ? data : [1], backgroundColor: labels.length ? palette.slice(0, labels.length) : ['#e3ceba'], borderWidth: 2, borderColor: '#fff' }],
+      datasets: [{ data: data.length ? data : [1], backgroundColor: labels.length ? palette.slice(0, labels.length) : ['#e3ceba'], borderWidth: 2, borderColor: C.sliceBorder }],
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: {
-        legend: { display: labels.length > 0, position: 'right', labels: { font: { size: 11 }, padding: 8, boxWidth: 12 } },
+        legend: { display: labels.length > 0, position: 'right', labels: { color: C.text, font: { size: 11 }, padding: 8, boxWidth: 12 } },
         tooltip: { enabled: labels.length > 0, callbacks: { label: (ctx) => `${ctx.label}: $ ${Number(ctx.parsed).toLocaleString('es-AR', { minimumFractionDigits: 2 })}` } },
       },
     },

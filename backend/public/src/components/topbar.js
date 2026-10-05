@@ -180,6 +180,7 @@ export async function mountTopbar(el) {
       const dark = html.classList.toggle('dark');
       html.classList.toggle('light', !dark);
       try { localStorage.setItem('ingenium_theme', dark ? 'dark' : 'light'); } catch {}
+      window.dispatchEvent(new Event('ingenium:theme')); // avisar a los gráficos u otros que repintan por tema
       render();
     });
   };
