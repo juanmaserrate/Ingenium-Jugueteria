@@ -276,10 +276,10 @@ html.dark select option { background: #1e1a16; color: #f3ece3; }
 /* Va al final a propósito: el hover queda declarado DESPUÉS del zebra para ganarle. */
 .ing-table tbody tr.ing-row-alt { background: #fcf5ef; }
 html.dark .ing-table tbody tr.ing-row-alt { background: rgba(255,255,255,.03); }
-.ing-table tbody tr:hover,
-.ing-table tbody tr.ing-row-alt:hover { background: #f6e7d7; }
-/* En dark, el hover de las filas NO cambia el fondo (el usuario no quiere que se
-   "iluminen"/pongan rojas). Las filas normales quedan transparentes y las zebra
-   conservan su tinte, así que al pasar el mouse no se nota ningún cambio. */
+/* El hover de las filas NO cambia el fondo en NINGÚN tema (el usuario no quiere que se
+   "iluminen"/pongan rojas al pasar el mouse). Cada fila conserva su fondo normal:
+   normales transparentes, zebra con su tinte. */
+.ing-table tbody tr:hover { background: transparent; }
+.ing-table tbody tr.ing-row-alt:hover { background: #fcf5ef; }
 html.dark .ing-table tbody tr:hover { background: transparent; }
 html.dark .ing-table tbody tr.ing-row-alt:hover { background: rgba(255,255,255,.03); }
