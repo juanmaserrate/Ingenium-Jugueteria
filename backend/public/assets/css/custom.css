@@ -159,6 +159,14 @@ html.dark .text-\[\#c9b6a4\] { color: #d8c8b6 !important; }
 html.dark .text-\[\#b41005\] { color: #ff8b80 !important; }   /* rojo oscuro no legible → rojo claro */
 html.dark .text-\[\#d82f1e\] { color: #ff7a6c !important; }   /* primario levemente más claro */
 
+/* Hover: en dark los fondos de hover claros se "iluminaban" (filas del carrito, botones,
+   menús). Los pasamos a un hover oscuro sutil. Los overrides de .bg-[...] base NO cubren
+   la variante hover: de Tailwind, por eso hay que declararla aparte. */
+html.dark .hover\:bg-\[\#fff1e6\]:hover { background: #2a2219 !important; }
+html.dark .hover\:bg-\[\#fff8f4\]:hover { background: #241d16 !important; }
+html.dark .hover\:bg-\[\#f5dfca\]:hover { background: #33291e !important; }
+html.dark .hover\:bg-white:hover { background: #2a2219 !important; }
+
 /* Bordes */
 html.dark .border-\[\#fff1e6\] { border-color: #2a2219 !important; }
 html.dark .border-\[\#e3ceba\] { border-color: #3a2e22 !important; }
