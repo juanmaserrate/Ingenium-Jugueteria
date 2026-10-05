@@ -163,6 +163,9 @@ html.dark .text-\[\#d82f1e\] { color: #ff7a6c !important; }   /* primario leveme
 html.dark .border-\[\#fff1e6\] { border-color: #2a2219 !important; }
 html.dark .border-\[\#e3ceba\] { border-color: #3a2e22 !important; }
 html.dark .border-\[\#d82f1e\]\/20 { border-color: rgba(255,122,108,.25) !important; }
+/* Separadores divide-*: las líneas entre filas (p. ej. catálogo al vincular TN) quedaban
+   claras en dark porque el mecanismo divide no es un border normal. */
+html.dark .divide-\[\#fff1e6\] > * + * { border-color: #2a2219 !important; }
 
 /* Estados verdes/rojos/naranjas usados en resúmenes */
 html.dark .text-green-700 { color: #7ee2a8 !important; }
