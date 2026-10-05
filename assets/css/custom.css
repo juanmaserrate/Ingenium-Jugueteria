@@ -202,6 +202,21 @@ html.dark ::-webkit-scrollbar-thumb:hover { background: #5c4a36; }
 html.dark select.ing-input option { background: #1e1a16; color: #f3ece3; }
 html.dark input[type="date"], html.dark input[type="month"], html.dark input[type="time"] { color-scheme: dark; }
 
+/* Fallback dark para CUALQUIER campo de formulario sin clase propia (p. ej. los inputs
+   de cantidad/descuento del carrito del POS que quedaban en blanco). No pisa a .ing-input
+   ni .ing-filter (tienen mayor especificidad y su propio dark). Se excluyen check/radio/range. */
+html.dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]),
+html.dark select,
+html.dark textarea {
+  background: #2a2219;
+  color: #f3ece3;
+  border-color: #3a2e22;
+}
+html.dark input:not([type="checkbox"]):not([type="radio"])::placeholder,
+html.dark textarea::placeholder { color: #8a7866; }
+/* Opciones de los <select> nativos (no sólo los .ing-input) legibles en dark. */
+html.dark select option { background: #1e1a16; color: #f3ece3; }
+
 /* ---- Zebra striping sutil en filas del inventario ---- */
 /* Va al final a propósito: el hover queda declarado DESPUÉS del zebra para ganarle. */
 .ing-table tbody tr.ing-row-alt { background: #fcf5ef; }
