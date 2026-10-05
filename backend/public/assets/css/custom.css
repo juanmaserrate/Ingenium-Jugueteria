@@ -175,6 +175,38 @@ html.dark .bg-red-50 { background: rgba(255,139,128,.08) !important; }
 html.dark .border-green-200 { border-color: rgba(126,226,168,.3) !important; }
 html.dark .border-red-200 { border-color: rgba(255,139,128,.3) !important; }
 
+/* ---- Badges/chips de color: fondo claro → tinte oscuro translúcido + texto legible ---- */
+/* Fondos (se integran con la superficie oscura en vez de quedar como recuadros claros). */
+html.dark .bg-green-100 { background: rgba(126,226,168,.15) !important; }
+html.dark .bg-emerald-100 { background: rgba(110,231,183,.15) !important; }
+html.dark .bg-red-100 { background: rgba(255,139,128,.15) !important; }
+html.dark .bg-amber-100 { background: rgba(245,200,100,.15) !important; }
+html.dark .bg-amber-50 { background: rgba(245,200,100,.09) !important; }
+html.dark .bg-yellow-100, html.dark .bg-yellow-200 { background: rgba(240,213,116,.15) !important; }
+html.dark .bg-orange-100 { background: rgba(255,150,80,.15) !important; }
+html.dark .bg-blue-100 { background: rgba(138,180,255,.15) !important; }
+html.dark .bg-blue-50 { background: rgba(138,180,255,.09) !important; }
+html.dark .bg-indigo-100, html.dark .bg-indigo-50 { background: rgba(176,168,255,.15) !important; }
+html.dark .bg-purple-100 { background: rgba(196,168,255,.15) !important; }
+html.dark .bg-pink-100, html.dark .bg-pink-50 { background: rgba(255,158,196,.15) !important; }
+html.dark .bg-teal-100 { background: rgba(111,224,208,.15) !important; }
+html.dark .bg-cyan-100 { background: rgba(111,214,224,.15) !important; }
+html.dark .bg-gray-100 { background: #2a2219 !important; }
+html.dark .bg-gray-200 { background: #33291e !important; }
+/* Textos de esos chips → variantes claras legibles sobre el tinte oscuro. */
+html.dark .text-green-800 { color: #7ee2a8 !important; }
+html.dark .text-emerald-700 { color: #6ee7b7 !important; }
+html.dark .text-red-700, html.dark .text-red-800 { color: #ff8b80 !important; }
+html.dark .text-amber-600, html.dark .text-amber-700, html.dark .text-amber-800 { color: #f3c969 !important; }
+html.dark .text-yellow-800 { color: #f0d574 !important; }
+html.dark .text-blue-700, html.dark .text-blue-800 { color: #8ab4ff !important; }
+html.dark .text-indigo-700 { color: #b0a8ff !important; }
+html.dark .text-purple-700 { color: #c4a8ff !important; }
+html.dark .text-pink-700 { color: #ff9ec4 !important; }
+html.dark .text-teal-700 { color: #6fe0d0 !important; }
+html.dark .text-cyan-700 { color: #6fd6e0 !important; }
+html.dark .text-gray-700, html.dark .text-gray-600 { color: #c9b6a4 !important; }
+
 /* Componentes */
 html.dark .ing-card { background: #1e1a16; border-color: #2a2219; color: #f3ece3; }
 html.dark .ing-input { background: #2a2219; color: #f3ece3; }
