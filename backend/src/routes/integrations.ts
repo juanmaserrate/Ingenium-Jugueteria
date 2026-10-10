@@ -172,6 +172,15 @@ export async function integrationsRoutes(app: FastifyInstance) {
         return { ok: false, status: e?.response?.status, data: e?.response?.data ?? String(e?.message || e) };
       }
     });
+    r.post('/integrations/tiendanube/raw-update-variant', adminOnly, async (req) => {
+      const tn = await getTnClient();
+      if (!tn) return { error: 'TN no conectada' };
+      const b = req.body as any;
+      try {
+        const r2 = await tn.updateVariant(b.tnProductId, b.tnVariantId, b.body);
+        return { ok: true, values: r2.values, stock: r2.stock, barcode: r2.barcode };
+      } catch (e: any) { return { ok: false, status: e?.response?.status, data: e?.response?.data ?? String(e?.message || e) }; }
+    });
     r.post('/integrations/tiendanube/raw-delete/:tnId', adminOnly, async (req) => {
       const tn = await getTnClient();
       if (!tn) return { error: 'TN no conectada' };
