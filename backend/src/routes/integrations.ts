@@ -160,6 +160,25 @@ export async function integrationsRoutes(app: FastifyInstance) {
       const body = z.object({ productId: z.string() }).parse(req.body);
       return alignTnBarcode(body.productId);
     });
+    // Diagnóstico TEMPORAL: crea un producto en TN con el body crudo que le mando y
+    // devuelve la respuesta COMPLETA de TN (para ver cómo quedan las variantes). Borrar luego.
+    r.post('/integrations/tiendanube/raw-create', adminOnly, async (req) => {
+      const tn = await getTnClient();
+      if (!tn) return { error: 'TN no conectada' };
+      try {
+        const created = await tn.createProduct(req.body);
+        return { ok: true, id: created.id, attributes: created.attributes, variants: (created.variants || []).map((v: any) => ({ id: v.id, values: v.values, sku: v.sku, barcode: v.barcode })) };
+      } catch (e: any) {
+        return { ok: false, status: e?.response?.status, data: e?.response?.data ?? String(e?.message || e) };
+      }
+    });
+    r.post('/integrations/tiendanube/raw-delete/:tnId', adminOnly, async (req) => {
+      const tn = await getTnClient();
+      if (!tn) return { error: 'TN no conectada' };
+      const { tnId } = req.params as { tnId: string };
+      await tn.deleteProduct(tnId).catch(() => null);
+      return { ok: true };
+    });
     // Diagnóstico: muestra el payload EXACTO que se le manda a TN al publicar un producto
     // (para depurar variantes/attributes). No manda nada a TN, solo arma el objeto.
     r.get('/integrations/tiendanube/product-payload/:id', adminOnly, async (req) => {
