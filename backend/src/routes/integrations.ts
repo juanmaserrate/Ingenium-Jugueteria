@@ -160,65 +160,21 @@ export async function integrationsRoutes(app: FastifyInstance) {
       const body = z.object({ productId: z.string() }).parse(req.body);
       return alignTnBarcode(body.productId);
     });
-    // Diagnóstico TEMPORAL: crea un producto en TN con el body crudo que le mando y
-    // devuelve la respuesta COMPLETA de TN (para ver cómo quedan las variantes). Borrar luego.
-    r.post('/integrations/tiendanube/raw-create', adminOnly, async (req) => {
-      const tn = await getTnClient();
-      if (!tn) return { error: 'TN no conectada' };
-      try {
-        const created = await tn.createProduct(req.body);
-        return { ok: true, id: created.id, attributes: created.attributes, variants: (created.variants || []).map((v: any) => ({ id: v.id, values: v.values, sku: v.sku, barcode: v.barcode })) };
-      } catch (e: any) {
-        return { ok: false, status: e?.response?.status, data: e?.response?.data ?? String(e?.message || e) };
-      }
-    });
-    r.post('/integrations/tiendanube/raw-update-variant', adminOnly, async (req) => {
-      const tn = await getTnClient();
-      if (!tn) return { error: 'TN no conectada' };
-      const b = req.body as any;
-      try {
-        const r2 = await tn.updateVariant(b.tnProductId, b.tnVariantId, b.body);
-        return { ok: true, values: r2.values, stock: r2.stock, barcode: r2.barcode };
-      } catch (e: any) { return { ok: false, status: e?.response?.status, data: e?.response?.data ?? String(e?.message || e) }; }
-    });
-    r.post('/integrations/tiendanube/raw-delete/:tnId', adminOnly, async (req) => {
-      const tn = await getTnClient();
-      if (!tn) return { error: 'TN no conectada' };
-      const { tnId } = req.params as { tnId: string };
-      await tn.deleteProduct(tnId).catch(() => null);
-      return { ok: true };
-    });
-    // Diagnóstico: muestra el payload EXACTO que se le manda a TN al publicar un producto
-    // (para depurar variantes/attributes). No manda nada a TN, solo arma el objeto.
-    r.get('/integrations/tiendanube/product-payload/:id', adminOnly, async (req) => {
-      const { id } = req.params as { id: string };
-      const product = await prisma.product.findUnique({ where: { id }, include: { variants: true } });
-      if (!product) return { error: 'not found' };
-      const { productToTn } = await import('../tiendanube/mappers.js');
-      return { payload: productToTn(product as any) };
-    });
     // Alineación MASIVA: pisa el barcode de TN con el código del sistema en todos los
     // enlazados que no coinciden. dryRun=true solo cuenta (no toca nada).
     r.post('/integrations/tiendanube/align-all-barcodes', adminOnly, async (req) => {
       const body = z.object({ dryRun: z.boolean().optional() }).parse(req.body ?? {});
       return enqueueAlignAllBarcodes({ dryRun: body.dryRun });
     });
-    // Diagnóstico: lee un producto en TN (precio, promo, attributes y values por variante)
-    // para verificar sync. Acepta el tnId de TN o, con ?local=1, el id LOCAL (resuelve mapping).
+    // Diagnóstico: lee un producto en TN (precio y promo por variante) para verificar sync.
     r.get('/integrations/tiendanube/product/:tnId/raw', adminOnly, async (req) => {
-      let { tnId } = req.params as { tnId: string };
-      const q = req.query as { local?: string };
+      const { tnId } = req.params as { tnId: string };
       const tn = await getTnClient();
       if (!tn) return { error: 'TN no conectada' };
-      if (q.local === '1') {
-        const m = await prisma.productTnMapping.findUnique({ where: { productId: tnId } });
-        if (!m) return { error: 'sin tnMapping (el worker todavía no publicó)' };
-        tnId = m.tnProductId;
-      }
       const p = await tn.getProduct(tnId).catch((e: any) => ({ error: e?.response?.status || String(e?.message || e) }));
       if ((p as any)?.error) return p;
-      const variants = ((p as any).variants || []).map((v: any) => ({ id: v.id, price: v.price, promotional_price: v.promotional_price, sku: v.sku, barcode: v.barcode, values: v.values }));
-      return { tnProductId: tnId, name: (p as any).name, attributes: (p as any).attributes, variants };
+      const variants = ((p as any).variants || []).map((v: any) => ({ id: v.id, price: v.price, promotional_price: v.promotional_price, sku: v.sku, barcode: v.barcode }));
+      return { tnProductId: tnId, name: (p as any).name, variants };
     });
     // Diagnóstico: fulfillment-orders de una orden TN (para verificar el modelo de armado/envío).
     r.get('/integrations/tiendanube/order/:id/fulfillment-orders', adminOnly, async (req) => {
