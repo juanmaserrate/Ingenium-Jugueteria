@@ -160,6 +160,15 @@ export async function integrationsRoutes(app: FastifyInstance) {
       const body = z.object({ productId: z.string() }).parse(req.body);
       return alignTnBarcode(body.productId);
     });
+    // Diagnóstico: muestra el payload EXACTO que se le manda a TN al publicar un producto
+    // (para depurar variantes/attributes). No manda nada a TN, solo arma el objeto.
+    r.get('/integrations/tiendanube/product-payload/:id', adminOnly, async (req) => {
+      const { id } = req.params as { id: string };
+      const product = await prisma.product.findUnique({ where: { id }, include: { variants: true } });
+      if (!product) return { error: 'not found' };
+      const { productToTn } = await import('../tiendanube/mappers.js');
+      return { payload: productToTn(product as any) };
+    });
     // Alineación MASIVA: pisa el barcode de TN con el código del sistema en todos los
     // enlazados que no coinciden. dryRun=true solo cuenta (no toca nada).
     r.post('/integrations/tiendanube/align-all-barcodes', adminOnly, async (req) => {
