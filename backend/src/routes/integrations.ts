@@ -203,15 +203,22 @@ export async function integrationsRoutes(app: FastifyInstance) {
       const body = z.object({ dryRun: z.boolean().optional() }).parse(req.body ?? {});
       return enqueueAlignAllBarcodes({ dryRun: body.dryRun });
     });
-    // Diagnóstico: lee un producto en TN (precio y promo por variante) para verificar sync.
+    // Diagnóstico: lee un producto en TN (precio, promo, attributes y values por variante)
+    // para verificar sync. Acepta el tnId de TN o, con ?local=1, el id LOCAL (resuelve mapping).
     r.get('/integrations/tiendanube/product/:tnId/raw', adminOnly, async (req) => {
-      const { tnId } = req.params as { tnId: string };
+      let { tnId } = req.params as { tnId: string };
+      const q = req.query as { local?: string };
       const tn = await getTnClient();
       if (!tn) return { error: 'TN no conectada' };
+      if (q.local === '1') {
+        const m = await prisma.productTnMapping.findUnique({ where: { productId: tnId } });
+        if (!m) return { error: 'sin tnMapping (el worker todavía no publicó)' };
+        tnId = m.tnProductId;
+      }
       const p = await tn.getProduct(tnId).catch((e: any) => ({ error: e?.response?.status || String(e?.message || e) }));
       if ((p as any)?.error) return p;
-      const variants = ((p as any).variants || []).map((v: any) => ({ id: v.id, price: v.price, promotional_price: v.promotional_price, sku: v.sku, barcode: v.barcode }));
-      return { tnProductId: tnId, name: (p as any).name, variants };
+      const variants = ((p as any).variants || []).map((v: any) => ({ id: v.id, price: v.price, promotional_price: v.promotional_price, sku: v.sku, barcode: v.barcode, values: v.values }));
+      return { tnProductId: tnId, name: (p as any).name, attributes: (p as any).attributes, variants };
     });
     // Diagnóstico: fulfillment-orders de una orden TN (para verificar el modelo de armado/envío).
     r.get('/integrations/tiendanube/order/:id/fulfillment-orders', adminOnly, async (req) => {
