@@ -1551,22 +1551,14 @@ async function openTnLinkModal(product, container) {
     title: `Vincular con Tienda Nube · ${product.name}`,
     size: 'lg',
     bodyHTML: `
-      <input id="tnl-q" class="ing-input w-full mb-2" placeholder="Buscar en Tienda Nube (nombre, barcode o SKU)…" />
-      <div id="tnl-list" class="max-h-[55vh] overflow-auto border border-[#fff1e6] rounded-xl divide-y divide-[#fff1e6]"><div class="p-4 text-center text-[#7d6c5c]">Cargando catálogo de Tienda Nube…</div></div>
-      <p class="text-xs text-[#7d6c5c] mt-2">Elegí el producto de TN que corresponde. Después te preguntamos con qué datos quedarte (los de TN o los del sistema). El stock se sincroniza automáticamente.</p>`,
+      <input id="tnl-q" class="ing-input w-full mb-2" placeholder="Escribí el nombre del producto en Tienda Nube…" />
+      <div id="tnl-list" class="max-h-[55vh] overflow-auto border border-[#fff1e6] rounded-xl divide-y divide-[#fff1e6]"><div class="p-4 text-center text-[#7d6c5c]">Escribí para buscar en Tienda Nube.</div></div>
+      <p class="text-xs text-[#7d6c5c] mt-2">Buscá por nombre y elegí el producto de TN que corresponde. Después te preguntamos con qué datos quedarte (los de TN o los del sistema). El stock se sincroniza automáticamente.</p>`,
     footerHTML: `<button class="ing-btn-secondary" data-act="close">Cerrar</button>`,
     onOpen: async (el, close) => {
       el.querySelector('[data-act="close"]').addEventListener('click', () => close(null));
       const listEl = el.querySelector('#tnl-list');
-      let catalog = [];
-      try { catalog = await P.getTnCatalog(); }
-      catch { listEl.innerHTML = '<div class="p-4 text-center text-red-600">No se pudo cargar el catálogo de TN (¿conectada?).</div>'; return; }
-      const draw = (q) => {
-        const ql = (q || '').trim().toLowerCase();
-        let rows;
-        if (ql) rows = catalog.filter(r => (r.name || '').toLowerCase().includes(ql) || (r.barcode || '').includes(ql) || (r.sku || '').toLowerCase().includes(ql));
-        else { const seed = (product.name || '').toLowerCase().slice(0, 12); rows = catalog.filter(r => (r.name || '').toLowerCase().includes(seed)); }
-        rows = rows.slice(0, 60);
+      const bind = (rows) => {
         listEl.innerHTML = rows.length ? rows.map(r => `
           <button data-tnp="${r.tnProductId}" data-tnv="${r.tnVariantId}" data-name="${escapeAttr(r.name)}" class="w-full flex items-center justify-between gap-3 px-3 py-2 hover:bg-[#fff8f4] text-left">
             <div class="min-w-0"><div class="font-bold text-sm break-words leading-tight">${escapeAttr(r.name)}</div><div class="text-xs text-[#7d6c5c] font-mono">${escapeAttr(r.barcode || r.sku || '')}${r.isVariant ? ' · (con variantes)' : ''}</div></div>
@@ -1586,9 +1578,29 @@ async function openTnLinkModal(product, container) {
           } catch (e) { toast('No se pudo vincular: ' + (e.message || ''), 'error'); }
         }));
       };
+      let seq = 0;
+      const search = async (q) => {
+        const term = (q || '').trim();
+        if (term.length < 2) { listEl.innerHTML = '<div class="p-4 text-center text-[#7d6c5c]">Escribí al menos 2 letras para buscar.</div>'; return; }
+        const mine = ++seq;
+        listEl.innerHTML = '<div class="p-4 text-center text-[#7d6c5c]">Buscando en Tienda Nube…</div>';
+        try {
+          const rows = await P.searchTnCatalog(term);
+          if (mine !== seq) return; // llegó una búsqueda más nueva → descartar esta
+          bind(rows);
+        } catch {
+          if (mine !== seq) return;
+          listEl.innerHTML = '<div class="p-4 text-center text-red-600">No se pudo buscar en TN (¿conectada?).</div>';
+        }
+      };
       const qIn = el.querySelector('#tnl-q');
-      qIn.addEventListener('input', () => draw(qIn.value));
-      draw(''); qIn.focus();
+      let deb;
+      qIn.addEventListener('input', () => { clearTimeout(deb); deb = setTimeout(() => search(qIn.value), 350); });
+      qIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { clearTimeout(deb); search(qIn.value); } });
+      // Arranca buscando por el nombre del producto del sistema (match probable), editable.
+      qIn.value = (product.name || '').trim();
+      qIn.focus(); qIn.select();
+      search(qIn.value);
     },
   });
 }

@@ -327,6 +327,15 @@ export async function getTnCatalog(force = false) {
   return _tnCatalog;
 }
 
+// Búsqueda puntual en el catálogo de TN por término (nombre). Rápida: trae solo los que
+// coinciden (en vez de volcar todo). Para el picker de vinculación en Inventario.
+export async function searchTnCatalog(q) {
+  const term = (q || '').trim();
+  if (term.length < 2) return [];
+  const resp = await api('/api/integrations/tiendanube/catalog-search?q=' + encodeURIComponent(term));
+  return resp?.rows || [];
+}
+
 export async function linkTn(productId, tnProductId, tnVariantId) {
   const r = await api('/api/integrations/tiendanube/link-manual', { method: 'POST', body: { productId, tnProductId, tnVariantId } });
   const p = _cache.byId.get(productId);

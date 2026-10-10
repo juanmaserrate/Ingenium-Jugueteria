@@ -339,6 +339,39 @@ export async function dumpTnCatalog() {
   return { count: rows.length, pages: page - 1, warning, rows };
 }
 
+/**
+ * Búsqueda puntual en el catálogo de TN por término (nombre). Usa el buscador nativo
+ * de Tienda Nube (?q=) y trae SOLO los que coinciden — para el picker de vinculación,
+ * que antes volcaba todo el catálogo en cada apertura (lento). Devuelve 1 fila por
+ * PRODUCTO (con la 1ª variante para los simples) en la forma que espera el modal.
+ */
+export async function searchTnCatalog(q: string) {
+  const term = (q || '').trim();
+  if (term.length < 2) return { rows: [] };
+  const tn = await requireTnClient();
+  let batch: any;
+  try {
+    batch = await tn.listProducts({ q: term, per_page: 50, fields: 'id,name,variants' });
+  } catch (e: any) {
+    if (e?.response?.status === 404) return { rows: [] };
+    throw e;
+  }
+  const rows = (Array.isArray(batch) ? batch : []).map((tp: any) => {
+    const vs: any[] = tp.variants ?? [];
+    const v0 = vs[0] ?? {};
+    return {
+      tnProductId: String(tp.id),
+      tnVariantId: String(v0.id ?? ''),
+      name: tnName(tp.name),
+      barcode: v0.barcode ?? '',
+      sku: v0.sku ?? '',
+      price: v0.price ?? '',
+      isVariant: vs.length !== 1,
+    };
+  });
+  return { rows };
+}
+
 export type LinkReport = {
   dryRun: boolean;
   tnProductsScanned: number;

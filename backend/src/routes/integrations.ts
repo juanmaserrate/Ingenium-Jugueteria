@@ -16,7 +16,7 @@ import { confirmSale } from '../services/sales.js';
 import { enqueueSync } from '../sync/queue.js';
 import { getTnClient } from '../tiendanube/client.js';
 import { ingestPaidOrder } from '../tiendanube/webhooks.js';
-import { linkByBarcode, dumpTnCatalog, linkManual, linkManualVariants, unlinkProduct, relinkProduct, findCodeMismatches, alignTnBarcode, enqueueAlignAllBarcodes } from '../tiendanube/link.js';
+import { linkByBarcode, dumpTnCatalog, searchTnCatalog, linkManual, linkManualVariants, unlinkProduct, relinkProduct, findCodeMismatches, alignTnBarcode, enqueueAlignAllBarcodes } from '../tiendanube/link.js';
 
 // Una orden de TN deja de necesitar asignación cuando ya está cancelada/cerrada o
 // enviada/entregada/retirada. Chequeamos el estado ACTUAL en TN (el payload guardado es
@@ -148,6 +148,13 @@ export async function integrationsRoutes(app: FastifyInstance) {
     // Vuelca el catálogo de TN (API, barcodes completos) para cruzar offline.
     r.get('/integrations/tiendanube/catalog-dump', async () => {
       return dumpTnCatalog();
+    });
+
+    // Búsqueda puntual en TN por término (para el picker de vinculación): rápida, solo
+    // trae los que coinciden con ?q= en vez de volcar todo el catálogo.
+    r.get('/integrations/tiendanube/catalog-search', adminOnly, async (req) => {
+      const { q } = req.query as { q?: string };
+      return searchTnCatalog(q ?? '');
     });
 
     // Chequeo de códigos desalineados local ↔ Tienda Nube (para detectar casos como
