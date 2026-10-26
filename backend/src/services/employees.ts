@@ -8,6 +8,7 @@ export type EmployeeInput = {
   email?: string | null;
   phone?: string | null;
   branchId?: string | null;
+  branchIds?: string[];
   role?: string | null;
   hourlyRate?: number | null;
   hireDate?: string | null;
@@ -27,6 +28,7 @@ export async function createEmployee(data: EmployeeInput) {
       email: data.email ?? null,
       phone: data.phone ?? null,
       branchId: data.branchId ?? null,
+      branchIds: (data.branchIds ?? (data.branchId ? [data.branchId] : [])) as any,
       role: data.role ?? null,
       hourlyRate: data.hourlyRate ?? 0,
       hireDate: data.hireDate ?? null,
@@ -44,6 +46,7 @@ export async function updateEmployee(id: string, data: Partial<EmployeeInput>) {
       email: data.email ?? undefined,
       phone: data.phone ?? undefined,
       branchId: data.branchId ?? undefined,
+      branchIds: data.branchIds !== undefined ? (data.branchIds as any) : undefined,
       role: data.role ?? undefined,
       hourlyRate: data.hourlyRate ?? undefined,
       hireDate: data.hireDate ?? undefined,

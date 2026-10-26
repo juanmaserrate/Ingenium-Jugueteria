@@ -13,6 +13,7 @@ const empSchema = z.object({
   email: z.string().nullable().optional(),
   phone: z.string().nullable().optional(),
   branchId: z.string().nullable().optional(),
+  branchIds: z.array(z.string()).optional(),
   role: z.string().nullable().optional(),
   hourlyRate: z.number().nullable().optional(),
   hireDate: z.string().nullable().optional(),

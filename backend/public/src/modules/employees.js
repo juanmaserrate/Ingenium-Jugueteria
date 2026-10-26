@@ -10,6 +10,7 @@ import { openModal, confirmModal } from '../components/modal.js';
 import { toast } from '../core/notifications.js';
 import { exportToXLSX } from '../core/xlsx.js';
 import { emptyRow } from '../components/empty-state.js';
+import { activeBranchId } from '../core/auth.js';
 
 const state = {
   tab: 'list',
@@ -77,6 +78,7 @@ async function migrateLocalEmployees(root, localEmps, btn) {
         email: e.email || null,
         phone: e.phone || null,
         branchId: e.branch_id || null,
+        branchIds: e.branch_id ? [e.branch_id] : [],
         role: e.role || null,
         hourlyRate: Number(e.hourly_rate) || 0,
         hireDate: e.hire_date || null,
@@ -90,6 +92,13 @@ async function migrateLocalEmployees(root, localEmps, btn) {
   render(root);
 }
 
+// Sucursales efectivas de un empleado: branchIds (multi) o, si está vacío, la
+// branchId principal (compat con empleados cargados antes del multi-sucursal).
+function empBranchIds(e) {
+  if (Array.isArray(e.branchIds) && e.branchIds.length) return e.branchIds;
+  return e.branchId ? [e.branchId] : [];
+}
+
 function renderList(root, container, employees, brMap, branches) {
   container.innerHTML = `
     <div class="ing-card overflow-hidden">
@@ -99,7 +108,7 @@ function renderList(root, container, employees, brMap, branches) {
           ${employees.length ? employees.map(e => `
             <tr>
               <td class="font-bold">${esc(e.name)} ${esc(e.lastname || '')}</td>
-              <td>${esc(brMap[e.branchId] || '-')}</td>
+              <td>${esc(empBranchIds(e).map(id => brMap[id] || id).join(', ') || '-')}</td>
               <td class="text-xs">${esc(e.role || '-')}</td>
               <td class="text-xs">${esc(e.email || '')}${e.phone?'<br>'+esc(e.phone):''}</td>
               <td class="text-right font-bold">${money(e.hourlyRate || 0)}</td>
@@ -135,6 +144,8 @@ async function editEmp(root, existing, branches) {
     branchId: branches[0]?.id || '', role: '', hourlyRate: 0,
     hireDate: new Date().toISOString().slice(0, 10), active: true,
   };
+  // Sucursales pre-tildadas: las asignadas (o la activa por defecto en alta).
+  const assigned = isNew ? [activeBranchId()].filter(Boolean) : empBranchIds(e);
   await openModal({
     title: isNew ? 'Nuevo empleado' : `Editar empleado`,
     size: 'md',
@@ -144,8 +155,10 @@ async function editEmp(root, existing, branches) {
         <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Apellido</label><input id="e-last" value="${esc(e.lastname)}" class="ing-input w-full mt-1" /></div>
         <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Email</label><input id="e-email" type="email" value="${esc(e.email)}" class="ing-input w-full mt-1" /></div>
         <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Teléfono</label><input id="e-phone" value="${esc(e.phone)}" class="ing-input w-full mt-1" /></div>
-        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Sucursal</label>
-          <select id="e-branch" class="ing-input w-full mt-1">${branches.map(b => `<option value="${b.id}" ${e.branchId===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select>
+        <div class="col-span-2"><label class="text-xs font-bold text-[#7d6c5c] uppercase">Sucursales (dónde aparece como vendedor)</label>
+          <div class="flex flex-wrap gap-4 mt-2">
+            ${branches.map(b => `<label class="flex items-center gap-2"><input type="checkbox" class="e-branch" value="${b.id}" ${assigned.includes(b.id)?'checked':''} /> <span class="text-sm">${esc(b.name)}</span></label>`).join('')}
+          </div>
         </div>
         <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Rol</label><input id="e-role" value="${esc(e.role)}" class="ing-input w-full mt-1" placeholder="Vendedor, Cajero…" /></div>
         <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">$ por hora</label><input id="e-rate" type="number" step="0.01" value="${e.hourlyRate||0}" class="ing-input w-full mt-1" /></div>
@@ -160,12 +173,15 @@ async function editEmp(root, existing, branches) {
       okBtn.addEventListener('click', async () => {
         const name = m.querySelector('#e-name').value.trim();
         if (!name) { toast('Nombre requerido', 'warn'); return; }
+        const branchIds = [...m.querySelectorAll('.e-branch:checked')].map(c => c.value);
+        if (!branchIds.length) { toast('Elegí al menos una sucursal', 'warn'); return; }
         const body = {
           name,
           lastname: m.querySelector('#e-last').value.trim() || null,
           email: m.querySelector('#e-email').value.trim() || null,
           phone: m.querySelector('#e-phone').value.trim() || null,
-          branchId: m.querySelector('#e-branch').value || null,
+          branchIds,
+          branchId: branchIds[0] || null,
           role: m.querySelector('#e-role').value.trim() || null,
           hourlyRate: Number(m.querySelector('#e-rate').value) || 0,
           hireDate: m.querySelector('#e-hire').value || null,

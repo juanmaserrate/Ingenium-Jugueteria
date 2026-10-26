@@ -115,7 +115,12 @@ async function refreshData() {
   state.products = products;
   state.stocks = stocks;
   state.customers = customers || [];
-  state.employees = (employees || []).filter(e => e.active !== false && (!e.branchId || e.branchId === br));
+  state.employees = (employees || []).filter(e => {
+    if (e.active === false) return false;
+    // Sucursales asignadas (multi). Si no tiene ninguna, aparece en todas (compat).
+    const bids = Array.isArray(e.branchIds) && e.branchIds.length ? e.branchIds : (e.branchId ? [e.branchId] : []);
+    return bids.length === 0 || bids.includes(br);
+  });
   state.methods = methods || [];
   state.categories = categories;
   state.brands = brands;

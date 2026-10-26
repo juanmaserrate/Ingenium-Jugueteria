@@ -42,6 +42,17 @@ function hashPin(pin: string) {
 }
 
 export async function runSeed() {
+  // Migración idempotente: el schema de prod se sincroniza por fuera (db push).
+  // Esto garantiza que la columna multi-sucursal de empleados exista sin depender
+  // de ese paso y sin perder datos (ADD COLUMN IF NOT EXISTS es no-op si ya está).
+  try {
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "employees" ADD COLUMN IF NOT EXISTS "branch_ids" JSONB NOT NULL DEFAULT '[]'::jsonb`,
+    );
+  } catch (err) {
+    console.warn('[seed] no se pudo asegurar employees.branch_ids:', err);
+  }
+
   for (const b of BRANCHES) {
     await prisma.branch.upsert({
       where:  { id: b.id },

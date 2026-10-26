@@ -493,7 +493,8 @@ model Employee {
   id         String   @id
   name       String
   lastname   String?
-  branchId   String?  @map("branch_id")
+  branchId   String?  @map("branch_id") // sucursal principal (compat); el multi-sucursal vive en branchIds
+  branchIds  Json     @default("[]") @map("branch_ids") // ["br_lomas","br_banfield"]: sucursales donde aparece como vendedor
   role       String?
   email      String?
   phone      String?
