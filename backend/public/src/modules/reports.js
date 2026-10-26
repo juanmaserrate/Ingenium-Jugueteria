@@ -18,16 +18,16 @@ import { toast } from '../core/notifications.js';
 import { openModal } from '../components/modal.js';
 
 const REPORTS = [
-  { id: 'by-customer', name: 'Compras por cliente', desc: 'Agrupado por cliente: sus compras, detalle de productos e importes. Elegís los filtros al generar.', icon: 'shopping_cart' },
-  { id: 'sales', name: 'Ventas', desc: 'Todas las ventas con detalle', icon: 'trending_up' },
-  { id: 'returns', name: 'Devoluciones', desc: 'Devoluciones y vales emitidos', icon: 'assignment_return' },
-  { id: 'cash', name: 'Caja', desc: 'Movimientos de efectivo de la sucursal', icon: 'account_balance_wallet' },
-  { id: 'expenses', name: 'Gastos', desc: 'Gastos por categoría', icon: 'shopping_bag' },
+  { id: 'by-customer', name: 'Compras por cliente', desc: 'Agrupado por cliente: sus compras, detalle de productos e importes. Elegís los filtros al generar.', icon: 'shopping_cart', filters: ['date', 'branch', 'source', 'customer'] },
+  { id: 'sales', name: 'Ventas', desc: 'Todas las ventas con detalle', icon: 'trending_up', filters: ['date', 'branch', 'source'] },
+  { id: 'returns', name: 'Devoluciones', desc: 'Devoluciones y vales emitidos', icon: 'assignment_return', filters: ['date', 'branch'] },
+  { id: 'cash', name: 'Caja', desc: 'Movimientos de efectivo de la sucursal', icon: 'account_balance_wallet', filters: ['date', 'branch'] },
+  { id: 'expenses', name: 'Gastos', desc: 'Gastos por categoría', icon: 'shopping_bag', filters: ['date', 'branch'] },
   { id: 'pnl', name: 'P&L mensuales', desc: 'Todos los snapshots guardados', icon: 'paid' },
   { id: 'inventory', name: 'Inventario', desc: 'Productos + stock valorizado', icon: 'inventory_2' },
-  { id: 'transfers', name: 'Transferencias', desc: 'Movimientos entre sucursales', icon: 'swap_horiz' },
+  { id: 'transfers', name: 'Transferencias', desc: 'Movimientos entre sucursales', icon: 'swap_horiz', filters: ['date', 'branch'] },
   { id: 'stock-by-cat', name: 'Stock por categoría', desc: 'Resumen agrupado', icon: 'category' },
-  { id: 'checks', name: 'Cheques', desc: 'Todos los cheques con estado', icon: 'receipt_long' },
+  { id: 'checks', name: 'Cheques', desc: 'Todos los cheques con estado', icon: 'receipt_long', filters: ['date'] },
   { id: 'employees', name: 'Empleados + horas', desc: 'Liquidación mensual estimada', icon: 'badge' },
   { id: 'audit', name: 'Auditoría', desc: 'Acciones por usuario y entidad (solo esta PC)', icon: 'history' },
   { id: 'customers', name: 'Clientes', desc: 'Directorio + métricas', icon: 'groups' },
@@ -62,11 +62,18 @@ const REP_FNS = {
 };
 
 async function runReport(id, btn) {
+  const entry = REPORTS.find(r => r.id === id);
   const fn = REP_FNS[id];
   if (!fn) return;
+  // Reportes con filtros declarados → abrir el diálogo ANTES de generar.
+  let filters;
+  if (entry?.filters?.length) {
+    filters = await pickFilters(entry.filters, `Filtros · ${entry.name}`);
+    if (!filters) return; // canceló
+  }
   if (btn) btn.classList.add('opacity-60', 'pointer-events-none');
   try {
-    const rows = await fn();
+    const rows = await fn(filters);
     // null = el usuario canceló el diálogo de filtros → no avisamos nada.
     if (rows === null) return;
     // Sin datos → avisamos claro en vez del falso "Exportado ✓".
@@ -90,9 +97,14 @@ function saveXLSX(filename, sheets) {
 const getBranches = () => api('/api/branches').catch(() => []);
 const nameOf = (c) => `${c.name || ''} ${c.lastname || ''}`.trim();
 
-async function repSales() {
+async function repSales(f = {}) {
+  const qs = new URLSearchParams({ status: 'confirmed', limit: '100000' });
+  if (f.from) qs.set('from', f.from + 'T00:00:00');
+  if (f.to) qs.set('to', f.to + 'T23:59:59');
+  if (f.branchId) qs.set('branchId', f.branchId);
+  if (f.source) qs.set('source', f.source);
   const [sales, employees, products, categories, branches] = await Promise.all([
-    api('/api/sales?status=confirmed&limit=100000'),
+    api('/api/sales?' + qs.toString()),
     Employees.list(), Products.list(), getAll('categories'), getBranches(),
   ]);
   const emMap = Object.fromEntries((employees || []).map(e => [e.id, nameOf(e)]));
@@ -128,52 +140,66 @@ async function repSales() {
   ]);
 }
 
-// ---------- Compras por cliente (con filtros elegibles al generar) ----------
+// ---------- Filtros elegibles al generar (diálogo genérico reutilizable) ----------
 const docOf = (c) => [c?.documentType, c?.documentNumber].filter(Boolean).join(' ').trim();
 
-// Diálogo de filtros. Devuelve {from,to,branchId,source,term,onlyWithCustomer} o null si cancela.
-function openByCustomerFilters() {
+// Filtra por rango de fechas (inclusive) usando el día completo. from/to = 'YYYY-MM-DD'.
+const dtInRange = (dt, from, to) => {
+  if (!dt) return !from && !to ? true : false;
+  const t = new Date(dt).getTime();
+  if (from && t < new Date(from + 'T00:00:00').getTime()) return false;
+  if (to && t > new Date(to + 'T23:59:59').getTime()) return false;
+  return true;
+};
+
+// Diálogo de filtros genérico. `fields` ⊆ ['date','branch','source','customer'].
+// Devuelve {from,to,branchId,source,term,onlyWithCustomer} o null si cancela.
+function pickFilters(fields = [], title = 'Filtros del reporte') {
+  const has = (k) => fields.includes(k);
   return new Promise(async (resolve) => {
     const admin = isAdmin();
     let branches = [];
-    try { branches = await listBranches(); } catch { branches = []; }
+    if (has('branch')) { try { branches = await listBranches(); } catch { branches = []; } }
     const branchOptions = admin
       ? `<option value="">Todas</option>` + branches.map(b => `<option value="${b.id}">${b.name}</option>`).join('')
       : branches.filter(b => b.id === activeBranchId()).map(b => `<option value="${b.id}">${b.name}</option>`).join('');
+    const parts = [];
+    if (has('date')) parts.push(`
+      <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Desde</span>
+        <input id="rf-from" type="date" class="ing-input w-full mt-1" /></label>
+      <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Hasta</span>
+        <input id="rf-to" type="date" class="ing-input w-full mt-1" /></label>`);
+    if (has('branch')) parts.push(`
+      <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Sucursal</span>
+        <select id="rf-branch" class="ing-input w-full mt-1" ${admin ? '' : 'disabled'}>${branchOptions}</select></label>`);
+    if (has('source')) parts.push(`
+      <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Origen</span>
+        <select id="rf-source" class="ing-input w-full mt-1">
+          <option value="">Todos</option><option value="pos">POS (local)</option><option value="tn">Tienda Nube</option>
+        </select></label>`);
+    if (has('customer')) parts.push(`
+      <label class="block col-span-2"><span class="text-xs font-bold text-[#7d6c5c]">Cliente (nombre o documento, opcional)</span>
+        <input id="rf-term" class="ing-input w-full mt-1" placeholder="Dejar vacío = todos los clientes" /></label>
+      <label class="col-span-2 flex items-center gap-2 mt-1 text-sm">
+        <input id="rf-onlycust" type="checkbox" checked class="w-4 h-4" />
+        <span>Solo compras con cliente identificado</span></label>`);
     openModal({
-      title: 'Filtros del reporte · Compras por cliente',
-      size: 'md',
-      bodyHTML: `
-        <div class="grid grid-cols-2 gap-3">
-          <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Desde</span>
-            <input id="rf-from" type="date" class="ing-input w-full mt-1" /></label>
-          <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Hasta</span>
-            <input id="rf-to" type="date" class="ing-input w-full mt-1" /></label>
-          <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Sucursal</span>
-            <select id="rf-branch" class="ing-input w-full mt-1" ${admin ? '' : 'disabled'}>${branchOptions}</select></label>
-          <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Origen</span>
-            <select id="rf-source" class="ing-input w-full mt-1">
-              <option value="">Todos</option><option value="pos">POS (local)</option><option value="tn">Tienda Nube</option>
-            </select></label>
-          <label class="block col-span-2"><span class="text-xs font-bold text-[#7d6c5c]">Cliente (nombre o documento, opcional)</span>
-            <input id="rf-term" class="ing-input w-full mt-1" placeholder="Dejar vacío = todos los clientes" /></label>
-          <label class="col-span-2 flex items-center gap-2 mt-1 text-sm">
-            <input id="rf-onlycust" type="checkbox" checked class="w-4 h-4" />
-            <span>Solo compras con cliente identificado</span></label>
-        </div>
-        <p class="text-xs text-[#7d6c5c] mt-3">Las fechas vacías = sin límite. Se incluyen solo ventas confirmadas.</p>`,
+      title, size: 'md',
+      bodyHTML: `<div class="grid grid-cols-2 gap-3">${parts.join('')}</div>
+        <p class="text-xs text-[#7d6c5c] mt-3">Las fechas vacías = sin límite.</p>`,
       footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button>
                    <button class="ing-btn-primary" data-act="ok"><span class="material-symbols-outlined text-sm align-middle">download</span> Generar</button>`,
       onOpen: (el, close) => {
+        const g = (id) => el.querySelector(id);
         el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
         el.querySelector('[data-act="ok"]').addEventListener('click', () => {
           close({
-            from: el.querySelector('#rf-from').value || undefined,
-            to: el.querySelector('#rf-to').value || undefined,
-            branchId: admin ? (el.querySelector('#rf-branch').value || undefined) : activeBranchId(),
-            source: el.querySelector('#rf-source').value || undefined,
-            term: el.querySelector('#rf-term').value.trim().toLowerCase(),
-            onlyWithCustomer: el.querySelector('#rf-onlycust').checked,
+            from: has('date') ? (g('#rf-from').value || undefined) : undefined,
+            to: has('date') ? (g('#rf-to').value || undefined) : undefined,
+            branchId: has('branch') ? (admin ? (g('#rf-branch').value || undefined) : activeBranchId()) : undefined,
+            source: has('source') ? (g('#rf-source').value || undefined) : undefined,
+            term: has('customer') ? g('#rf-term').value.trim().toLowerCase() : '',
+            onlyWithCustomer: has('customer') ? g('#rf-onlycust').checked : false,
           });
         });
       },
@@ -181,9 +207,7 @@ function openByCustomerFilters() {
   });
 }
 
-async function repByCustomer() {
-  const f = await openByCustomerFilters();
-  if (!f) return null; // canceló
+async function repByCustomer(f = {}) {
   // Query de ventas con los filtros. 'to' incluye el día entero.
   const qs = new URLSearchParams({ status: 'confirmed', limit: '100000' });
   if (f.from) qs.set('from', f.from + 'T00:00:00');
@@ -259,10 +283,12 @@ async function repByCustomer() {
   ]);
 }
 
-async function repReturns() {
-  const [returns, customers, creditNotes] = await Promise.all([
+async function repReturns(f = {}) {
+  const [returnsAll, customers, creditNotes] = await Promise.all([
     Returns.list(), api('/api/customers').catch(() => []), Returns.listCreditNotes(),
   ]);
+  const returns = (returnsAll || []).filter(r =>
+    dtInRange(r.datetime, f.from, f.to) && (!f.branchId || r.branchId === f.branchId));
   const cuMap = Object.fromEntries((customers || []).map(c => [c.id, nameOf(c)]));
   const cnMap = Object.fromEntries((creditNotes || []).map(v => [v.id, v.code]));
   const rows = (returns || []).map(r => ({
@@ -270,7 +296,7 @@ async function repReturns() {
     Devuelve: r.returnedTotal, Lleva: r.takenTotal, 'Diferencia (+cobrado / -devuelto)': -Number(r.difference || 0),
     Vale: cnMap[r.creditNoteId] || '', Motivo: r.reason || '',
   }));
-  const vales = (creditNotes || []).map(v => ({
+  const vales = (creditNotes || []).filter(v => dtInRange(v.issuedAt, f.from, f.to)).map(v => ({
     Codigo: v.code, Cliente: cuMap[v.customerId] || '', Monto: v.amount,
     Emitido: fmtDate(v.issuedAt), Vence: fmtDate(v.expiresAt),
     Canjeado: v.redeemedAt ? fmtDate(v.redeemedAt) : '',
@@ -280,23 +306,45 @@ async function repReturns() {
   ]);
 }
 
-async function repCash() {
-  const br = activeBranchId();
-  const movs = await Cash.listMovements(br);
-  const rows = (movs || []).map(m => ({
-    Fecha: fmtDateTime(m.datetime), Tipo: m.type, Descripcion: m.description,
-    Entra: m.amount_in || 0, Sale: m.amount_out || 0, Saldo: m.balance_after,
-  }));
+// Sucursales a consultar según el filtro: la elegida, o todas (admin) / la activa.
+async function branchesToQuery(f) {
+  const branches = await getBranches();
+  const ids = f?.branchId ? [f.branchId] : (isAdmin() ? (branches || []).map(b => b.id) : [activeBranchId()]);
+  const brMap = Object.fromEntries((branches || []).map(b => [b.id, b.name]));
+  return { ids, brMap };
+}
+
+async function repCash(f = {}) {
+  const { ids, brMap } = await branchesToQuery(f);
+  const all = [];
+  for (const id of ids) {
+    const movs = await Cash.listMovements(id).catch(() => []);
+    for (const m of (movs || [])) all.push({ ...m, __branch: id });
+  }
+  const rows = all
+    .filter(m => dtInRange(m.datetime, f.from, f.to))
+    .sort((a, b) => String(a.datetime).localeCompare(String(b.datetime)))
+    .map(m => ({
+      Fecha: fmtDateTime(m.datetime), Sucursal: brMap[m.__branch] || m.__branch, Tipo: m.type,
+      Descripcion: m.description, Entra: m.amount_in || 0, Sale: m.amount_out || 0, Saldo: m.balance_after,
+    }));
   return saveXLSX('reporte_caja.xlsx', [{ name: 'Caja', rows }]);
 }
 
-async function repExpenses() {
-  const br = activeBranchId();
-  const exp = await Cash.listExpenses(br);
-  const rows = (exp || []).map(e => ({
-    Fecha: fmtDateTime(e.datetime), Categoria: e.category, Descripcion: e.description,
-    Medio: e.payment_method_id, Monto: e.amount,
-  }));
+async function repExpenses(f = {}) {
+  const { ids, brMap } = await branchesToQuery(f);
+  const all = [];
+  for (const id of ids) {
+    const exp = await Cash.listExpenses(id).catch(() => []);
+    for (const e of (exp || [])) all.push({ ...e, __branch: id });
+  }
+  const rows = all
+    .filter(e => dtInRange(e.datetime, f.from, f.to))
+    .sort((a, b) => String(a.datetime).localeCompare(String(b.datetime)))
+    .map(e => ({
+      Fecha: fmtDateTime(e.datetime), Sucursal: brMap[e.__branch] || e.__branch, Categoria: e.category,
+      Descripcion: e.description, Medio: e.payment_method_id, Monto: e.amount,
+    }));
   return saveXLSX('reporte_gastos.xlsx', [{ name: 'Gastos', rows }]);
 }
 
@@ -336,10 +384,13 @@ async function repInventory() {
   return saveXLSX('reporte_inventario.xlsx', [{ name: 'Inventario', rows }]);
 }
 
-async function repTransfers() {
-  const [transfers, branches, products] = await Promise.all([
+async function repTransfers(f = {}) {
+  const [transfersAll, branches, products] = await Promise.all([
     api('/api/transfers').catch(() => []), getBranches(), Products.list(),
   ]);
+  const transfers = (transfersAll || []).filter(t =>
+    dtInRange(t.datetime, f.from, f.to) &&
+    (!f.branchId || t.fromBranch === f.branchId || t.toBranch === f.branchId));
   const brMap = Object.fromEntries((branches || []).map(b => [b.id, b.name]));
   const vInfo = {};
   for (const p of (products || [])) {
@@ -390,9 +441,10 @@ async function repStockByCat() {
   return saveXLSX('reporte_stock_por_categoria.xlsx', [{ name: 'Stock por categoría', rows }]);
 }
 
-async function repChecks() {
-  const [checks, suppliers] = await Promise.all([Kv.list('checks').catch(() => []), Suppliers.list().catch(() => [])]);
+async function repChecks(f = {}) {
+  const [checksAll, suppliers] = await Promise.all([Kv.list('checks').catch(() => []), Suppliers.list().catch(() => [])]);
   const spMap = Object.fromEntries((suppliers || []).map(s => [s.id, s.name]));
+  const checks = (checksAll || []).filter(c => dtInRange(c.issued_at, f.from, f.to));
   const rows = (checks || []).sort((a, b) => (a.due_at || '').localeCompare(b.due_at || '')).map(c => ({
     Numero: c.number, Proveedor: spMap[c.supplier_id] || '', Banco: c.bank || '',
     Emision: fmtDate(c.issued_at), Vence: fmtDate(c.due_at), Monto: c.amount, Estado: c.status, Nota: c.note || '',
