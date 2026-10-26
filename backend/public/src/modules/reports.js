@@ -12,11 +12,13 @@ import * as Returns from '../repos/returns.js';
 import * as Employees from '../repos/employees.js';
 import { api } from '../core/api.js';
 import { fmtDateTime, fmtDate, monthKey, hoursDecimal } from '../core/format.js';
-import { activeBranchId } from '../core/auth.js';
+import { activeBranchId, isAdmin, listBranches } from '../core/auth.js';
 import { exportToXLSX } from '../core/xlsx.js';
 import { toast } from '../core/notifications.js';
+import { openModal } from '../components/modal.js';
 
 const REPORTS = [
+  { id: 'by-customer', name: 'Compras por cliente', desc: 'Agrupado por cliente: sus compras, detalle de productos e importes. Elegís los filtros al generar.', icon: 'shopping_cart' },
   { id: 'sales', name: 'Ventas', desc: 'Todas las ventas con detalle', icon: 'trending_up' },
   { id: 'returns', name: 'Devoluciones', desc: 'Devoluciones y vales emitidos', icon: 'assignment_return' },
   { id: 'cash', name: 'Caja', desc: 'Movimientos de efectivo de la sucursal', icon: 'account_balance_wallet' },
@@ -53,6 +55,7 @@ export async function mount(el) {
 }
 
 const REP_FNS = {
+  'by-customer': repByCustomer,
   sales: repSales, returns: repReturns, cash: repCash, expenses: repExpenses,
   pnl: repPnl, inventory: repInventory, transfers: repTransfers, 'stock-by-cat': repStockByCat,
   checks: repChecks, employees: repEmployees, audit: repAudit, customers: repCustomers, comparison: repComparison,
@@ -64,6 +67,8 @@ async function runReport(id, btn) {
   if (btn) btn.classList.add('opacity-60', 'pointer-events-none');
   try {
     const rows = await fn();
+    // null = el usuario canceló el diálogo de filtros → no avisamos nada.
+    if (rows === null) return;
     // Sin datos → avisamos claro en vez del falso "Exportado ✓".
     if (rows > 0) toast('Exportado ✓', 'success');
     else toast('No hay datos para exportar en este reporte', 'warn');
@@ -120,6 +125,137 @@ async function repSales() {
   }
   return saveXLSX('reporte_ventas.xlsx', [
     { name: 'Ventas', rows: header }, { name: 'Detalle items', rows: details },
+  ]);
+}
+
+// ---------- Compras por cliente (con filtros elegibles al generar) ----------
+const docOf = (c) => [c?.documentType, c?.documentNumber].filter(Boolean).join(' ').trim();
+
+// Diálogo de filtros. Devuelve {from,to,branchId,source,term,onlyWithCustomer} o null si cancela.
+function openByCustomerFilters() {
+  return new Promise(async (resolve) => {
+    const admin = isAdmin();
+    let branches = [];
+    try { branches = await listBranches(); } catch { branches = []; }
+    const branchOptions = admin
+      ? `<option value="">Todas</option>` + branches.map(b => `<option value="${b.id}">${b.name}</option>`).join('')
+      : branches.filter(b => b.id === activeBranchId()).map(b => `<option value="${b.id}">${b.name}</option>`).join('');
+    openModal({
+      title: 'Filtros del reporte · Compras por cliente',
+      size: 'md',
+      bodyHTML: `
+        <div class="grid grid-cols-2 gap-3">
+          <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Desde</span>
+            <input id="rf-from" type="date" class="ing-input w-full mt-1" /></label>
+          <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Hasta</span>
+            <input id="rf-to" type="date" class="ing-input w-full mt-1" /></label>
+          <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Sucursal</span>
+            <select id="rf-branch" class="ing-input w-full mt-1" ${admin ? '' : 'disabled'}>${branchOptions}</select></label>
+          <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Origen</span>
+            <select id="rf-source" class="ing-input w-full mt-1">
+              <option value="">Todos</option><option value="pos">POS (local)</option><option value="tn">Tienda Nube</option>
+            </select></label>
+          <label class="block col-span-2"><span class="text-xs font-bold text-[#7d6c5c]">Cliente (nombre o documento, opcional)</span>
+            <input id="rf-term" class="ing-input w-full mt-1" placeholder="Dejar vacío = todos los clientes" /></label>
+          <label class="col-span-2 flex items-center gap-2 mt-1 text-sm">
+            <input id="rf-onlycust" type="checkbox" checked class="w-4 h-4" />
+            <span>Solo compras con cliente identificado</span></label>
+        </div>
+        <p class="text-xs text-[#7d6c5c] mt-3">Las fechas vacías = sin límite. Se incluyen solo ventas confirmadas.</p>`,
+      footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button>
+                   <button class="ing-btn-primary" data-act="ok"><span class="material-symbols-outlined text-sm align-middle">download</span> Generar</button>`,
+      onOpen: (el, close) => {
+        el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
+        el.querySelector('[data-act="ok"]').addEventListener('click', () => {
+          close({
+            from: el.querySelector('#rf-from').value || undefined,
+            to: el.querySelector('#rf-to').value || undefined,
+            branchId: admin ? (el.querySelector('#rf-branch').value || undefined) : activeBranchId(),
+            source: el.querySelector('#rf-source').value || undefined,
+            term: el.querySelector('#rf-term').value.trim().toLowerCase(),
+            onlyWithCustomer: el.querySelector('#rf-onlycust').checked,
+          });
+        });
+      },
+    }).then((v) => resolve(v ?? null));
+  });
+}
+
+async function repByCustomer() {
+  const f = await openByCustomerFilters();
+  if (!f) return null; // canceló
+  // Query de ventas con los filtros. 'to' incluye el día entero.
+  const qs = new URLSearchParams({ status: 'confirmed', limit: '100000' });
+  if (f.from) qs.set('from', f.from + 'T00:00:00');
+  if (f.to) qs.set('to', f.to + 'T23:59:59');
+  if (f.branchId) qs.set('branchId', f.branchId);
+  if (f.source) qs.set('source', f.source);
+  const [sales, customers, products, categories, branches] = await Promise.all([
+    api('/api/sales?' + qs.toString()),
+    api('/api/customers').catch(() => []),
+    Products.list(), getAll('categories'), getBranches(),
+  ]);
+  const catMap = Object.fromEntries((categories || []).map(c => [c.id, c.name]));
+  const brMap = Object.fromEntries((branches || []).map(b => [b.id, b.name]));
+  const cuMap = Object.fromEntries((customers || []).map(c => [c.id, c]));
+  const vMap = {};
+  for (const p of (products || [])) {
+    for (const v of (p.variants || [])) vMap[v.id] = { code: v.code || p.code || '', category: catMap[p.category_id] || '' };
+  }
+  const SIN = '__sin_cliente__';
+  // Agrupar ventas por cliente, aplicando filtros de cliente/identificado.
+  const groups = new Map(); // key -> { cliente, ventas: [] }
+  for (const s of (sales || [])) {
+    const cust = s.customerId ? cuMap[s.customerId] : null;
+    if (f.onlyWithCustomer && !cust) continue;
+    if (f.term) {
+      const hay = `${cust?.name || ''} ${docOf(cust)}`.toLowerCase();
+      if (!hay.includes(f.term)) continue;
+    }
+    const key = cust?.id || SIN;
+    if (!groups.has(key)) groups.set(key, { cliente: cust, ventas: [] });
+    groups.get(key).ventas.push(s);
+  }
+
+  const resumen = [], compras = [], detalle = [];
+  // Orden: por total gastado desc.
+  const ordered = [...groups.values()].sort((a, b) =>
+    b.ventas.reduce((n, s) => n + (s.total || 0), 0) - a.ventas.reduce((n, s) => n + (s.total || 0), 0));
+  for (const g of ordered) {
+    const c = g.cliente;
+    const nombre = c?.name || 'Consumidor final (sin cliente)';
+    const doc = docOf(c);
+    const vs = g.ventas.slice().sort((a, b) => String(a.datetime).localeCompare(String(b.datetime)));
+    const totalGastado = vs.reduce((n, s) => n + (s.total || 0), 0);
+    const unidades = vs.reduce((n, s) => n + (s.items || []).reduce((m, it) => m + (it.qty || 0), 0), 0);
+    resumen.push({
+      Cliente: nombre, Documento: doc, Telefono: c?.phone || '', Email: c?.email || '',
+      Direccion: c?.address || '', Ciudad: c?.city || '',
+      Compras: vs.length, Unidades: unidades, TotalGastado: totalGastado,
+      PrimeraCompra: vs[0] ? fmtDate(vs[0].datetime) : '', UltimaCompra: vs.length ? fmtDate(vs[vs.length - 1].datetime) : '',
+    });
+    for (const s of vs) {
+      compras.push({
+        Cliente: nombre, Documento: doc, NumeroVenta: s.number, Fecha: fmtDateTime(s.datetime),
+        Sucursal: brMap[s.branchId] || s.branchId, Origen: s.source === 'tn' ? 'Tienda Nube' : 'POS',
+        Items: (s.items || []).length, Total: s.total,
+        Pagos: (s.payments || []).map(p => `${p.methodName || p.methodId}: ${p.amount}`).join(' · '),
+      });
+      for (const it of (s.items || [])) {
+        const info = vMap[it.variantId] || {};
+        const variante = it.variantNameSnap && it.variantNameSnap !== 'default' ? ` (${it.variantNameSnap})` : '';
+        detalle.push({
+          Cliente: nombre, Documento: doc, NumeroVenta: s.number, Fecha: fmtDate(s.datetime),
+          Producto: `${it.productNameSnap}${variante}`, Codigo: info.code || '', Categoria: info.category || '',
+          Cantidad: it.qty, PrecioUnit: it.unitPrice, Subtotal: it.subtotal,
+        });
+      }
+    }
+  }
+  return saveXLSX('reporte_compras_por_cliente.xlsx', [
+    { name: 'Resumen por cliente', rows: resumen },
+    { name: 'Compras', rows: compras },
+    { name: 'Detalle productos', rows: detalle },
   ]);
 }
 
