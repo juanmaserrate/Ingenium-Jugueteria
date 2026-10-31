@@ -1,10 +1,23 @@
 import { env } from '../config.js';
 import { prisma } from '../db.js';
-import { takeNextJobs, markDone, markFailed, reapStuckJobs } from './queue.js';
+import { takeNextJobs, markDone, markFailed, reapStuckJobs, cleanupOldJobs } from './queue.js';
 import { syncHandlers, type SyncOperation } from '../tiendanube/sync.js';
 import type { FastifyBaseLogger } from 'fastify';
 
 let running = false;
+let lastCleanupAt = 0;
+
+// Limpieza de retención: borra jobs 'done' y logs 'success' viejos para que las tablas
+// de sync no crezcan sin límite. Corre una vez al arrancar y luego cada cierto intervalo.
+async function runCleanup(log: FastifyBaseLogger) {
+  try {
+    const { queue, logs } = await cleanupOldJobs(env.SYNC_DONE_RETENTION_MS);
+    lastCleanupAt = Date.now();
+    if (queue || logs) log.info({ queue, logs }, 'sync cleanup: borrados jobs/logs viejos');
+  } catch (err) {
+    log.error({ err }, 'sync cleanup failed');
+  }
+}
 
 // Al arrancar el proceso (típicamente tras un redeploy de Railway), recupera el
 // estado que pudo quedar a medias: jobs de sync huérfanos en 'running' y órdenes de
@@ -30,6 +43,7 @@ export function startSyncWorker(log: FastifyBaseLogger) {
   running = true;
 
   void recoverOnBoot(log);
+  void runCleanup(log); // una pasada al arrancar: baja el backlog acumulado de inmediato
 
   const tick = async () => {
     try {
@@ -38,6 +52,8 @@ export function startSyncWorker(log: FastifyBaseLogger) {
         setTimeout(tick, env.SYNC_WORKER_INTERVAL_MS);
         return;
       }
+      // Limpieza periódica de retención (barata: deletes indexados por status/fecha).
+      if (Date.now() - lastCleanupAt >= env.SYNC_CLEANUP_INTERVAL_MS) await runCleanup(log);
       // Reaper periódico: recupera jobs cuya lease venció (un handler que se colgó o
       // un huérfano que quedó sin bootear). Barato (un updateMany indexado por status).
       const reaped = await reapStuckJobs(env.SYNC_JOB_LEASE_MS);

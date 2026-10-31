@@ -13,6 +13,11 @@ const ADMIN_ONLY = new Set([
 const routes = new Map();
 let currentUnmount = null;
 let container = null;
+// Token de secuencia: cada render() reclama un número. Como render() es async y el
+// #router-outlet es un nodo fijo compartido, dos navegaciones seguidas pueden pisarse
+// (un mount lento termina DESPUÉS del nuevo y escribe su contenido encima). Tras cada
+// await chequeamos seguir siendo el render vigente; si no, abortamos.
+let renderSeq = 0;
 
 export function registerRoute(path, loader) {
   routes.set(path, loader);
@@ -31,6 +36,7 @@ export async function navigate(path) {
 
 async function render(path) {
   if (!container) return;
+  const mySeq = ++renderSeq; // reclamo este render; cualquier navegación posterior lo invalida
   if (typeof currentUnmount === 'function') {
     try { currentUnmount(); } catch (e) { console.error(e); }
     currentUnmount = null;
@@ -44,7 +50,14 @@ async function render(path) {
   if (ADMIN_ONLY.has(key) && !isAdmin()) {
     if (location.hash !== '#/pos') { location.hash = '/pos'; return; }
     const target = routes.get('/pos');
-    if (target) { const mod = await target(); await (mod.mount || mod.default)(container, { params: [] }); return; }
+    if (target) {
+      const mod = await target();
+      if (mySeq !== renderSeq) return;
+      const ret = await (mod.mount || mod.default)(container, { params: [] });
+      if (mySeq !== renderSeq) { if (typeof ret === 'function') { try { ret(); } catch {} } return; }
+      if (typeof ret === 'function') currentUnmount = ret;
+    }
+    return;
   }
   const loader = routes.get(key) || routes.get('/404');
   if (!loader) {
@@ -53,10 +66,19 @@ async function render(path) {
   }
   try {
     const mod = await loader();
+    if (mySeq !== renderSeq) return; // navegaron a otra ruta mientras cargaba el módulo: no montamos
     const mount = mod.mount || mod.default;
     const ret = await mount(container, { params: rest });
+    if (mySeq !== renderSeq) {
+      // Navegaron DURANTE el mount: este módulo pudo haber pintado encima del nuevo.
+      // Desmontamos lo que acabamos de montar y repintamos la ruta vigente.
+      if (typeof ret === 'function') { try { ret(); } catch {} }
+      void render(location.hash.slice(1) || '/pos');
+      return;
+    }
     if (typeof ret === 'function') currentUnmount = ret;
   } catch (err) {
+    if (mySeq !== renderSeq) return; // error de un render viejo: no pisamos la pantalla actual
     console.error(err);
     container.innerHTML = `<div class="ing-stub"><span class="material-symbols-outlined">error</span><p>Error cargando módulo</p><pre class="text-xs">${err.message}</pre></div>`;
   }

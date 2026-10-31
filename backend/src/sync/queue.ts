@@ -21,17 +21,44 @@ export async function enqueueSync(operation: string, payload: Record<string, unk
 
 export async function takeNextJobs(limit = 10) {
   const now = new Date();
-  const jobs = await prisma.syncQueue.findMany({
-    where: { status: 'queued', nextRunAt: { lte: now } },
+  // Prioridad: el stock es lo urgente (riesgo de vender algo sin stock). Lo tomamos
+  // primero y completamos el lote con el resto (precio/fotos/variantes pueden esperar).
+  // Así un cambio de cantidad no queda atrás de una operación masiva de productos.
+  const base = { status: 'queued', nextRunAt: { lte: now } } as const;
+  const stock = await prisma.syncQueue.findMany({
+    where: { ...base, operation: 'push_stock' },
     orderBy: { nextRunAt: 'asc' },
     take: limit,
   });
+  let jobs = stock;
+  if (jobs.length < limit) {
+    const rest = await prisma.syncQueue.findMany({
+      where: { ...base, operation: { not: 'push_stock' } },
+      orderBy: { nextRunAt: 'asc' },
+      take: limit - jobs.length,
+    });
+    jobs = jobs.concat(rest);
+  }
   if (jobs.length === 0) return [];
   await prisma.syncQueue.updateMany({
     where: { id: { in: jobs.map((j) => j.id) } },
     data: { status: 'running', startedAt: now },
   });
   return jobs;
+}
+
+// Retención: borra los jobs 'done' y los logs 'success' más viejos que retentionMs.
+// Los jobs 'done' no tienen valor diagnóstico (el éxito queda en tn_sync_log). Los logs
+// de error/retry se conservan para debugging. Mantiene las tablas chicas → base ágil.
+export async function cleanupOldJobs(retentionMs: number): Promise<{ queue: number; logs: number }> {
+  const cutoff = new Date(Date.now() - retentionMs);
+  const q = await prisma.syncQueue.deleteMany({
+    where: { status: 'done', doneAt: { lt: cutoff } },
+  });
+  const l = await prisma.tnSyncLog.deleteMany({
+    where: { status: 'success', datetime: { lt: cutoff } },
+  });
+  return { queue: q.count, logs: l.count };
 }
 
 // Reaper: re-encola los jobs que quedaron 'running' más tiempo que la lease (o sin

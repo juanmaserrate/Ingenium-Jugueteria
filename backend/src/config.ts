@@ -33,6 +33,11 @@ const schema = z.object({
   // Lease de un job "running": si supera este tiempo sin terminar (típicamente por un
   // redeploy/crash de Railway que dejó el job huérfano), el reaper lo vuelve a 'queued'.
   SYNC_JOB_LEASE_MS: z.coerce.number().default(5 * 60 * 1000),
+  // Retención: se borran los jobs 'done' y los logs 'success' más viejos que esto para
+  // que las tablas de sync no crezcan sin límite (enlentecen la base en instancia chica).
+  SYNC_DONE_RETENTION_MS: z.coerce.number().default(2 * 24 * 60 * 60 * 1000),
+  // Cada cuánto corre la limpieza de retención (además de una vez al arrancar).
+  SYNC_CLEANUP_INTERVAL_MS: z.coerce.number().default(60 * 60 * 1000),
 
   // Escaneo de facturas con Claude (módulo de compras). Vacío → scan deshabilitado (503 controlado).
   ANTHROPIC_API_KEY: z.string().default(''),
