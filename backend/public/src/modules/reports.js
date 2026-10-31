@@ -160,8 +160,10 @@ function pickFilters(fields = [], title = 'Filtros del reporte') {
     const admin = isAdmin();
     let branches = [];
     if (has('branch')) { try { branches = await listBranches(); } catch { branches = []; } }
+    // El admin arranca con SU sucursal activa preseleccionada (pero puede pasar a 'Todas').
+    // El encargado queda ceñido a la suya (única opción).
     const branchOptions = admin
-      ? `<option value="">Todas</option>` + branches.map(b => `<option value="${b.id}">${b.name}</option>`).join('')
+      ? `<option value="">Todas</option>` + branches.map(b => `<option value="${b.id}" ${b.id === activeBranchId() ? 'selected' : ''}>${b.name}</option>`).join('')
       : branches.filter(b => b.id === activeBranchId()).map(b => `<option value="${b.id}">${b.name}</option>`).join('');
     const parts = [];
     if (has('date')) parts.push(`

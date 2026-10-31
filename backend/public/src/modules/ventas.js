@@ -33,6 +33,16 @@ const state = {
 };
 
 export async function mount(el) {
+  // Default del filtro de sucursal = la sucursal del usuario. El encargado (no puede
+  // filtrar otra) queda SIEMPRE ceñido a la suya; el admin arranca en la suya pero puede
+  // pasar a 'Todas'/otra, y recordamos su elección mientras no cierre sesión.
+  const mine = activeBranchId();
+  if (!isAdmin()) {
+    if (mine) state.branch = mine;
+  } else if (!state._branchInit) {
+    state.branch = mine || 'all';
+    state._branchInit = true;
+  }
   await load(el);
   const off = on(EV.SALE_CONFIRMED, () => load(el).catch(() => {}));
   const off2 = on(EV.RETURN_CONFIRMED, () => load(el).catch(() => {}));
@@ -163,8 +173,14 @@ function render(el) {
 
   const methodOpts = ['<option value="">Todos los medios</option>']
     .concat((state.methods || []).map(m => `<option value="${escapeHtml(m.name)}" ${state.method === m.name ? 'selected' : ''}>${escapeHtml(m.name)}</option>`)).join('');
-  const branchOpts = ['<option value="all">Todas las sucursales</option>']
-    .concat(Object.entries(state.brMap || {}).map(([id, name]) => `<option value="${id}" ${state.branch === id ? 'selected' : ''}>${escapeHtml(name)}</option>`)).join('');
+  // Admin: 'Todas' + todas las sucursales (con la suya preseleccionada por el default).
+  // Encargado: solo su sucursal (sin 'Todas' ni la otra) → el select queda fijo.
+  const branchOpts = isAdmin()
+    ? ['<option value="all">Todas las sucursales</option>']
+        .concat(Object.entries(state.brMap || {}).map(([id, name]) => `<option value="${id}" ${state.branch === id ? 'selected' : ''}>${escapeHtml(name)}</option>`)).join('')
+    : Object.entries(state.brMap || {})
+        .filter(([id]) => id === activeBranchId())
+        .map(([id, name]) => `<option value="${id}" selected>${escapeHtml(name)}</option>`).join('');
 
   const dateInput = state.period === 'custom' ? `
       <input id="v-from" type="date" value="${state.customFrom}" class="ing-filter" title="Desde" />
@@ -210,7 +226,7 @@ function render(el) {
           <option value="return" ${state.type === 'return' ? 'selected' : ''}>Sólo devoluciones</option>
         </select>
         <select id="v-method" class="ing-filter">${methodOpts}</select>
-        <select id="v-br" class="ing-filter">${branchOpts}</select>
+        <select id="v-br" class="ing-filter" ${isAdmin() ? '' : 'disabled'}>${branchOpts}</select>
         <select id="v-source" class="ing-filter">
           <option value="" ${state.source === '' ? 'selected' : ''}>Todo origen</option>
           <option value="pos" ${state.source === 'pos' ? 'selected' : ''}>POS</option>
