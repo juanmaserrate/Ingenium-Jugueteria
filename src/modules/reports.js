@@ -276,7 +276,17 @@ async function repStockSnapshot(f = {}) {
   const rows = [...g.values()].filter(e => e.StockInicial || e.StockFinal || e.MovPeriodo)
     .sort((a, b) => String(a.Producto).localeCompare(String(b.Producto)));
   const suc = f.branchId ? (brMap[f.branchId] || f.branchId) : 'Todas';
-  return saveXLSX(`stock_inicial_final_${f.from}_a_${f.to}.xlsx`, [{ name: sheetSafe(`Stock ${suc}`), rows }]);
+  const fuente = (x) => x === 'snapshot' ? 'Foto mensual (exacto)' : 'Reconstruido (estimado)';
+  const info = [
+    { Dato: 'Período', Valor: `${f.from} a ${f.to}` },
+    { Dato: 'Sucursal', Valor: suc },
+    { Dato: 'Stock inicial', Valor: fuente(snap.source?.inicial) },
+    { Dato: 'Stock final', Valor: fuente(snap.source?.final) },
+  ];
+  return saveXLSX(`stock_inicial_final_${f.from}_a_${f.to}.xlsx`, [
+    { name: sheetSafe(`Stock ${suc}`), rows },
+    { name: 'Info', rows: info },
+  ]);
 }
 
 // ---------- Filtros elegibles al generar (diálogo genérico reutilizable) ----------

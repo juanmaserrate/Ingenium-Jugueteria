@@ -1,11 +1,26 @@
 import { env } from '../config.js';
 import { prisma } from '../db.js';
 import { takeNextJobs, markDone, markFailed, reapStuckJobs, cleanupOldJobs } from './queue.js';
+import { ensureMonthlySnapshot } from '../services/stockSnapshot.js';
 import { syncHandlers, type SyncOperation } from '../tiendanube/sync.js';
 import type { FastifyBaseLogger } from 'fastify';
 
 let running = false;
 let lastCleanupAt = 0;
+let lastSnapshotAt = 0;
+
+// Foto mensual del stock: la primera vez que el server corre en un mes nuevo, guarda una
+// copia del stock actual (= stock al comienzo del mes). Idempotente (no duplica). Corre
+// al bootear y una vez por hora, INDEPENDIENTE de Tienda Nube.
+async function runSnapshot(log: FastifyBaseLogger) {
+  try {
+    const r = await ensureMonthlySnapshot();
+    lastSnapshotAt = Date.now();
+    if (r.created) log.info({ periodKey: r.periodKey, filas: r.created }, 'stock snapshot mensual capturado');
+  } catch (err) {
+    log.error({ err }, 'stock snapshot mensual falló');
+  }
+}
 
 // Limpieza de retención: borra jobs 'done' y logs 'success' viejos para que las tablas
 // de sync no crezcan sin límite. Corre una vez al arrancar y luego cada cierto intervalo.
@@ -44,9 +59,12 @@ export function startSyncWorker(log: FastifyBaseLogger) {
 
   void recoverOnBoot(log);
   void runCleanup(log); // una pasada al arrancar: baja el backlog acumulado de inmediato
+  void runSnapshot(log); // una pasada al arrancar: captura la foto del mes si falta
 
   const tick = async () => {
     try {
+      // Foto mensual: antes del guard de TN, para que corra aunque TN esté desconectado.
+      if (Date.now() - lastSnapshotAt >= 60 * 60 * 1000) await runSnapshot(log);
       const integration = await prisma.integration.findUnique({ where: { provider: 'tiendanube' } });
       if (!integration?.active) {
         setTimeout(tick, env.SYNC_WORKER_INTERVAL_MS);

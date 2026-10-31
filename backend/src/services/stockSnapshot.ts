@@ -1,47 +1,82 @@
 import { prisma } from '../db.js';
 
-// Stock inicial (al comienzo del período) y final (al cierre) por variante+sucursal.
-// No hay ledger: se reconstruye desde las fuentes (ventas/devoluciones/transferencias/
-// ajustes de auditoría), igual que services/movements.ts, pero para TODO el catálogo.
-//
-// El stock ACTUAL es la verdad. Hacia atrás:
-//   stockFinal   = actual − Σ(deltas con fecha > to)
-//   stockInicial = stockFinal − Σ(deltas con from ≤ fecha ≤ to)
-// Solo importan los movimientos con fecha ≥ from (los anteriores no afectan ninguno
-// de los dos valores calculados desde el actual). Volumen chico → se reduce en memoria.
+const KEY = (v: string, b: string) => `${v}|${b}`;
+
+// Mes actual en horario Argentina (UTC−3): 'YYYY-MM'.
+function arMonthKey(d: Date = new Date()): string {
+  return new Date(d.getTime() - 3 * 3600 * 1000).toISOString().slice(0, 7);
+}
+function nextMonthKey(key: string): string {
+  let [y, m] = key.split('-').map(Number);
+  m += 1; if (m > 12) { m = 1; y += 1; }
+  return `${y}-${String(m).padStart(2, '0')}`;
+}
+function lastDayOfMonth(y: number, m1: number): number {
+  return new Date(y, m1, 0).getDate(); // m1 = mes 1-based
+}
+
+// Captura la foto del stock del mes actual si todavía no existe. Idempotente: el unique
+// (periodKey, variantId, branchId) + skipDuplicates evita duplicados aunque corra en paralelo.
+// periodKey = mes actual = stock al COMIENZO de este mes (se toma la primera vez que el
+// server corre en el mes). Lo llama el worker al bootear y una vez por hora.
+export async function ensureMonthlySnapshot(): Promise<{ created: number; periodKey: string; skipped?: boolean }> {
+  const periodKey = arMonthKey();
+  const existing = await prisma.stockSnapshot.count({ where: { periodKey } });
+  if (existing > 0) return { created: 0, periodKey, skipped: true };
+  const stocks = await prisma.stock.findMany({ select: { variantId: true, branchId: true, qty: true } });
+  if (stocks.length === 0) return { created: 0, periodKey };
+  const res = await prisma.stockSnapshot.createMany({
+    data: stocks.map((s) => ({ periodKey, variantId: s.variantId, branchId: s.branchId, qty: s.qty })),
+    skipDuplicates: true,
+  });
+  return { created: res.count, periodKey };
+}
+
+async function loadSnapshot(periodKey: string, branchFilter?: string): Promise<Map<string, number>> {
+  const rows = await prisma.stockSnapshot.findMany({
+    where: { periodKey, ...(branchFilter ? { branchId: branchFilter } : {}) },
+    select: { variantId: true, branchId: true, qty: true },
+  });
+  const m = new Map<string, number>();
+  for (const r of rows) m.set(KEY(r.variantId, r.branchId), r.qty);
+  return m;
+}
+
+// Stock inicial (comienzo del período) y final (cierre) por variante+sucursal.
+// Preferencia: si hay FOTO mensual (StockSnapshot) alineada al borde del período, se usa
+// (exacto, sin depender del historial). Si no, se RECONSTRUYE hacia atrás desde el stock
+// actual restando ventas/devoluciones/transferencias/ajustes (fallback para meses viejos
+// y para el mes en curso, cuyo "final" = stock actual y es exacto igual).
 export async function getStockSnapshot(opts: { from: string; to: string; branchId?: string }) {
   const from = new Date(opts.from);
   const to = new Date(opts.to);
   const branchFilter = opts.branchId || undefined;
-  const key = (v: string, b: string) => `${v}|${b}`;
 
-  // Stock actual por variante+sucursal.
+  // --- Stock actual (ancla de la reconstrucción) ---
   const stocks = await prisma.stock.findMany({
     where: branchFilter ? { branchId: branchFilter } : undefined,
     select: { variantId: true, branchId: true, qty: true },
   });
   const current = new Map<string, number>();
-  for (const s of stocks) current.set(key(s.variantId, s.branchId), s.qty);
+  for (const s of stocks) current.set(KEY(s.variantId, s.branchId), s.qty);
 
+  // --- Deltas para la reconstrucción (solo fecha ≥ from) ---
   const inPeriod = new Map<string, number>();
   const afterTo = new Map<string, number>();
   const add = (m: Map<string, number>, k: string, d: number) => m.set(k, (m.get(k) || 0) + d);
   const place = (dt: Date, v: string, b: string, delta: number) => {
     if (!v || !b || !delta) return;
     if (branchFilter && b !== branchFilter) return;
-    if (dt > to) add(afterTo, key(v, b), delta);
-    else if (dt >= from) add(inPeriod, key(v, b), delta);
-    // dt < from → no afecta inicial ni final (se calculan desde el actual hacia atrás).
+    if (dt > to) add(afterTo, KEY(v, b), delta);
+    else if (dt >= from) add(inPeriod, KEY(v, b), delta);
   };
 
-  // Ventas confirmadas (delta −qty).
   const saleItems = await prisma.saleItem.findMany({
     where: { sale: { status: 'confirmed', datetime: { gte: from } } },
     select: { variantId: true, qty: true, sale: { select: { datetime: true, branchId: true } } },
   });
   for (const si of saleItems) if (si.sale) place(si.sale.datetime, si.variantId, si.sale.branchId, -si.qty);
 
-  // Devoluciones: devuelto +qty, llevado (canje) −qty.
   const returns = await prisma.return.findMany({
     where: { datetime: { gte: from } },
     select: { datetime: true, branchId: true, returnedItems: true, takenItems: true },
@@ -51,7 +86,6 @@ export async function getStockSnapshot(opts: { from: string; to: string; branchI
     for (const it of ((r.takenItems as any[]) || [])) place(r.datetime, it.variantId, r.branchId, -(Number(it.qty) || 0));
   }
 
-  // Transferencias confirmadas: origen −qty, destino +qty.
   const transfers = await prisma.transfer.findMany({
     where: { status: 'confirmed' },
     select: { datetime: true, confirmedAt: true, fromBranch: true, toBranch: true, items: true },
@@ -66,7 +100,6 @@ export async function getStockSnapshot(opts: { from: string; to: string; branchI
     }
   }
 
-  // Ajustes/recepciones (auditoría de stock): delta = after − before, entityId = `variantId|branch`.
   const audits = await prisma.auditLog.findMany({
     where: { entity: 'stock', datetime: { gte: from } },
     select: { datetime: true, entityId: true, before: true, after: true },
@@ -77,16 +110,34 @@ export async function getStockSnapshot(opts: { from: string; to: string; branchI
     place(a.datetime, vid, b, delta);
   }
 
-  const keys = new Set<string>([...current.keys(), ...inPeriod.keys(), ...afterTo.keys()]);
+  // --- Fotos mensuales alineadas al período ---
+  const fromKey = opts.from.slice(0, 7);          // 'YYYY-MM' del comienzo
+  const isFromMonthStart = opts.from.slice(8, 10) === '01';
+  const [ty, tm, td] = opts.to.slice(0, 10).split('-').map(Number);
+  const isToMonthEnd = td === lastDayOfMonth(ty, tm);
+  const finalKey = nextMonthKey(opts.to.slice(0, 7)); // el inicio del mes SIGUIENTE = cierre de 'to'
+
+  const snapFrom = isFromMonthStart ? await loadSnapshot(fromKey, branchFilter) : new Map<string, number>();
+  const snapFinal = isToMonthEnd ? await loadSnapshot(finalKey, branchFilter) : new Map<string, number>();
+  const usedSnapInicial = snapFrom.size > 0;
+  const usedSnapFinal = snapFinal.size > 0;
+
+  const keys = new Set<string>([...current.keys(), ...inPeriod.keys(), ...afterTo.keys(), ...snapFrom.keys(), ...snapFinal.keys()]);
   const rows: { variantId: string; branchId: string; inicial: number; final: number; movPeriodo: number }[] = [];
   for (const k of keys) {
     const [variantId, branchId] = k.split('|');
-    const cur = current.get(k) || 0;
-    const ip = inPeriod.get(k) || 0;
-    const at = afterTo.get(k) || 0;
-    const final = cur - at;
-    const inicial = final - ip;
-    rows.push({ variantId, branchId, inicial, final, movPeriodo: ip });
+    const reconFinal = (current.get(k) || 0) - (afterTo.get(k) || 0);
+    const reconInicial = reconFinal - (inPeriod.get(k) || 0);
+    const final = usedSnapFinal && snapFinal.has(k) ? (snapFinal.get(k) as number) : reconFinal;
+    const inicial = usedSnapInicial && snapFrom.has(k) ? (snapFrom.get(k) as number) : reconInicial;
+    rows.push({ variantId, branchId, inicial, final, movPeriodo: final - inicial });
   }
-  return { from: opts.from, to: opts.to, branchId: branchFilter || null, rows };
+
+  return {
+    from: opts.from,
+    to: opts.to,
+    branchId: branchFilter || null,
+    source: { inicial: usedSnapInicial ? 'snapshot' : 'reconstruido', final: usedSnapFinal ? 'snapshot' : 'reconstruido' },
+    rows,
+  };
 }

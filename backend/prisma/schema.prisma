@@ -191,6 +191,22 @@ model Variant {
   @@map("variants")
 }
 
+// Foto mensual del stock. periodKey = 'YYYY-MM' = stock al INICIO de ese mes.
+// Sin FK a Variant a propósito: las fotos históricas deben sobrevivir aunque luego se
+// borre una variante. Se captura sola (worker) la primera vez que el server corre en el mes.
+model StockSnapshot {
+  id        String   @id @default(cuid())
+  periodKey String   @map("period_key")
+  variantId String   @map("variant_id")
+  branchId  String   @map("branch_id")
+  qty       Int
+  takenAt   DateTime @default(now()) @map("taken_at")
+
+  @@unique([periodKey, variantId, branchId])
+  @@index([periodKey])
+  @@map("stock_snapshot")
+}
+
 model Stock {
   id          String   @id // "{variantId}|{branchId}"
   variantId   String   @map("variant_id")
