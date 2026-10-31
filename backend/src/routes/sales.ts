@@ -25,6 +25,7 @@ const saleSchema = z.object({
   id: z.string().optional(),
   branchId: z.string(),
   sellerId: z.string().nullable().optional(),
+  sellerName: z.string().nullable().optional(),
   customerId: z.string().nullable().optional(),
   items: z.array(itemSchema).min(1),
   payments: z.array(paymentSchema).min(1),

@@ -831,9 +831,15 @@ async function _confirmSaleInner(root) {
   if (!sale.client_sale_id) {
     sale.client_sale_id = (globalThis.crypto?.randomUUID?.()) || ('cs_' + Date.now() + '_' + Math.random().toString(36).slice(2));
   }
+  // Vendedor elegido en el panel: lo guardamos como NOMBRE (snapshot). Sale.sellerId tiene
+  // FK a User y el vendedor es un Employee, así que no mandamos el id; el nombre alcanza
+  // para verlo/filtrarlo en Ventas y queda fijo aunque el empleado cambie después.
+  const sellerEmp = sale.seller_id ? (state.employees || []).find(e => e.id === sale.seller_id) : null;
+  const sellerName = sellerEmp ? `${sellerEmp.name || ''}${sellerEmp.lastname ? ' ' + sellerEmp.lastname : ''}`.trim() : null;
   const buildBody = (negative) => ({
     branchId: br,
-    sellerId: null, // empleados aún no migrados al backend
+    sellerId: null, // ver nota arriba: el vendedor va como sellerName (snapshot)
+    sellerName,
     customerId: sale.customer_id || null,
     offlineId: sale.client_sale_id,
     items: sale.items.map(it => ({

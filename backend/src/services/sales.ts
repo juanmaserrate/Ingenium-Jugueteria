@@ -45,6 +45,7 @@ export type SaleInput = {
   id?: string;
   branchId: string;
   sellerId?: string | null;
+  sellerName?: string | null;
   customerId?: string | null;
   items: SaleItemInput[];
   payments: SalePaymentInput[];
@@ -154,6 +155,7 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
         datetime,
         branchId: input.branchId,
         sellerId: input.sellerId ?? null,
+        sellerName: input.sellerName ?? null,
         customerId: input.customerId ?? null,
         itemsSubtotal,
         discountTotal: discountGlobal,

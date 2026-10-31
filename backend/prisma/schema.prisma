@@ -233,6 +233,7 @@ model Sale {
   datetime            DateTime
   branchId            String   @map("branch_id")
   sellerId            String?  @map("seller_id")
+  sellerName          String?  @map("seller_name") // snapshot del vendedor (empleado) elegido en el POS
   customerId          String?  @map("customer_id")
   itemsSubtotal       Float    @map("items_subtotal")
   discountTotal       Float    @default(0) @map("discount_total")

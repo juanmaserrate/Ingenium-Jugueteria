@@ -52,6 +52,14 @@ export async function runSeed() {
   } catch (err) {
     console.warn('[seed] no se pudo asegurar employees.branch_ids:', err);
   }
+  // Snapshot del vendedor en la venta (el POS lo manda como nombre; ver sales.ts).
+  try {
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "sales" ADD COLUMN IF NOT EXISTS "seller_name" TEXT`,
+    );
+  } catch (err) {
+    console.warn('[seed] no se pudo asegurar sales.seller_name:', err);
+  }
 
   for (const b of BRANCHES) {
     await prisma.branch.upsert({

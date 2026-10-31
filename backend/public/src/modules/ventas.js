@@ -114,6 +114,7 @@ async function load(el) {
   const saleEntries = (sales || []).map(s => ({
     kind: 'sale',
     id: s.id, number: s.number, datetime: s.datetime, branchId: s.branchId, source: s.source,
+    seller: s.sellerName || '',
     customerName: s.customer?.name || '', payments: s.payments || [],
     amount: s.total || 0,
     items: (s.items || []).map(it => ({
@@ -148,6 +149,7 @@ function filtered() {
     if (!q) return true;
     if (String(e.number).includes(q)) return true;
     if ((e.customerName || '').toLowerCase().includes(q)) return true;
+    if ((e.seller || '').toLowerCase().includes(q)) return true;
     const items = e.kind === 'sale' ? e.items : [...(e.returnedItems || []), ...(e.takenItems || [])];
     return (items || []).some(it => (it.name || '').toLowerCase().includes(q));
   });
@@ -232,7 +234,7 @@ function render(el) {
           <option value="pos" ${state.source === 'pos' ? 'selected' : ''}>POS</option>
           <option value="tn" ${state.source === 'tn' ? 'selected' : ''}>Tienda Nube</option>
         </select>
-        <input id="v-q" placeholder="Buscar N°, cliente o producto…" class="ing-filter flex-1 min-w-[160px]" value="${escapeHtml(state.q)}" />
+        <input id="v-q" placeholder="Buscar N°, cliente, vendedor o producto…" class="ing-filter flex-1 min-w-[160px]" value="${escapeHtml(state.q)}" />
       </div>
     </div>
 
@@ -302,6 +304,10 @@ function rowHTML(e) {
     detail = `
       ${items || '<div class="text-sm text-[#7d6c5c] py-1">Sin items</div>'}
       <div class="flex justify-between items-center pt-2 mt-1 border-t border-[#fff1e6] dark:border-[#2a2018]">
+        <span class="text-xs font-black uppercase tracking-wider text-[#7d6c5c]">Vendedor</span>
+        <span class="font-bold text-[#241a0d] dark:text-[#fff1e6]">${e.seller ? escapeHtml(e.seller) : '—'}</span>
+      </div>
+      <div class="flex justify-between items-center pt-2 mt-1 border-t border-[#fff1e6] dark:border-[#2a2018]">
         <span class="text-xs font-black uppercase tracking-wider text-[#7d6c5c]">Total venta</span>
         <span class="font-black text-[#d82f1e]">${money(e.amount)}</span>
       </div>
@@ -317,7 +323,7 @@ function rowHTML(e) {
         <span class="material-symbols-outlined text-[#7d6c5c] transition-transform ${open ? 'rotate-90' : ''}" data-chev="${e.id}">chevron_right</span>
         <span class="min-w-0">
           <span class="block font-bold text-[#241a0d] dark:text-[#fff1e6]">${fecha} <span class="text-[#7d6c5c] font-semibold">${hora}</span></span>
-          <span class="block text-xs text-[#7d6c5c] break-words leading-tight">#${String(e.number).padStart(6, '0')} · ${tag}${e.customerName ? ' · ' + escapeHtml(e.customerName) : ''}</span>
+          <span class="block text-xs text-[#7d6c5c] break-words leading-tight">#${String(e.number).padStart(6, '0')} · ${tag}${e.customerName ? ' · ' + escapeHtml(e.customerName) : ''}${e.seller ? ' · 👤 ' + escapeHtml(e.seller) : ''}</span>
         </span>
         <span class="hidden md:block text-sm text-[#241a0d] dark:text-[#fff1e6]">${escapeHtml(payLabel(e))}${combinado}</span>
         ${amountHTML}
