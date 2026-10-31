@@ -32,14 +32,27 @@ export async function ensureMonthlySnapshot(): Promise<{ created: number; period
   return { created: res.count, periodKey };
 }
 
-async function loadSnapshot(periodKey: string, branchFilter?: string): Promise<Map<string, number>> {
+// Partes de fecha en horario Argentina (UTC−3).
+function arParts(d: Date) {
+  const x = new Date(d.getTime() - 3 * 3600 * 1000);
+  return { y: x.getUTCFullYear(), m: x.getUTCMonth() + 1, day: x.getUTCDate() };
+}
+
+// Carga la foto de un mes SOLO si sirve como borde de mes: tomada en los primeros 3 días
+// de ese mismo mes. Así, si el sistema se activó a mitad de mes, esa foto tardía NO se usa
+// como "inicio de mes" (el reporte reconstruye, que para meses recientes es exacto igual).
+async function loadBoundarySnapshot(periodKey: string, branchFilter?: string): Promise<Map<string, number>> {
   const rows = await prisma.stockSnapshot.findMany({
     where: { periodKey, ...(branchFilter ? { branchId: branchFilter } : {}) },
-    select: { variantId: true, branchId: true, qty: true },
+    select: { variantId: true, branchId: true, qty: true, takenAt: true },
   });
-  const m = new Map<string, number>();
-  for (const r of rows) m.set(KEY(r.variantId, r.branchId), r.qty);
-  return m;
+  if (rows.length === 0) return new Map();
+  const [y, m] = periodKey.split('-').map(Number);
+  const p = arParts(rows[0].takenAt);
+  if (!(p.y === y && p.m === m && p.day <= 3)) return new Map(); // tomada tarde → no es borde válido
+  const map = new Map<string, number>();
+  for (const r of rows) map.set(KEY(r.variantId, r.branchId), r.qty);
+  return map;
 }
 
 // Stock inicial (comienzo del período) y final (cierre) por variante+sucursal.
@@ -117,8 +130,8 @@ export async function getStockSnapshot(opts: { from: string; to: string; branchI
   const isToMonthEnd = td === lastDayOfMonth(ty, tm);
   const finalKey = nextMonthKey(opts.to.slice(0, 7)); // el inicio del mes SIGUIENTE = cierre de 'to'
 
-  const snapFrom = isFromMonthStart ? await loadSnapshot(fromKey, branchFilter) : new Map<string, number>();
-  const snapFinal = isToMonthEnd ? await loadSnapshot(finalKey, branchFilter) : new Map<string, number>();
+  const snapFrom = isFromMonthStart ? await loadBoundarySnapshot(fromKey, branchFilter) : new Map<string, number>();
+  const snapFinal = isToMonthEnd ? await loadBoundarySnapshot(finalKey, branchFilter) : new Map<string, number>();
   const usedSnapInicial = snapFrom.size > 0;
   const usedSnapFinal = snapFinal.size > 0;
 
