@@ -380,8 +380,22 @@ export async function relinkTn(productId, tnProductId, tnVariantId, dataSource) 
     method: 'POST',
     body: { productId, tnProductId, tnVariantId, dataSource },
   });
-  const p = _cache.byId.get(productId);
-  if (p) { p.linked_tn = true; p.tn_product_id = tnProductId; }
+  // Refrescar el producto completo desde el server: con "datos de TN" cambian
+  // precio/descripción, y en ambos casos queda linked_tn. Sin esto la grilla mostraba
+  // datos viejos (solo actualizábamos el flag de vínculo en memoria).
+  try {
+    const bp = await api(`/api/products/${encodeURIComponent(productId)}`);
+    const front = toFront(bp);
+    if (front) {
+      _cache.byId.set(front.id, front);
+      const idx = _cache.list.findIndex((p) => p.id === front.id);
+      if (idx >= 0) _cache.list[idx] = front; else _cache.list.push(front);
+    }
+  } catch {
+    // Fallback al comportamiento previo si el refresco falla.
+    const p = _cache.byId.get(productId);
+    if (p) { p.linked_tn = true; p.tn_product_id = tnProductId; }
+  }
   emit(EV.PRODUCT_UPDATED, { id: productId });
   return r;
 }

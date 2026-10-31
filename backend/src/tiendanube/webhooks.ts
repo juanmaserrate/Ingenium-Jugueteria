@@ -10,6 +10,10 @@ import { randomId } from '../utils/crypto.js';
  * Cada uno debe ser idempotente.
  */
 
+// Ventana anti-eco: si empujamos algo a TN hace menos que esto, el webhook product/updated
+// que llega es el reflejo de nuestro propio push y lo ignoramos (ver handleProductUpdated).
+const ECHO_WINDOW_MS = 2 * 60 * 1000;
+
 export async function handleOrderPaid(event: any) {
   const tn = await getTnClient();
   if (!tn) throw new Error('TN not connected');
@@ -175,6 +179,23 @@ export async function handleProductUpdated(event: any) {
     // Si no hay mapping, lo tratamos como producto nuevo
     return handleProductCreated(event);
   }
+
+  // Anti-eco: cada push nuestro a TN (producto/variante/stock) bump-ea el updated_at de TN,
+  // que a su vez dispara este mismo webhook product/updated. Sin esta guarda, termin\u00e1bamos
+  // "pulleando" de vuelta lo que acab\u00e1bamos de empujar (el revert de precio del Carrusel).
+  // Si hubo un push propio hace menos de ECHO_WINDOW_MS, ignoramos el webhook: es el eco.
+  const variantPushes = await prisma.variantTnMapping.findMany({
+    where: { tnProductId },
+    select: { lastPushAt: true },
+  });
+  const lastPush = Math.max(
+    mapping.lastPushAt?.getTime() ?? 0,
+    ...variantPushes.map((v) => v.lastPushAt?.getTime() ?? 0),
+  );
+  if (lastPush && Date.now() - lastPush < ECHO_WINDOW_MS) {
+    return { skipped: 'echo of recent local push' };
+  }
+
   const tn = await getTnClient();
   if (!tn) throw new Error('TN not connected');
   const tnProduct = await tn.getProduct(tnProductId);
@@ -191,7 +212,8 @@ export async function handleProductUpdated(event: any) {
       name: tnProduct.name?.es ?? mapping.product.name,
       // No pisar la descripci\u00f3n local con null si TN no la trae.
       description: tnProduct.description?.es ?? mapping.product.description,
-      price: tnProduct.variants?.[0] ? parseFloat(tnProduct.variants[0].price) : mapping.product.price,
+      // El PRECIO siempre sale del sistema: nunca lo pisamos con el de TN. Traer el precio
+      // de TN ac\u00e1 era la otra mitad del revert (TN tiene el precio viejo tras el eco).
     },
   });
   await prisma.productTnMapping.update({

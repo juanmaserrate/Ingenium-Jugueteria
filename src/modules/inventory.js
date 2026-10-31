@@ -1194,6 +1194,17 @@ async function openProductForm(p, container) {
             const it = items[i];
             if (!it) return;
             if (it.kind === 'saved') {
+              // Si el producto está vinculado a TN, borrar la foto acá también la quita de
+              // Tienda Nube. Confirmamos para que no se pierda una foto de TN sin querer.
+              if (p?.linked_tn) {
+                const ok = await confirmModal({
+                  title: 'Eliminar foto',
+                  message: 'Este producto está vinculado a Tienda Nube. Si esta foto está publicada allá, también se va a quitar de Tienda Nube. ¿Eliminar igual?',
+                  danger: true,
+                  confirmLabel: 'Eliminar',
+                });
+                if (!ok) return;
+              }
               try {
                 const { api } = await import('../core/api.js');
                 await api(`/api/images/${encodeURIComponent(it.id)}`, { method: 'DELETE' });

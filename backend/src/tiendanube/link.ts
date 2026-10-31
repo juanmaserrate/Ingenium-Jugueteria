@@ -277,14 +277,15 @@ export async function relinkProduct(input: {
       where: { id: product.id },
       data: { description: desc ?? undefined, price },
     });
-    // Para productos con variantes, pasar el precio de cada variante TN a su override local.
-    if (hasVariants) {
-      const maps = await prisma.variantTnMapping.findMany({ where: { variantId: { in: product.variants.map((v) => v.id) } } });
-      for (const m of maps) {
-        const tv = tnVariants.find((x) => String(x.id) === String(m.tnVariantId));
-        const p = tv ? parseFloat(tv.price) : NaN;
-        if (Number.isFinite(p)) await prisma.variant.update({ where: { id: m.variantId }, data: { priceOverride: p } });
-      }
+    // Pasar el precio de cada variante TN a su override local. También para productos
+    // SIMPLES (1 variante): al pushear usamos `variant.priceOverride ?? product.price`, así
+    // que si el override quedaba con el precio viejo, el próximo push lo mandaba y "no tomaba"
+    // el precio recién vinculado. Sincronizarlo deja la variante y el producto consistentes.
+    const maps = await prisma.variantTnMapping.findMany({ where: { variantId: { in: product.variants.map((v) => v.id) } } });
+    for (const m of maps) {
+      const tv = tnVariants.find((x) => String(x.id) === String(m.tnVariantId));
+      const p = tv ? parseFloat(tv.price) : NaN;
+      if (Number.isFinite(p)) await prisma.variant.update({ where: { id: m.variantId }, data: { priceOverride: p } });
     }
     pulled = { description: desc != null, price };
   } else {
