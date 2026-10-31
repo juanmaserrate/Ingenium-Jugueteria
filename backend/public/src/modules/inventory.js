@@ -803,6 +803,12 @@ async function editInline(td, list, container) {
 }
 
 async function openProductForm(p, container) {
+  // El listado es liviano (sin descripción / SEO / medidas / video para no congelar al
+  // abrir Inventario). Al EDITAR un producto existente traemos la ficha completa para
+  // poblar esos campos; si no, el form los mostraría vacíos y un guardado los borraría.
+  if (p?.id) {
+    try { const full = await P.byId(p.id); if (full) p = { ...p, ...full }; } catch { /* fallback al item liviano */ }
+  }
   const [cats, brs, sps, subs, branches] = await Promise.all([
     Categories.list(), Brands.list(), Suppliers.list(), Subcategories.list(), getAll('branches'),
   ]);

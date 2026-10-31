@@ -46,11 +46,30 @@ export type ProductInput = {
 
 export async function listProducts() {
   // Solo productos activos: los "borrados" con historial se marcan active=false (soft-delete).
-  // Se excluyen `images` del listado (pesadas, solo en el form individual). De `tnMapping`
-  // traemos solo el id (liviano) para mostrar en la grilla si está vinculado a Tienda Nube.
+  // Payload LIVIANO para la grilla: `select` explícito con solo lo que el listado usa
+  // (grilla + export + edición inline). Se EXCLUYE lo pesado y no listable —`images`,
+  // `description` (~6.6 MB del total), SEO, medidas, handle, video, tnCategoryIds— que se
+  // trae recién en el form individual vía GET /products/:id. Sin esto el payload eran 17 MB
+  // y congelaba el navegador al abrir Inventario. De `tnMapping` solo el id (vinculado o no).
   return prisma.product.findMany({
     where: { active: true },
-    include: {
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      cost: true,
+      marginPct: true,
+      price: true,
+      promotionalPrice: true,
+      categoryId: true,
+      subcategoryId: true,
+      brandId: true,
+      supplierId: true,
+      publishedMeli: true,
+      publishedTn: true,
+      active: true,
+      createdAt: true,
+      updatedAt: true,
       variants: {
         select: {
           id: true,

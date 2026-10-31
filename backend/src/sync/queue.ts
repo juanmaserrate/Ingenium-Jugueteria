@@ -52,8 +52,16 @@ export async function takeNextJobs(limit = 10) {
 // de error/retry se conservan para debugging. Mantiene las tablas chicas → base ágil.
 export async function cleanupOldJobs(retentionMs: number): Promise<{ queue: number; logs: number }> {
   const cutoff = new Date(Date.now() - retentionMs);
+  // 'done' no tiene valor diagnóstico. 'failed' viejo tampoco: agotó reintentos y no se
+  // vuelve a correr solo; queda como ruido en el panel. Lo purgamos por createdAt para que
+  // un error reciente siga visible, pero los fallidos viejos (data rota ya resuelta) se van.
   const q = await prisma.syncQueue.deleteMany({
-    where: { status: 'done', doneAt: { lt: cutoff } },
+    where: {
+      OR: [
+        { status: 'done', doneAt: { lt: cutoff } },
+        { status: 'failed', createdAt: { lt: cutoff } },
+      ],
+    },
   });
   const l = await prisma.tnSyncLog.deleteMany({
     where: { status: 'success', datetime: { lt: cutoff } },

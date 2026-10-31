@@ -146,7 +146,15 @@ function indexCache(frontList) {
 
 export async function list() {
   const raw = await api('/api/products');
-  const front = (raw || []).map(toFront).filter(Boolean);
+  const arr = raw || [];
+  // Procesar en tandas cediendo el control al navegador cada 1024, así normalizar ~12k
+  // productos no congela la pantalla al abrir Inventario (antes era un map sincrónico).
+  const front = [];
+  for (let i = 0; i < arr.length; i++) {
+    const f = toFront(arr[i]);
+    if (f) front.push(f);
+    if ((i & 1023) === 1023) await new Promise((r) => setTimeout(r));
+  }
   indexCache(front);
   return front;
 }
