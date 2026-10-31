@@ -205,7 +205,7 @@ const state = {
   filters: { search: '', category: '', brand: '', supplier: '', onlyMeli: false, variant: '', stock: 'all', stockMax: null },
   sort: 'newest', // newest | oldest | name — por defecto los más nuevos primero
   expandedVariants: new Set(), // productos con el detalle de variantes desplegado
-  visibleCols: new Set(['code', 'name', 'category', 'brand', 'supplier', 'cost', 'price', 'margin', 'stock_lomas', 'stock_banfield', 'total', 'meli']),
+  visibleCols: new Set(['code', 'name', 'category', 'brand', 'supplier', 'cost', 'price', 'margin', 'stock_lomas', 'stock_banfield', 'total', 'meli', 'tn']),
   // Caché de datos: se carga una sola vez y los filtros operan sobre él
   cache: null, // { products, stocks, categories, brands, suppliers, branches, subcats }
 };
@@ -382,6 +382,9 @@ async function renderProducts(container, forceReload = false) {
     { id: 'stock_banfield', label: `Stock ${banf?.name || 'Banfield'}`, render: p => stockCell(stockOf(p.id, 'br_banfield')), align: 'center' },
     { id: 'total', label: 'Total', render: p => (stockOf(p.id,'br_lomas').qty + stockOf(p.id,'br_banfield').qty), align: 'center' },
     { id: 'meli', label: 'MELI', render: p => p.published_meli ? '<span class="material-symbols-outlined text-[#d82f1e] text-base">check_circle</span>' : '-', align: 'center' },
+    { id: 'tn', label: 'Tienda Nube', align: 'center', render: p => p.linked_tn
+      ? '<span class="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-[11px] font-bold whitespace-nowrap">Vinculado</span>'
+      : '<span class="px-2 py-0.5 rounded-full bg-[#fff1e6] text-[#7d6c5c] text-[11px] font-bold whitespace-nowrap">No vinculado</span>' },
   ];
   const visibleCols = cols.filter(c => state.visibleCols.has(c.id));
 
@@ -571,6 +574,7 @@ async function renderProducts(container, forceReload = false) {
       Stock_Banfield: stockOf(p.id,'br_banfield').qty,
       Reservado_Banfield: stockOf(p.id,'br_banfield').reserved_qty,
       MELI: p.published_meli ? 'Sí' : 'No',
+      TiendaNube: p.linked_tn ? 'Vinculado' : 'No vinculado',
     }));
     exportSimple(`productos_${new Date().toISOString().slice(0,10)}.xlsx`, rows, 'Productos');
     toast('XLSX generado', 'success');
