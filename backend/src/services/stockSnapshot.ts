@@ -41,6 +41,17 @@ function arParts(d: Date) {
 // Carga la foto de un mes SOLO si sirve como borde de mes: tomada en los primeros 3 días
 // de ese mismo mes. Así, si el sistema se activó a mitad de mes, esa foto tardía NO se usa
 // como "inicio de mes" (el reporte reconstruye, que para meses recientes es exacto igual).
+// Qué meses de foto hay guardados (para visibilidad/ops).
+export async function listStockSnapshots() {
+  const grouped = await prisma.stockSnapshot.groupBy({
+    by: ['periodKey'],
+    _count: { _all: true },
+    _min: { takenAt: true },
+    orderBy: { periodKey: 'desc' },
+  });
+  return grouped.map((g) => ({ periodKey: g.periodKey, filas: g._count._all, tomadaEl: g._min.takenAt }));
+}
+
 async function loadBoundarySnapshot(periodKey: string, branchFilter?: string): Promise<Map<string, number>> {
   const rows = await prisma.stockSnapshot.findMany({
     where: { periodKey, ...(branchFilter ? { branchId: branchFilter } : {}) },

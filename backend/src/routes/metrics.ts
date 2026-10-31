@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { getDashboard, getBalance, getProfits, getContribution, getAudit } from '../services/metrics.js';
-import { getStockSnapshot } from '../services/stockSnapshot.js';
+import { getStockSnapshot, listStockSnapshots } from '../services/stockSnapshot.js';
 import { ValidationError } from '../utils/errors.js';
 import { requireRole } from '../auth/jwt.js';
 
@@ -27,6 +27,9 @@ export async function metricsRoutes(app: FastifyInstance) {
     if (!q.from || !q.to) throw new ValidationError('from y to requeridos (YYYY-MM-DD)');
     return getStockSnapshot({ from: q.from + 'T00:00:00', to: q.to + 'T23:59:59', branchId: scopedBranch(req, q) });
   });
+
+  // Qué meses de foto de stock hay guardados.
+  app.get('/reports/stock-snapshots', async () => listStockSnapshots());
 
   app.get('/metrics/balance', async (req) => {
     const q = req.query as { branchId?: string; from?: string; to?: string };
