@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { getDashboard, getBalance, getProfits, getContribution, getAudit } from '../services/metrics.js';
+import { getStockSnapshot } from '../services/stockSnapshot.js';
 import { ValidationError } from '../utils/errors.js';
 import { requireRole } from '../auth/jwt.js';
 
@@ -18,6 +19,13 @@ export async function metricsRoutes(app: FastifyInstance) {
     const today = q.today || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
     const month = q.month || today.slice(0, 7);
     return getDashboard({ branchId: scopedBranch(req, q), month, today });
+  });
+
+  // Stock inicial (al comienzo del período) vs final (al cierre), por variante+sucursal.
+  app.get('/reports/stock-snapshot', async (req) => {
+    const q = req.query as { from?: string; to?: string; branchId?: string };
+    if (!q.from || !q.to) throw new ValidationError('from y to requeridos (YYYY-MM-DD)');
+    return getStockSnapshot({ from: q.from + 'T00:00:00', to: q.to + 'T23:59:59', branchId: scopedBranch(req, q) });
   });
 
   app.get('/metrics/balance', async (req) => {

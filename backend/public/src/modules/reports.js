@@ -20,6 +20,12 @@ import { openModal } from '../components/modal.js';
 const REPORTS = [
   { id: 'by-customer', name: 'Compras por cliente', desc: 'Agrupado por cliente: sus compras, detalle de productos e importes. Elegís los filtros al generar.', icon: 'shopping_cart', filters: ['date', 'branch', 'source', 'customer'] },
   { id: 'sales', name: 'Ventas', desc: 'Todas las ventas con detalle', icon: 'trending_up', filters: ['date', 'branch', 'source'] },
+  { id: 'by-seller', name: 'Ventas por vendedor', desc: 'Agrupado por vendedor. Período mensual o anual.', icon: 'badge', filters: ['period', 'branch', 'source'] },
+  { id: 'by-supplier', name: 'Ventas por proveedor', desc: 'Unidades e importe por proveedor. Mensual o anual.', icon: 'local_shipping', filters: ['period', 'branch', 'source'] },
+  { id: 'by-category', name: 'Ventas por rubro', desc: 'Unidades e importe por rubro (categoría). Mensual o anual.', icon: 'category', filters: ['period', 'branch', 'source'] },
+  { id: 'by-customer-sum', name: 'Ventas por cliente', desc: 'Resumen por cliente: ventas, unidades e importe. Mensual o anual.', icon: 'groups', filters: ['period', 'branch', 'source'] },
+  { id: 'by-payment', name: 'Ventas por medio de pago', desc: 'Una hoja por cada medio de pago. Mensual o anual.', icon: 'payments', filters: ['period', 'branch'] },
+  { id: 'stock-snapshot', name: 'Stock inicial vs final', desc: 'Stock al inicio y al cierre del período, por producto. Mensual o anual.', icon: 'inventory', filters: ['period', 'branch'] },
   { id: 'returns', name: 'Devoluciones', desc: 'Devoluciones y vales emitidos', icon: 'assignment_return', filters: ['date', 'branch'] },
   { id: 'cash', name: 'Caja', desc: 'Movimientos de efectivo de la sucursal', icon: 'account_balance_wallet', filters: ['date', 'branch'] },
   { id: 'expenses', name: 'Gastos', desc: 'Gastos por categoría', icon: 'shopping_bag', filters: ['date', 'branch'] },
@@ -56,6 +62,8 @@ export async function mount(el) {
 
 const REP_FNS = {
   'by-customer': repByCustomer,
+  'by-seller': repBySeller, 'by-supplier': repBySupplier, 'by-category': repByCategory,
+  'by-customer-sum': repByCustomerSum, 'by-payment': repByPayment, 'stock-snapshot': repStockSnapshot,
   sales: repSales, returns: repReturns, cash: repCash, expenses: repExpenses,
   pnl: repPnl, inventory: repInventory, transfers: repTransfers, 'stock-by-cat': repStockByCat,
   checks: repChecks, employees: repEmployees, audit: repAudit, customers: repCustomers, comparison: repComparison,
@@ -140,6 +148,137 @@ async function repSales(f = {}) {
   ]);
 }
 
+// ---------- Reportes agrupados de ventas (período mensual/anual) ----------
+const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
+const unidadesDe = (s) => (s.items || []).reduce((n, it) => n + (it.qty || 0), 0);
+
+// Trae ventas (con filtros) + mapas de variante→producto/rubro/proveedor y de cliente/sucursal.
+async function salesContext(f = {}) {
+  const qs = new URLSearchParams({ status: 'confirmed', limit: '100000' });
+  if (f.from) qs.set('from', f.from + 'T00:00:00');
+  if (f.to) qs.set('to', f.to + 'T23:59:59');
+  if (f.branchId) qs.set('branchId', f.branchId);
+  if (f.source) qs.set('source', f.source);
+  const [sales, customers, products, categories, suppliers, branches] = await Promise.all([
+    api('/api/sales?' + qs.toString()),
+    api('/api/customers').catch(() => []),
+    Products.list(), getAll('categories'), Suppliers.list().catch(() => []), getBranches(),
+  ]);
+  const catMap = Object.fromEntries((categories || []).map(c => [c.id, c.name]));
+  const suMap = Object.fromEntries((suppliers || []).map(s => [s.id, s.name]));
+  const brMap = Object.fromEntries((branches || []).map(b => [b.id, b.name]));
+  const cuMap = Object.fromEntries((customers || []).map(c => [c.id, c]));
+  const vMap = {};
+  for (const p of (products || [])) {
+    const info = { productId: p.id, nombre: p.name, categoria: catMap[p.category_id] || 'Sin rubro', proveedor: suMap[p.supplier_id] || 'Sin proveedor' };
+    for (const v of (p.variants || [])) vMap[v.id] = { ...info, code: v.code || p.code || '' };
+  }
+  return { sales: sales || [], vMap, catMap, suMap, brMap, cuMap };
+}
+
+async function repBySeller(f = {}) {
+  const { sales } = await salesContext(f);
+  const g = new Map();
+  for (const s of sales) {
+    const k = s.sellerName || 'Sin vendedor';
+    const e = g.get(k) || { Vendedor: k, Ventas: 0, Unidades: 0, Total: 0 };
+    e.Ventas += 1; e.Unidades += unidadesDe(s); e.Total = round2(e.Total + (s.total || 0));
+    g.set(k, e);
+  }
+  const rows = [...g.values()].sort((a, b) => b.Total - a.Total);
+  return saveXLSX('ventas_por_vendedor.xlsx', [{ name: 'Por vendedor', rows }]);
+}
+
+async function repByCustomerSum(f = {}) {
+  const { sales, cuMap } = await salesContext(f);
+  const g = new Map();
+  for (const s of sales) {
+    const c = s.customerId ? cuMap[s.customerId] : null;
+    const k = s.customerId || '__sin__';
+    const e = g.get(k) || { Cliente: c ? nameOf(c) : 'Sin cliente', Documento: c ? docOf(c) : '', Ventas: 0, Unidades: 0, Total: 0 };
+    e.Ventas += 1; e.Unidades += unidadesDe(s); e.Total = round2(e.Total + (s.total || 0));
+    g.set(k, e);
+  }
+  const rows = [...g.values()].sort((a, b) => b.Total - a.Total);
+  return saveXLSX('ventas_por_cliente.xlsx', [{ name: 'Por cliente', rows }]);
+}
+
+// Agrupa los ITEMS de venta por una dimensión del producto (proveedor o rubro).
+function groupItemsBy(sales, vMap, dimKey, label) {
+  const g = new Map();
+  for (const s of sales) for (const it of (s.items || [])) {
+    const info = vMap[it.variantId] || {};
+    const k = info[dimKey] || `Sin ${label.toLowerCase()}`;
+    const e = g.get(k) || { [label]: k, Unidades: 0, Importe: 0, _prods: new Set() };
+    e.Unidades += it.qty || 0; e.Importe = round2(e.Importe + (it.subtotal || 0));
+    if (info.productId) e._prods.add(info.productId);
+    g.set(k, e);
+  }
+  return [...g.values()].map(e => ({ [label]: e[label], Unidades: e.Unidades, Importe: e.Importe, Productos: e._prods.size }))
+    .sort((a, b) => b.Importe - a.Importe);
+}
+
+async function repBySupplier(f = {}) {
+  const { sales, vMap } = await salesContext(f);
+  return saveXLSX('ventas_por_proveedor.xlsx', [{ name: 'Por proveedor', rows: groupItemsBy(sales, vMap, 'proveedor', 'Proveedor') }]);
+}
+
+async function repByCategory(f = {}) {
+  const { sales, vMap } = await salesContext(f);
+  return saveXLSX('ventas_por_rubro.xlsx', [{ name: 'Por rubro', rows: groupItemsBy(sales, vMap, 'categoria', 'Rubro') }]);
+}
+
+// Nombre de hoja válido para Excel: sin \ / ? * [ ] :  y máx 31 chars.
+const sheetSafe = (s) => String(s || 'Sin dato').replace(/[\\/?*\[\]:]/g, ' ').trim().slice(0, 31) || 'Hoja';
+
+async function repByPayment(f = {}) {
+  const { sales, brMap } = await salesContext(f);
+  const perMethod = new Map();
+  const resumen = new Map();
+  for (const s of sales) for (const p of (s.payments || [])) {
+    const k = p.methodName || p.methodId || 'Sin método';
+    if (!perMethod.has(k)) perMethod.set(k, []);
+    perMethod.get(k).push({
+      Numero: s.number, Fecha: fmtDateTime(s.datetime), Sucursal: brMap[s.branchId] || s.branchId,
+      Cliente: s.customer?.name || '', Vendedor: s.sellerName || '', Monto: round2(p.amount || 0), TotalVenta: s.total || 0,
+    });
+    const r = resumen.get(k) || { Medio: k, Pagos: 0, Total: 0 };
+    r.Pagos += 1; r.Total = round2(r.Total + (p.amount || 0));
+    resumen.set(k, r);
+  }
+  const sheets = [{ name: 'Resumen', rows: [...resumen.values()].sort((a, b) => b.Total - a.Total) }];
+  for (const [k, rows] of perMethod) sheets.push({ name: sheetSafe(k), rows });
+  return saveXLSX('ventas_por_medio_pago.xlsx', sheets);
+}
+
+async function repStockSnapshot(f = {}) {
+  if (!f.from || !f.to) { toast('Elegí un período', 'warn'); return 0; }
+  const qs = new URLSearchParams({ from: f.from, to: f.to });
+  if (f.branchId) qs.set('branchId', f.branchId);
+  const [snap, products, categories, branches] = await Promise.all([
+    api('/api/reports/stock-snapshot?' + qs.toString()),
+    Products.list(), getAll('categories'), getBranches(),
+  ]);
+  const catMap = Object.fromEntries((categories || []).map(c => [c.id, c.name]));
+  const brMap = Object.fromEntries((branches || []).map(b => [b.id, b.name]));
+  const vMap = {};
+  for (const p of (products || [])) for (const v of (p.variants || [])) {
+    vMap[v.id] = { code: v.code || p.code || '', nombre: p.name, rubro: catMap[p.category_id] || 'Sin rubro', productId: p.id };
+  }
+  // Agregar por producto (suma de variantes y, sin filtro de sucursal, de ambas sucursales).
+  const g = new Map();
+  for (const r of (snap.rows || [])) {
+    const info = vMap[r.variantId]; if (!info) continue;
+    const e = g.get(info.productId) || { Codigo: info.code, Producto: info.nombre, Rubro: info.rubro, StockInicial: 0, StockFinal: 0, MovPeriodo: 0 };
+    e.StockInicial += r.inicial; e.StockFinal += r.final; e.MovPeriodo += r.movPeriodo;
+    g.set(info.productId, e);
+  }
+  const rows = [...g.values()].filter(e => e.StockInicial || e.StockFinal || e.MovPeriodo)
+    .sort((a, b) => String(a.Producto).localeCompare(String(b.Producto)));
+  const suc = f.branchId ? (brMap[f.branchId] || f.branchId) : 'Todas';
+  return saveXLSX(`stock_inicial_final_${f.from}_a_${f.to}.xlsx`, [{ name: sheetSafe(`Stock ${suc}`), rows }]);
+}
+
 // ---------- Filtros elegibles al generar (diálogo genérico reutilizable) ----------
 const docOf = (c) => [c?.documentType, c?.documentNumber].filter(Boolean).join(' ').trim();
 
@@ -166,6 +305,25 @@ function pickFilters(fields = [], title = 'Filtros del reporte') {
       ? `<option value="">Todas</option>` + branches.map(b => `<option value="${b.id}" ${b.id === activeBranchId() ? 'selected' : ''}>${b.name}</option>`).join('')
       : branches.filter(b => b.id === activeBranchId()).map(b => `<option value="${b.id}">${b.name}</option>`).join('');
     const parts = [];
+    const now = new Date();
+    const curMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    if (has('period')) parts.push(`
+      <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Período</span>
+        <select id="rf-pmode" class="ing-input w-full mt-1">
+          <option value="month">Mensual</option>
+          <option value="year">Anual</option>
+          <option value="range">Rango</option>
+        </select></label>
+      <div id="rf-pmonth-wrap"><label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Mes</span>
+        <input id="rf-pmonth" type="month" class="ing-input w-full mt-1" value="${curMonth}" /></label></div>
+      <div id="rf-pyear-wrap" class="hidden"><label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Año</span>
+        <input id="rf-pyear" type="number" min="2020" max="2100" class="ing-input w-full mt-1" value="${now.getFullYear()}" /></label></div>
+      <div id="rf-prange-wrap" class="col-span-2 hidden grid grid-cols-2 gap-3">
+        <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Desde</span>
+          <input id="rf-pfrom" type="date" class="ing-input w-full mt-1" /></label>
+        <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Hasta</span>
+          <input id="rf-pto" type="date" class="ing-input w-full mt-1" /></label>
+      </div>`);
     if (has('date')) parts.push(`
       <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Desde</span>
         <input id="rf-from" type="date" class="ing-input w-full mt-1" /></label>
@@ -193,11 +351,30 @@ function pickFilters(fields = [], title = 'Filtros del reporte') {
                    <button class="ing-btn-primary" data-act="ok"><span class="material-symbols-outlined text-sm align-middle">download</span> Generar</button>`,
       onOpen: (el, close) => {
         const g = (id) => el.querySelector(id);
+        if (has('period')) {
+          const sync = () => {
+            const m = g('#rf-pmode').value;
+            g('#rf-pmonth-wrap').classList.toggle('hidden', m !== 'month');
+            g('#rf-pyear-wrap').classList.toggle('hidden', m !== 'year');
+            g('#rf-prange-wrap').classList.toggle('hidden', m !== 'range');
+          };
+          g('#rf-pmode').addEventListener('change', sync); sync();
+        }
+        const periodRange = () => {
+          const m = g('#rf-pmode').value;
+          if (m === 'year') { const y = parseInt(g('#rf-pyear').value) || now.getFullYear(); return { from: `${y}-01-01`, to: `${y}-12-31` }; }
+          if (m === 'range') return { from: g('#rf-pfrom').value || undefined, to: g('#rf-pto').value || undefined };
+          const v = g('#rf-pmonth').value || curMonth;
+          const [yy, mm] = v.split('-').map(Number);
+          const last = new Date(yy, mm, 0).getDate();
+          return { from: `${v}-01`, to: `${v}-${String(last).padStart(2, '0')}` };
+        };
         el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
         el.querySelector('[data-act="ok"]').addEventListener('click', () => {
+          const pr = has('period') ? periodRange() : {};
           close({
-            from: has('date') ? (g('#rf-from').value || undefined) : undefined,
-            to: has('date') ? (g('#rf-to').value || undefined) : undefined,
+            from: has('period') ? pr.from : (has('date') ? (g('#rf-from').value || undefined) : undefined),
+            to: has('period') ? pr.to : (has('date') ? (g('#rf-to').value || undefined) : undefined),
             branchId: has('branch') ? (admin ? (g('#rf-branch').value || undefined) : activeBranchId()) : undefined,
             source: has('source') ? (g('#rf-source').value || undefined) : undefined,
             term: has('customer') ? g('#rf-term').value.trim().toLowerCase() : '',
