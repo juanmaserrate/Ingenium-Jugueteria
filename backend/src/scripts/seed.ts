@@ -60,6 +60,14 @@ export async function runSeed() {
   } catch (err) {
     console.warn('[seed] no se pudo asegurar sales.seller_name:', err);
   }
+  // Snapshot de costos por pago (promo/comisión/financiero/neto). Ver módulo de promos.
+  try {
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "sale_payments" ADD COLUMN IF NOT EXISTS "cost_meta" JSONB`,
+    );
+  } catch (err) {
+    console.warn('[seed] no se pudo asegurar sale_payments.cost_meta:', err);
+  }
   // Tabla de fotos mensuales de stock (db push no la crea de forma confiable acá;
   // la creamos idempotente al arrancar). Debe coincidir con el modelo StockSnapshot.
   try {

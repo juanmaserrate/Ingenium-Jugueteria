@@ -308,6 +308,9 @@ model SalePayment {
   methodId   String  @map("method_id")
   methodName String  @map("method_name")
   amount     Float
+  // Snapshot de costos del pago (promo/banco/adquirente, comisión, financiero, plataforma,
+  // descuento, neto, fecha estimada de acreditación). Se congela al confirmar la venta.
+  costMeta   Json?   @map("cost_meta")
 
   sale Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
 

@@ -10,6 +10,7 @@ import { derivePin } from '../core/crypto.js';
 import { api, ApiError } from '../core/api.js';
 import * as Settings from '../repos/settings.js';
 import * as Kv from '../repos/kv.js';
+import { money } from '../core/format.js';
 import { exportBackup, importBackup, markBackupNow, checkBackupReminder } from '../core/backup.js';
 import { verifyChain } from '../core/audit.js';
 
@@ -29,6 +30,7 @@ async function render(el) {
       ${tabBtn('branches', 'Sucursales', 'store')}
       ${tabBtn('users', 'Usuarios', 'group')}
       ${tabBtn('payments', 'Métodos de pago', 'credit_card')}
+      ${tabBtn('promos', 'Promos y costos', 'sell')}
       ${tabBtn('system', 'Sistema', 'settings')}
       ${tabBtn('danger', 'Zona peligrosa', 'warning')}
     </div>
@@ -41,6 +43,7 @@ async function render(el) {
   if (state.tab === 'branches') await renderBranches(c);
   if (state.tab === 'users') await renderUsers(c);
   if (state.tab === 'payments') await renderPayments(c);
+  if (state.tab === 'promos') await renderPromos(c);
   if (state.tab === 'system') await renderSystem(c);
   if (state.tab === 'danger') await renderDanger(c);
 }
@@ -392,6 +395,195 @@ async function editMethod(container, methods, index) {
     },
   });
   renderPayments(container);
+}
+
+// ===== PROMOS Y COSTOS =====
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const curMonthKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+const prevMonthKey = (k) => { let [y, m] = k.split('-').map(Number); m--; if (m < 1) { m = 12; y--; } return `${y}-${String(m).padStart(2, '0')}`; };
+const DIAS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+
+async function renderPromos(container) {
+  if (!state.promoMonth) state.promoMonth = curMonthKey();
+  const month = state.promoMonth;
+  const acquirers = (await Settings.getConfig('acquirers', [])) || [];
+  const promosAll = (await Settings.getConfig('promos', {})) || {};
+  const promos = promosAll[month] || [];
+  const acqName = (id) => (acquirers.find((a) => a.id === id)?.name) || '—';
+
+  container.innerHTML = `
+    <div class="ing-card p-4 mb-5">
+      <div class="flex justify-between items-center mb-3 gap-2 flex-wrap">
+        <div><h3 class="font-black text-lg">Adquirentes / Gateways</h3>
+          <p class="text-xs text-[#7d6c5c]">Terminales del local y pasarelas online, con comisiones y plazos. Compartido entre sucursales.</p></div>
+        <button id="aq-new" class="ing-btn-primary flex items-center gap-2 !py-1.5"><span class="material-symbols-outlined text-base">add</span> Nuevo</button>
+      </div>
+      <div class="overflow-x-auto"><table class="ing-table w-full text-sm">
+        <thead><tr><th>Nombre</th><th>Tipo</th><th class="text-right">Débito%</th><th class="text-right">Crédito%</th><th>Cuotas 3/6/12</th><th class="text-right">Acred. d/c/ctas</th><th class="text-right">Fijo/mes</th><th>Plataforma TN%</th><th>Activo</th><th></th></tr></thead>
+        <tbody>${acquirers.length ? acquirers.map((a, i) => `
+          <tr>
+            <td class="font-bold">${esc(a.name)}</td><td>${a.kind === 'online' ? 'Online' : 'Local'}</td>
+            <td class="text-right">${a.debit_pct || 0}</td><td class="text-right">${a.credit_pct || 0}</td>
+            <td>${a.fin3 || 0}/${a.fin6 || 0}/${a.fin12 || 0}</td>
+            <td class="text-right">${a.days_debit || 0}/${a.days_credit || 0}/${a.days_cuotas || 0}</td>
+            <td class="text-right">${money(a.fixed_monthly || 0)}</td><td class="text-right">${a.tn_platform_pct || 0}</td>
+            <td>${a.active !== false ? '<span class="text-green-700 text-xs font-bold">SÍ</span>' : '<span class="text-[#7d6c5c] text-xs">NO</span>'}</td>
+            <td class="text-right whitespace-nowrap"><button data-aqed="${i}" class="text-xs text-[#d82f1e] hover:underline">Editar</button> <button data-aqdel="${i}" class="text-xs text-[#7d6c5c] hover:text-red-600 ml-1">Borrar</button></td>
+          </tr>`).join('') : '<tr><td colspan="10" class="text-center text-[#7d6c5c] py-4">Sin adquirentes. Cargá tus terminales y gateways.</td></tr>'}</tbody>
+      </table></div>
+    </div>
+
+    <div class="ing-card p-4">
+      <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
+        <div><h3 class="font-black text-lg">Promos del mes</h3>
+          <p class="text-xs text-[#7d6c5c]">Promos bancarias por mes. Se congelan en cada venta → los reportes viejos quedan exactos.</p></div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <input id="pr-month" type="month" value="${month}" class="ing-input !py-1.5 text-sm" />
+          <button id="pr-clone" class="ing-btn-secondary !py-1.5 text-sm">Traer del mes anterior</button>
+          <button id="pr-new" class="ing-btn-primary flex items-center gap-2 !py-1.5"><span class="material-symbols-outlined text-base">add</span> Nueva promo</button>
+        </div>
+      </div>
+      <div class="overflow-x-auto"><table class="ing-table w-full text-sm">
+        <thead><tr><th>Nombre</th><th>Banco</th><th>Adquirente</th><th class="text-right">Cuotas</th><th class="text-right">Desc.</th><th>Paga</th><th>Tope</th><th>Activa</th><th></th></tr></thead>
+        <tbody>${promos.length ? promos.map((p, i) => `
+          <tr>
+            <td class="font-bold">${esc(p.name)}</td><td>${esc(p.bank || '—')}</td><td>${esc(acqName(p.acquirer_id))}</td>
+            <td class="text-right">${p.installments || 1}</td><td class="text-right">${p.discount_pct || 0}%</td>
+            <td>${p.discount_funder === 'comercio' ? 'Comercio' : 'Banco'}</td>
+            <td>${p.tope_amount ? `${money(p.tope_amount)} · ${p.tope_mode === 'aplicado' ? 'aplicado' : 'info'}` : '—'}</td>
+            <td>${p.active !== false ? '<span class="text-green-700 text-xs font-bold">SÍ</span>' : '<span class="text-[#7d6c5c] text-xs">NO</span>'}</td>
+            <td class="text-right whitespace-nowrap"><button data-pred="${i}" class="text-xs text-[#d82f1e] hover:underline">Editar</button> <button data-prdel="${i}" class="text-xs text-[#7d6c5c] hover:text-red-600 ml-1">Borrar</button></td>
+          </tr>`).join('') : '<tr><td colspan="9" class="text-center text-[#7d6c5c] py-4">Sin promos para este mes. Creá una o traé las del mes anterior.</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  `;
+
+  container.querySelector('#aq-new').addEventListener('click', () => editAcquirer(container, acquirers, null));
+  container.querySelectorAll('[data-aqed]').forEach((b) => b.addEventListener('click', () => editAcquirer(container, acquirers, Number(b.dataset.aqed))));
+  container.querySelectorAll('[data-aqdel]').forEach((b) => b.addEventListener('click', async () => {
+    if (!(await confirmModal({ title: 'Borrar', message: '¿Eliminar adquirente?', danger: true, confirmLabel: 'Borrar' }))) return;
+    acquirers.splice(Number(b.dataset.aqdel), 1);
+    try { await Settings.setConfig('acquirers', acquirers); toast('Eliminado', 'success'); } catch (e) { toast(e?.message || 'No se pudo', 'error'); }
+    renderPromos(container);
+  }));
+
+  container.querySelector('#pr-month').addEventListener('change', (ev) => { state.promoMonth = ev.target.value || curMonthKey(); renderPromos(container); });
+  container.querySelector('#pr-clone').addEventListener('click', async () => {
+    const prev = promosAll[prevMonthKey(month)] || [];
+    if (!prev.length) { toast(`El mes anterior (${prevMonthKey(month)}) no tiene promos`, 'warn'); return; }
+    if ((promosAll[month] || []).length && !(await confirmModal({ title: 'Traer del mes anterior', message: `Este mes ya tiene ${promosAll[month].length} promo(s). Se van a AGREGAR ${prev.length} del mes anterior. ¿Seguir?`, confirmLabel: 'Traer' }))) return;
+    promosAll[month] = [...(promosAll[month] || []), ...prev.map((p) => ({ ...p, id: newId('promo') }))];
+    try { await Settings.setConfig('promos', promosAll); toast(`${prev.length} promo(s) traídas`, 'success'); } catch (e) { toast(e?.message || 'No se pudo', 'error'); }
+    renderPromos(container);
+  });
+  container.querySelector('#pr-new').addEventListener('click', () => editPromo(container, promosAll, month, acquirers, null));
+  container.querySelectorAll('[data-pred]').forEach((b) => b.addEventListener('click', () => editPromo(container, promosAll, month, acquirers, Number(b.dataset.pred))));
+  container.querySelectorAll('[data-prdel]').forEach((b) => b.addEventListener('click', async () => {
+    if (!(await confirmModal({ title: 'Borrar', message: '¿Eliminar promo?', danger: true, confirmLabel: 'Borrar' }))) return;
+    promosAll[month].splice(Number(b.dataset.prdel), 1);
+    try { await Settings.setConfig('promos', promosAll); toast('Eliminada', 'success'); } catch (e) { toast(e?.message || 'No se pudo', 'error'); }
+    renderPromos(container);
+  }));
+}
+
+async function editAcquirer(container, acquirers, index) {
+  const isNew = index === null;
+  const a = isNew ? { id: '', name: '', kind: 'local', debit_pct: 0, credit_pct: 0, fin3: 0, fin6: 0, fin12: 0, days_debit: 2, days_credit: 10, days_cuotas: 2, fixed_monthly: 0, tn_platform_pct: 0, active: true } : { ...acquirers[index] };
+  const num = (id) => Number(document.querySelector(id)?.value) || 0;
+  await openModal({
+    title: isNew ? 'Nuevo adquirente / gateway' : 'Editar adquirente',
+    size: 'md',
+    bodyHTML: `
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="text-xs font-bold text-[#7d6c5c] uppercase">Nombre</label><input id="aq-name" value="${esc(a.name)}" class="ing-input w-full mt-1" placeholder="ej: Posnet Galicia / Mercado Pago" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Tipo</label><select id="aq-kind" class="ing-input w-full mt-1"><option value="local" ${a.kind !== 'online' ? 'selected' : ''}>Local (terminal)</option><option value="online" ${a.kind === 'online' ? 'selected' : ''}>Online (gateway)</option></select></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Costo fijo mensual</label><input id="aq-fixed" type="number" value="${a.fixed_monthly || 0}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Comisión débito %</label><input id="aq-deb" type="number" step="0.01" value="${a.debit_pct || 0}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Comisión crédito % (1 pago)</label><input id="aq-cred" type="number" step="0.01" value="${a.credit_pct || 0}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Costo 3 cuotas %</label><input id="aq-f3" type="number" step="0.01" value="${a.fin3 || 0}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Costo 6 cuotas %</label><input id="aq-f6" type="number" step="0.01" value="${a.fin6 || 0}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Costo 12 cuotas %</label><input id="aq-f12" type="number" step="0.01" value="${a.fin12 || 0}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Comisión plataforma TN % (si aplica)</label><input id="aq-tn" type="number" step="0.01" value="${a.tn_platform_pct || 0}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Acreditación débito (días)</label><input id="aq-dd" type="number" value="${a.days_debit ?? 2}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Acreditación crédito 1 pago (días)</label><input id="aq-dc" type="number" value="${a.days_credit ?? 10}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Acreditación cuotas (días)</label><input id="aq-dq" type="number" value="${a.days_cuotas ?? 2}" class="ing-input w-full mt-1" /></div>
+        <label class="col-span-2 flex items-center gap-2 mt-1"><input id="aq-active" type="checkbox" ${a.active !== false ? 'checked' : ''} /> <span class="text-sm">Activo</span></label>
+      </div>`,
+    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="ok">${isNew ? 'Crear' : 'Guardar'}</button>`,
+    onOpen: (el, close) => {
+      el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
+      el.querySelector('[data-act="ok"]').addEventListener('click', async () => {
+        const name = el.querySelector('#aq-name').value.trim();
+        if (!name) { toast('Nombre requerido', 'warn'); return; }
+        const updated = {
+          id: isNew ? newId('acq') : a.id, name, kind: el.querySelector('#aq-kind').value,
+          debit_pct: num('#aq-deb'), credit_pct: num('#aq-cred'), fin3: num('#aq-f3'), fin6: num('#aq-f6'), fin12: num('#aq-f12'),
+          tn_platform_pct: num('#aq-tn'), fixed_monthly: num('#aq-fixed'),
+          days_debit: num('#aq-dd'), days_credit: num('#aq-dc'), days_cuotas: num('#aq-dq'),
+          active: el.querySelector('#aq-active').checked,
+        };
+        if (isNew) acquirers.push(updated); else acquirers[index] = updated;
+        try { await Settings.setConfig('acquirers', acquirers); toast('Guardado', 'success'); close(true); }
+        catch (e) { if (isNew) acquirers.pop(); else acquirers[index] = a; toast(e?.message || 'No se pudo guardar', 'error'); }
+      });
+    },
+  });
+  renderPromos(container);
+}
+
+async function editPromo(container, promosAll, month, acquirers, index) {
+  const list = promosAll[month] || (promosAll[month] = []);
+  const isNew = index === null;
+  const p = isNew
+    ? { id: '', name: '', bank: '', card_type: 'credito', acquirer_id: '', installments: 1, discount_pct: 0, discount_funder: 'banco', tope_amount: 0, tope_mode: 'informativo', valid_days: [], valid_from: '', valid_to: '', affects_cash: false, icon: 'credit_card', active: true }
+    : { ...list[index] };
+  const acqOpts = ['<option value="">(elegí adquirente)</option>'].concat(acquirers.map((a) => `<option value="${a.id}" ${p.acquirer_id === a.id ? 'selected' : ''}>${esc(a.name)}</option>`)).join('');
+  const dayChecks = DIAS.map((d, i) => `<label class="flex items-center gap-1 text-xs"><input type="checkbox" class="pr-day" data-day="${i}" ${(p.valid_days || []).includes(i) ? 'checked' : ''} /> ${d}</label>`).join('');
+  await openModal({
+    title: isNew ? 'Nueva promo' : 'Editar promo',
+    size: 'md',
+    bodyHTML: `
+      <div class="grid grid-cols-2 gap-3">
+        <div class="col-span-2"><label class="text-xs font-bold text-[#7d6c5c] uppercase">Nombre visible</label><input id="pr-name" value="${esc(p.name)}" class="ing-input w-full mt-1" placeholder="ej: Cuenta DNI miércoles 6 cuotas" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Banco</label><input id="pr-bank" value="${esc(p.bank)}" class="ing-input w-full mt-1" placeholder="ej: Provincia" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Tarjeta / red</label><select id="pr-card" class="ing-input w-full mt-1">${['credito', 'debito', 'qr', 'otro'].map((t) => `<option value="${t}" ${p.card_type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Adquirente / gateway</label><select id="pr-acq" class="ing-input w-full mt-1">${acqOpts}</select></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Cuotas</label><input id="pr-inst" type="number" min="1" value="${p.installments || 1}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Descuento %</label><input id="pr-disc" type="number" step="0.01" value="${p.discount_pct || 0}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Quién paga el descuento</label><select id="pr-funder" class="ing-input w-full mt-1"><option value="banco" ${p.discount_funder !== 'comercio' ? 'selected' : ''}>Banco (cobro full)</option><option value="comercio" ${p.discount_funder === 'comercio' ? 'selected' : ''}>Comercio (sale de mi margen)</option></select></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Tope $ (0 = sin tope)</label><input id="pr-tope" type="number" value="${p.tope_amount || 0}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Modo de tope</label><select id="pr-topemode" class="ing-input w-full mt-1"><option value="informativo" ${p.tope_mode !== 'aplicado' ? 'selected' : ''}>Informativo (lo controla el banco)</option><option value="aplicado" ${p.tope_mode === 'aplicado' ? 'selected' : ''}>Aplicado por el sistema</option></select></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Vigente desde</label><input id="pr-from" type="date" value="${p.valid_from || ''}" class="ing-input w-full mt-1" /></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Vigente hasta</label><input id="pr-to" type="date" value="${p.valid_to || ''}" class="ing-input w-full mt-1" /></div>
+        <div class="col-span-2"><label class="text-xs font-bold text-[#7d6c5c] uppercase">Días válidos (vacío = todos)</label><div class="flex gap-3 mt-1 flex-wrap">${dayChecks}</div></div>
+        <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Ícono</label><input id="pr-icon" value="${esc(p.icon || 'credit_card')}" class="ing-input w-full mt-1" /></div>
+        <label class="flex items-center gap-2 mt-5"><input id="pr-ac" type="checkbox" ${p.affects_cash ? 'checked' : ''} /> <span class="text-sm">Afecta caja</span></label>
+        <label class="col-span-2 flex items-center gap-2"><input id="pr-active" type="checkbox" ${p.active !== false ? 'checked' : ''} /> <span class="text-sm">Activa este mes</span></label>
+      </div>`,
+    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="ok">${isNew ? 'Crear' : 'Guardar'}</button>`,
+    onOpen: (el, close) => {
+      el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
+      el.querySelector('[data-act="ok"]').addEventListener('click', async () => {
+        const name = el.querySelector('#pr-name').value.trim();
+        if (!name) { toast('Nombre requerido', 'warn'); return; }
+        const updated = {
+          id: isNew ? newId('promo') : p.id, name,
+          bank: el.querySelector('#pr-bank').value.trim(), card_type: el.querySelector('#pr-card').value,
+          acquirer_id: el.querySelector('#pr-acq').value, installments: Math.max(1, Number(el.querySelector('#pr-inst').value) || 1),
+          discount_pct: Number(el.querySelector('#pr-disc').value) || 0, discount_funder: el.querySelector('#pr-funder').value,
+          tope_amount: Number(el.querySelector('#pr-tope').value) || 0, tope_mode: el.querySelector('#pr-topemode').value,
+          valid_from: el.querySelector('#pr-from').value || '', valid_to: el.querySelector('#pr-to').value || '',
+          valid_days: [...el.querySelectorAll('.pr-day')].filter((c) => c.checked).map((c) => Number(c.dataset.day)),
+          icon: el.querySelector('#pr-icon').value.trim() || 'credit_card',
+          affects_cash: el.querySelector('#pr-ac').checked, active: el.querySelector('#pr-active').checked,
+        };
+        if (isNew) list.push(updated); else list[index] = updated;
+        try { await Settings.setConfig('promos', promosAll); toast('Guardado', 'success'); close(true); }
+        catch (e) { if (isNew) list.pop(); else list[index] = p; toast(e?.message || 'No se pudo guardar', 'error'); }
+      });
+    },
+  });
+  renderPromos(container);
 }
 
 // ===== SYSTEM =====
