@@ -60,6 +60,28 @@ export async function runSeed() {
   } catch (err) {
     console.warn('[seed] no se pudo asegurar sales.seller_name:', err);
   }
+  // Tabla de fotos mensuales de stock (db push no la crea de forma confiable acá;
+  // la creamos idempotente al arrancar). Debe coincidir con el modelo StockSnapshot.
+  try {
+    await prisma.$executeRawUnsafe(
+      `CREATE TABLE IF NOT EXISTS "stock_snapshot" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "period_key" TEXT NOT NULL,
+        "variant_id" TEXT NOT NULL,
+        "branch_id" TEXT NOT NULL,
+        "qty" INTEGER NOT NULL,
+        "taken_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "stock_snapshot_period_key_variant_id_branch_id_key" ON "stock_snapshot" ("period_key","variant_id","branch_id")`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "stock_snapshot_period_key_idx" ON "stock_snapshot" ("period_key")`,
+    );
+  } catch (err) {
+    console.warn('[seed] no se pudo asegurar stock_snapshot:', err);
+  }
 
   for (const b of BRANCHES) {
     await prisma.branch.upsert({

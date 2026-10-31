@@ -43,20 +43,29 @@ function arParts(d: Date) {
 // como "inicio de mes" (el reporte reconstruye, que para meses recientes es exacto igual).
 // Qué meses de foto hay guardados (para visibilidad/ops).
 export async function listStockSnapshots() {
-  const grouped = await prisma.stockSnapshot.groupBy({
-    by: ['periodKey'],
-    _count: { _all: true },
-    _min: { takenAt: true },
-    orderBy: { periodKey: 'desc' },
-  });
-  return grouped.map((g) => ({ periodKey: g.periodKey, filas: g._count._all, tomadaEl: g._min.takenAt }));
+  try {
+    const grouped = await prisma.stockSnapshot.groupBy({
+      by: ['periodKey'],
+      _count: { _all: true },
+      _min: { takenAt: true },
+      orderBy: { periodKey: 'desc' },
+    });
+    return grouped.map((g) => ({ periodKey: g.periodKey, filas: g._count._all, tomadaEl: g._min.takenAt }));
+  } catch {
+    return [];
+  }
 }
 
 async function loadBoundarySnapshot(periodKey: string, branchFilter?: string): Promise<Map<string, number>> {
-  const rows = await prisma.stockSnapshot.findMany({
-    where: { periodKey, ...(branchFilter ? { branchId: branchFilter } : {}) },
-    select: { variantId: true, branchId: true, qty: true, takenAt: true },
-  });
+  let rows: { variantId: string; branchId: string; qty: number; takenAt: Date }[] = [];
+  try {
+    rows = await prisma.stockSnapshot.findMany({
+      where: { periodKey, ...(branchFilter ? { branchId: branchFilter } : {}) },
+      select: { variantId: true, branchId: true, qty: true, takenAt: true },
+    });
+  } catch {
+    return new Map(); // si la tabla aún no existe, degradamos a reconstrucción (no rompemos el reporte)
+  }
   if (rows.length === 0) return new Map();
   const [y, m] = periodKey.split('-').map(Number);
   const p = arParts(rows[0].takenAt);
