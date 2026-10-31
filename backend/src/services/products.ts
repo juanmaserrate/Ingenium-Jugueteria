@@ -121,6 +121,82 @@ export async function bulkAssignProducts(
   return { updated };
 }
 
+// ---------- Actualización masiva de costos por Excel (match por código) ----------
+// Normaliza un código para comparar (barcode o código interno): sin espacios, mayúsculas.
+function normCode(x: unknown) { return String(x ?? '').trim().toUpperCase(); }
+// Mismo redondeo que el form de inventario: múltiplos de 10.
+function roundPrice10(x: number) { return Math.round((Number(x) || 0) / 10) * 10; }
+
+type BulkCostRow = { code: string; cost: number };
+type BulkCostMatch = {
+  productId: string; code: string; name: string;
+  oldCost: number; newCost: number; oldPrice: number; newPrice: number; marginPct: number;
+};
+
+// Índice de productos por barcode y por código interno (producto y variantes).
+async function buildCodeIndex() {
+  const products = await prisma.product.findMany({
+    where: { active: true },
+    select: {
+      id: true, code: true, name: true, cost: true, price: true, marginPct: true,
+      variants: { select: { code: true, barcode: true } },
+    },
+  });
+  const byBarcode = new Map<string, (typeof products)[number]>();
+  const byCode = new Map<string, (typeof products)[number]>();
+  for (const p of products) {
+    if (p.code) byCode.set(normCode(p.code), p);
+    for (const v of p.variants) {
+      if (v.barcode) byBarcode.set(normCode(v.barcode), p);
+      if (v.code) byCode.set(normCode(v.code), p);
+    }
+  }
+  return { byBarcode, byCode };
+}
+
+// Analiza las filas del Excel contra el sistema. Prioridad: barcode, luego código
+// interno (así anda aunque el código de barra haya cambiado). No escribe nada.
+export async function previewBulkCost(rows: BulkCostRow[]) {
+  const idx = await buildCodeIndex();
+  const matchedMap = new Map<string, BulkCostMatch>(); // por productId (última fila gana)
+  const unmatched: Array<{ code: string; cost: unknown; reason: string }> = [];
+  for (const r of rows) {
+    const cost = Number(r.cost);
+    const code = String(r.code ?? '').trim();
+    if (!code) continue;
+    if (!Number.isFinite(cost) || cost <= 0) { unmatched.push({ code, cost: r.cost, reason: 'costo inválido' }); continue; }
+    const k = normCode(code);
+    const p = idx.byBarcode.get(k) || idx.byCode.get(k) || null;
+    if (!p) { unmatched.push({ code, cost, reason: 'sin match' }); continue; }
+    // Mantener el margen actual (precio/costo) y recalcular el precio final.
+    const ratio = p.cost > 0 ? (p.price / p.cost - 1) : ((p.marginPct || 0) / 100);
+    const newPrice = roundPrice10(cost * (1 + ratio));
+    const newMargin = cost > 0 ? +(((newPrice / cost) - 1) * 100).toFixed(2) : p.marginPct;
+    matchedMap.set(p.id, {
+      productId: p.id, code, name: p.name,
+      oldCost: p.cost, newCost: cost, oldPrice: p.price, newPrice, marginPct: newMargin,
+    });
+  }
+  return { matched: [...matchedMap.values()], unmatched };
+}
+
+// Aplica los cambios: por cada match, updateProduct {cost, price, marginPct} — que
+// espeja a la variante y encola el sync a Tienda Nube (precio nuevo) si corresponde.
+export async function applyBulkCost(rows: BulkCostRow[], userId?: string) {
+  const { matched, unmatched } = await previewBulkCost(rows);
+  const updated: BulkCostMatch[] = [];
+  const errors: Array<BulkCostMatch & { error: string }> = [];
+  for (const m of matched) {
+    try {
+      await updateProduct(m.productId, { cost: m.newCost, price: m.newPrice, marginPct: m.marginPct }, userId);
+      updated.push(m);
+    } catch (e: any) {
+      errors.push({ ...m, error: e?.message || String(e) });
+    }
+  }
+  return { updated, unmatched, errors };
+}
+
 // Renombrado masivo por código: [{ code, name }]. updateMany por item.
 export async function bulkRenameProducts(items: Array<{ code: string; name: string }>) {
   let updated = 0;

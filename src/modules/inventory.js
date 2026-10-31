@@ -11,7 +11,7 @@ import { openModal, confirmModal } from '../components/modal.js';
 import { toast } from '../core/notifications.js';
 import { activeBranchId, currentSession, isAdmin } from '../core/auth.js';
 import * as Audit from '../core/audit.js';
-import { exportSimple } from '../core/xlsx.js';
+import { exportSimple, exportToXLSX } from '../core/xlsx.js';
 import { printHTML } from '../core/pdf.js';
 
 // Escapa caracteres reservados para incrustar contenido en value="..." de un input.
@@ -435,6 +435,9 @@ async function renderProducts(container, forceReload = false) {
         <button id="btn-export" class="ing-btn-secondary text-sm">
           <span class="material-symbols-outlined align-middle text-base">download</span> XLSX
         </button>
+        ${canEdit ? `<button id="btn-bulkcost" class="ing-btn-secondary text-sm" title="Actualizar costos masivamente desde un Excel">
+          <span class="material-symbols-outlined align-middle text-base">upload_file</span> Costos Excel
+        </button>` : ''}
         <button id="btn-refresh" class="ing-btn-secondary text-sm" title="Actualizar datos desde el servidor">
           <span class="material-symbols-outlined align-middle text-base">sync</span>
         </button>
@@ -550,6 +553,7 @@ async function renderProducts(container, forceReload = false) {
   container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false, variant:'', stock:'all', stockMax:null }; state.page = 0; renderProducts(container); });
 
   container.querySelector('#btn-new')?.addEventListener('click', () => openProductForm(null, container));
+  container.querySelector('#btn-bulkcost')?.addEventListener('click', () => openBulkCostModal(container));
   container.querySelector('#btn-cols').addEventListener('click', () => openColumnsModal(cols, container));
   container.querySelector('#btn-refresh').addEventListener('click', async () => {
     state.cache = null; // Invalida caché para forzar recarga desde el servidor
@@ -1541,6 +1545,123 @@ async function openProductForm(p, container) {
           }
         });
       }
+    },
+  });
+}
+
+// Modal: actualización masiva de costos por Excel (match por barcode o código interno).
+async function openBulkCostModal(container) {
+  if (typeof XLSX === 'undefined') { toast('No se pudo cargar el lector de Excel', 'error'); return; }
+  let rows = []; // [{code, cost}] según el mapeo elegido
+  await openModal({
+    title: 'Actualizar costos por Excel',
+    size: 'lg',
+    bodyHTML: `
+      <p class="text-sm text-[#7d6c5c] mb-3">Subí un Excel/CSV con una columna de <b>código</b> (de barra o interno) y una de <b>costo nuevo</b>. Matcheamos por código de barra o código interno (anda aunque el barcode haya cambiado). En los que matchean actualizamos el costo, recalculamos el precio por el margen actual y sincronizamos a Tienda Nube. Los que no están en el sistema se omiten y te los listamos.</p>
+      <input id="bc-file" type="file" accept=".xlsx,.xls,.csv" class="ing-input w-full" />
+      <div id="bc-map" class="mt-3 hidden grid grid-cols-2 gap-3"></div>
+      <div id="bc-preview" class="mt-4"></div>`,
+    footerHTML: `<button class="ing-btn-secondary" data-act="close">Cerrar</button>
+                 <button class="ing-btn-primary hidden" data-act="apply"><span class="material-symbols-outlined text-sm align-middle">save</span> Aplicar cambios</button>`,
+    onOpen: (el, close) => {
+      el.querySelector('[data-act="close"]').addEventListener('click', () => close(null));
+      const fileIn = el.querySelector('#bc-file');
+      const mapEl = el.querySelector('#bc-map');
+      const prevEl = el.querySelector('#bc-preview');
+      const applyBtn = el.querySelector('[data-act="apply"]');
+      let headers = [], data = [], colCode = '', colCost = '', lastPreview = null;
+
+      const parseNum = (v) => {
+        if (v == null) return NaN;
+        let s = String(v).trim().replace(/[^0-9,.-]/g, '');
+        if (s.includes(',') && s.includes('.')) s = s.replace(/\./g, '').replace(',', '.');
+        else if (s.includes(',')) s = s.replace(',', '.');
+        return Number(s);
+      };
+
+      const renderPreview = (res) => {
+        lastPreview = res;
+        const m = res.matched || [], u = res.unmatched || [];
+        const body = m.slice(0, 200).map(x => `
+          <tr><td class="font-mono text-xs">${esc(x.code)}</td><td>${esc(x.name)}</td>
+          <td class="text-right">${money(x.oldCost)}</td><td class="text-right font-bold">${money(x.newCost)}</td>
+          <td class="text-right">${money(x.oldPrice)}</td><td class="text-right font-bold text-[#d82f1e]">${money(x.newPrice)}</td></tr>`).join('');
+        prevEl.innerHTML = `
+          <div class="flex gap-4 text-sm mb-2">
+            <span class="font-bold text-green-700">${m.length} a actualizar</span>
+            <span class="font-bold text-[#7d6c5c]">${u.length} sin match (se omiten)</span>
+          </div>
+          <div class="max-h-[38vh] overflow-auto border border-[#fff1e6] rounded-xl">
+            <table class="ing-table w-full text-sm"><thead><tr>
+              <th>Código</th><th>Producto</th><th class="text-right">Costo ant.</th><th class="text-right">Costo nuevo</th><th class="text-right">Precio ant.</th><th class="text-right">Precio nuevo</th>
+            </tr></thead><tbody>${body || '<tr><td colspan="6" class="text-center p-3 text-[#7d6c5c]">Ninguno matchea</td></tr>'}</tbody></table>
+          </div>
+          ${m.length > 200 ? `<p class="text-xs text-[#7d6c5c] mt-1">Mostrando 200 de ${m.length}.</p>` : ''}
+          ${u.length ? `<details class="mt-2"><summary class="text-sm font-bold cursor-pointer">Ver ${u.length} sin match</summary>
+            <div class="max-h-40 overflow-auto text-xs font-mono mt-1 text-[#7d6c5c]">${u.map(x => esc(x.code) + (x.reason === 'costo inválido' ? ' (costo inválido)' : '')).join('<br>')}</div></details>` : ''}`;
+        applyBtn.classList.toggle('hidden', m.length === 0);
+      };
+
+      const runPreview = async () => {
+        if (!colCode || !colCost) return;
+        rows = data.map(r => ({ code: String(r[colCode] ?? '').trim(), cost: parseNum(r[colCost]) })).filter(r => r.code);
+        if (!rows.length) { prevEl.innerHTML = '<p class="text-sm text-red-600">No se detectaron filas con código.</p>'; applyBtn.classList.add('hidden'); return; }
+        prevEl.innerHTML = '<p class="text-sm text-[#7d6c5c]">Analizando…</p>';
+        try { renderPreview(await P.bulkCostPreview(rows)); }
+        catch (e) { prevEl.innerHTML = `<p class="text-sm text-red-600">Error: ${esc(e.message || 'no se pudo analizar')}</p>`; }
+      };
+
+      const detect = () => {
+        const low = headers.map(h => String(h).toLowerCase());
+        const findCol = (keys) => { const i = low.findIndex(h => keys.some(k => h.includes(k))); return i >= 0 ? headers[i] : ''; };
+        colCode = findCol(['barra', 'barcode', 'ean', 'codigo', 'código', 'cod', 'sku']);
+        colCost = findCol(['costo', 'cost']);
+        const opts = (sel) => headers.map(h => `<option value="${escapeAttr(h)}" ${h === sel ? 'selected' : ''}>${esc(h)}</option>`).join('');
+        mapEl.innerHTML = `
+          <label class="block text-sm"><span class="text-xs font-bold text-[#7d6c5c]">Columna de código</span>
+            <select id="bc-col-code" class="ing-input w-full mt-1">${opts(colCode)}</select></label>
+          <label class="block text-sm"><span class="text-xs font-bold text-[#7d6c5c]">Columna de costo</span>
+            <select id="bc-col-cost" class="ing-input w-full mt-1">${opts(colCost)}</select></label>`;
+        mapEl.classList.remove('hidden');
+        mapEl.querySelector('#bc-col-code').addEventListener('change', e => { colCode = e.target.value; runPreview(); });
+        mapEl.querySelector('#bc-col-cost').addEventListener('change', e => { colCost = e.target.value; runPreview(); });
+      };
+
+      fileIn.addEventListener('change', async () => {
+        const file = fileIn.files?.[0]; if (!file) return;
+        prevEl.innerHTML = '<p class="text-sm text-[#7d6c5c]">Leyendo archivo…</p>';
+        try {
+          const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+          data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+          headers = data.length ? Object.keys(data[0]) : [];
+          if (!headers.length) { prevEl.innerHTML = '<p class="text-sm text-red-600">El archivo está vacío.</p>'; return; }
+          prevEl.innerHTML = '';
+          detect();
+          runPreview();
+        } catch { prevEl.innerHTML = '<p class="text-sm text-red-600">No se pudo leer el archivo.</p>'; }
+      });
+
+      applyBtn.addEventListener('click', async () => {
+        if (!rows.length || applyBtn.disabled) return;
+        const n = lastPreview?.matched?.length || 0;
+        if (!(await confirmModal({ title: 'Aplicar cambios', message: `Se van a actualizar ${n} productos (costo + precio por margen) y sincronizar los precios a Tienda Nube. ¿Continuar?`, confirmLabel: 'Aplicar' }))) return;
+        applyBtn.disabled = true; applyBtn.textContent = 'Aplicando…';
+        try {
+          const res = await P.bulkCostApply(rows);
+          const upd = (res.updated || []).map(x => ({ Codigo: x.code, Producto: x.name, Costo_anterior: x.oldCost, Costo_nuevo: x.newCost, Precio_anterior: x.oldPrice, Precio_nuevo: x.newPrice, Margen_pct: x.marginPct }));
+          const un = (res.unmatched || []).map(x => ({ Codigo: x.code, Costo: x.cost, Motivo: x.reason }));
+          const err = (res.errors || []).map(x => ({ Codigo: x.code, Producto: x.name, Error: x.error }));
+          const sheets = [{ name: 'Actualizados', rows: upd }, { name: 'Sin match', rows: un }];
+          if (err.length) sheets.push({ name: 'Errores', rows: err });
+          exportToXLSX({ filename: `costos_actualizados_${new Date().toISOString().slice(0, 10)}.xlsx`, sheets });
+          toast(`Actualizados: ${res.updated?.length || 0} · Sin match: ${res.unmatched?.length || 0}${err.length ? ` · Errores: ${err.length}` : ''}`, err.length ? 'warn' : 'success');
+          close(true);
+          await renderProducts(container);
+        } catch (e) {
+          toast('Error al aplicar: ' + (e.message || ''), 'error');
+          applyBtn.disabled = false; applyBtn.innerHTML = '<span class="material-symbols-outlined text-sm align-middle">save</span> Aplicar cambios';
+        }
+      });
     },
   });
 }

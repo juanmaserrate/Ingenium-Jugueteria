@@ -11,6 +11,8 @@ import {
   bulkCreateProducts,
   bulkAssignProducts,
   bulkRenameProducts,
+  previewBulkCost,
+  applyBulkCost,
 } from '../services/products.js';
 
 const variantSchema = z.object({
@@ -105,6 +107,16 @@ export async function productsRoutes(app: FastifyInstance) {
       codes: z.array(z.string()).min(1),
     })).parse(req.body);
     return bulkAssignProducts(body);
+  });
+
+  // Actualización masiva de costos por Excel. preview = analiza (no escribe);
+  // apply = aplica (actualiza costo, recalcula precio por margen y sincroniza a TN).
+  const bulkCostSchema = z.object({ rows: z.array(z.object({ code: z.string(), cost: z.number() })) });
+  app.post('/products/bulk-cost/preview', { preHandler: requireRole('admin') }, async (req) => {
+    return previewBulkCost(bulkCostSchema.parse(req.body).rows);
+  });
+  app.post('/products/bulk-cost/apply', { preHandler: requireRole('admin') }, async (req) => {
+    return applyBulkCost(bulkCostSchema.parse(req.body).rows, req.user.userId);
   });
 
   // Renombrado masivo por código (para traer los nombres completos de Tienda Nube).

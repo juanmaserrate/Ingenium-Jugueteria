@@ -185,6 +185,16 @@ async function resolveVariantId(productId) {
   return front?.variant_id || null;
 }
 
+// Actualización masiva de costos por Excel. rows = [{ code, cost }].
+export async function bulkCostPreview(rows) {
+  return api('/api/products/bulk-cost/preview', { method: 'POST', body: { rows } });
+}
+export async function bulkCostApply(rows) {
+  const r = await api('/api/products/bulk-cost/apply', { method: 'POST', body: { rows } });
+  clearCache(); // los costos/precios cambiaron → refrescar el cache local
+  return r;
+}
+
 export async function save(data) {
   const isNew = !data.id;
   const body = toBackendBody(data);
