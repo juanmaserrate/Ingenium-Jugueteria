@@ -43,8 +43,10 @@ async function render(path) {
   }
   container.innerHTML = '<div class="ing-stub"><span class="material-symbols-outlined">hourglass_top</span><p>Cargando...</p></div>';
 
-  // Split path y params "#/pos" o "#/sale/123"
-  const [base, ...rest] = path.split('/').filter(Boolean);
+  // Split path y params "#/pos" o "#/sale/123". Se saca el query ("?connected=1",
+  // "?error=oauth", etc.) ANTES de matchear la ruta — si no, queda dentro de la key y da
+  // "Ruta no encontrada". El query sigue en location.hash para que el módulo lo lea.
+  const [base, ...rest] = path.split('?')[0].split('/').filter(Boolean);
   const key = `/${base || 'dashboard'}`;
   // Guard de rol: el encargado no accede a módulos de administración ni por URL.
   if (ADMIN_ONLY.has(key) && !isAdmin()) {
