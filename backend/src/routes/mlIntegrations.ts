@@ -9,6 +9,7 @@ import { computeMlStockForVariant } from '../services/stock.js';
 import { confirmSale } from '../services/sales.js';
 import { buildCostMetaForMl } from '../services/paymentCost.js';
 import { maybeReconcileMl } from '../mercadolibre/webhooks.js';
+import { predictCategory, publishProduct } from '../mercadolibre/publish.js';
 import { ValidationError } from '../utils/errors.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -146,6 +147,33 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       if (!b.variantId) return reply.status(400).send({ error: 'Falta variantId' });
       await prisma.variantMeliMapping.deleteMany({ where: { variantId: b.variantId } });
       return { ok: true };
+    });
+
+    // --- Publicar en ML (Fase 3) ---
+    r.get('/integrations/ml/predict-category', adminOnly, async (req, reply) => {
+      const title = String((req.query as any).title ?? '').trim();
+      if (!title) return reply.status(400).send({ error: 'Falta title' });
+      try { return await predictCategory(title); }
+      catch (err: any) { return reply.status(502).send({ error: 'No se pudo predecir', details: err?.response?.data ?? err?.message }); }
+    });
+
+    r.post('/integrations/ml/publish', adminOnly, async (req, reply) => {
+      const b = z.object({
+        barcode: z.string(),
+        categoryId: z.string().optional(),
+        listingTypeId: z.string(),
+        price: z.number().optional(),
+        quantity: z.number().optional(),
+        title: z.string().optional(),
+        condition: z.string().optional(),
+      }).parse(req.body);
+      try {
+        const res = await publishProduct(b);
+        if ((res as any).error) return reply.status(422).send(res);
+        return res;
+      } catch (err: any) {
+        return reply.status(502).send({ error: 'publish_failed', details: err?.response?.data ?? err?.message });
+      }
     });
 
     // --- Órdenes de ML pendientes de asignar a sucursal (Fase 2) ---

@@ -59,6 +59,7 @@ export async function mount(el) {
       el.querySelector('#btn-test').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-link-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-orders-box').classList.toggle('hidden', !s.connected);
+      el.querySelector('#ml-publish-box').classList.toggle('hidden', !s.connected);
       if (s.connected) { await loadOrders(); await loadMappings(); }
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) {
@@ -143,6 +144,43 @@ export async function mount(el) {
     } catch (err) { toast(err.message, 'error'); }
   });
 
+  el.querySelector('#btn-predict').addEventListener('click', async () => {
+    const title = el.querySelector('#pub-title').value.trim() || el.querySelector('#pub-barcode').value.trim();
+    if (!title) { toast('Poné un título o código para predecir', 'warn'); return; }
+    const out = el.querySelector('#predict-out');
+    out.textContent = 'Prediciendo…';
+    try {
+      const preds = await api(`/api/integrations/ml/predict-category?title=${encodeURIComponent(title)}`);
+      if (!preds || !preds.length) { out.textContent = 'Sin sugerencias; cargá la categoría a mano.'; return; }
+      el.querySelector('#pub-category').value = preds[0].categoryId;
+      out.innerHTML = 'Sugerencias: ' + preds.map((p) => `<button type="button" data-cat="${esc(p.categoryId)}" class="underline text-[#d82f1e]">${esc(p.categoryName)} (${esc(p.categoryId)})</button>`).join(' · ');
+      out.querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => { el.querySelector('#pub-category').value = b.dataset.cat; }));
+    } catch (err) { out.innerHTML = `<span class="text-red-600">${err.message}</span>`; }
+  });
+
+  el.querySelector('#btn-publish').addEventListener('click', async () => {
+    const barcode = el.querySelector('#pub-barcode').value.trim();
+    const listingTypeId = el.querySelector('#pub-listing').value;
+    if (!barcode) { toast('Poné el código de barras del producto', 'warn'); return; }
+    const body = { barcode, listingTypeId, condition: el.querySelector('#pub-condition').value };
+    const cat = el.querySelector('#pub-category').value.trim(); if (cat) body.categoryId = cat;
+    const title = el.querySelector('#pub-title').value.trim(); if (title) body.title = title;
+    const price = Number(el.querySelector('#pub-price').value); if (price > 0) body.price = price;
+    const qty = el.querySelector('#pub-qty').value; if (qty !== '') body.quantity = Number(qty);
+    const out = el.querySelector('#publish-out');
+    if (!confirm('Esto va a CREAR una publicación real en tu cuenta de Mercado Libre. ¿Confirmás?')) return;
+    out.textContent = 'Publicando…';
+    try {
+      const res = await api('/api/integrations/ml/publish', { method: 'POST', body });
+      out.innerHTML = `<span class="text-green-700 font-bold">✓ Publicado</span> — ${esc(res.itemId)} ${res.permalink ? `· <a href="${esc(res.permalink)}" target="_blank" class="underline text-[#d82f1e]">ver</a>` : ''}`;
+      toast('Publicación creada y stock vinculado', 'success');
+      loadMappings();
+    } catch (err) {
+      const det = err?.body?.details ? (typeof err.body.details === 'string' ? err.body.details : JSON.stringify(err.body.details)) : err.message;
+      out.innerHTML = `<span class="text-red-600 font-bold">✗ ${esc(err?.body?.message || err.message)}</span><br/><span class="text-xs text-[#7d6c5c]">${esc(det)}</span>`;
+    }
+  });
+
   if (!getToken()) toast('Necesitás iniciar sesión para usar esta sección', 'warning');
   await refresh();
 }
@@ -211,12 +249,40 @@ function renderShell() {
         </table>
       </section>
 
+      <section id="ml-publish-box" class="hidden bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 space-y-3">
+        <div>
+          <h2 class="text-lg font-bold">Publicar en Mercado Libre</h2>
+          <p class="text-xs text-[#7d6c5c]">Creá una publicación desde un producto del sistema. <b>Crea contenido real en tu cuenta</b> (te pide confirmar). Si ML rechaza por categoría o atributos faltantes, te muestro el detalle para corregir. Al publicar queda vinculada y el stock se sincroniza solo.</p>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="text-xs font-bold text-[#7d6c5c] uppercase block mb-1">Código de barras / SKU</label><input id="pub-barcode" class="px-3 py-2 rounded-xl border border-[#fff1e6] w-full" placeholder="del producto" /></div>
+          <div><label class="text-xs font-bold text-[#7d6c5c] uppercase block mb-1">Título (opcional, máx 60)</label><input id="pub-title" maxlength="60" class="px-3 py-2 rounded-xl border border-[#fff1e6] w-full" placeholder="usa el nombre del producto" /></div>
+          <div><label class="text-xs font-bold text-[#7d6c5c] uppercase block mb-1">Precio (opcional)</label><input id="pub-price" type="number" class="px-3 py-2 rounded-xl border border-[#fff1e6] w-full" placeholder="usa el del sistema" /></div>
+          <div><label class="text-xs font-bold text-[#7d6c5c] uppercase block mb-1">Cantidad (opcional)</label><input id="pub-qty" type="number" class="px-3 py-2 rounded-xl border border-[#fff1e6] w-full" placeholder="usa el stock" /></div>
+          <div><label class="text-xs font-bold text-[#7d6c5c] uppercase block mb-1">Tipo de publicación</label>
+            <select id="pub-listing" class="px-3 py-2 rounded-xl border border-[#fff1e6] w-full">
+              <option value="free">Gratuita</option><option value="gold_special" selected>Clásica</option><option value="gold_pro">Premium</option>
+            </select></div>
+          <div><label class="text-xs font-bold text-[#7d6c5c] uppercase block mb-1">Condición</label>
+            <select id="pub-condition" class="px-3 py-2 rounded-xl border border-[#fff1e6] w-full"><option value="new">Nuevo</option><option value="used">Usado</option></select></div>
+          <div class="col-span-2 flex items-end gap-2">
+            <div class="flex-1"><label class="text-xs font-bold text-[#7d6c5c] uppercase block mb-1">Categoría ML (si vacío, se predice)</label><input id="pub-category" class="px-3 py-2 rounded-xl border border-[#fff1e6] w-full" placeholder="MLA…" /></div>
+            <button id="btn-predict" class="px-3 py-2 bg-gray-100 text-[#241a0d] rounded-xl font-bold">Predecir</button>
+          </div>
+        </div>
+        <div id="predict-out" class="text-xs text-[#7d6c5c]"></div>
+        <div class="flex items-center gap-3">
+          <button id="btn-publish" class="px-4 py-2 bg-[#d82f1e] text-white rounded-xl font-bold">Publicar</button>
+          <div id="publish-out" class="text-sm"></div>
+        </div>
+      </section>
+
       <section class="bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 text-sm text-[#7d6c5c]">
-        <h2 class="text-base font-bold text-[#241a0d] mb-2">Próximas fases</h2>
+        <h2 class="text-base font-bold text-[#241a0d] mb-2">Estado de las fases</h2>
         <ul class="list-disc pl-5 space-y-1">
           <li><b>Fase 1 ✓</b> — Stock: vinculás publicaciones y cada venta descuenta el stock en ML.</li>
-          <li><b>Fase 2 ✓</b> — Ventas: las órdenes de ML entran como venta con su costo real de Mercado Pago (arriba).</li>
-          <li><b>Fase 3</b> — Publicar/editar publicaciones desde el inventario.</li>
+          <li><b>Fase 2 ✓</b> — Ventas: las órdenes de ML entran como venta con su costo real de Mercado Pago.</li>
+          <li><b>Fase 3 ✓</b> — Publicás productos del sistema en ML (arriba).</li>
         </ul>
       </section>
     </div>

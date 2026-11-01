@@ -98,6 +98,14 @@ export class MlClient {
   updateItem(itemId: string, data: any) { return this.req({ method: 'put', url: `/items/${itemId}`, data }); }
   createItem(data: any) { return this.req({ method: 'post', url: '/items', data }); }
 
+  // --- Catálogo / categorías (para publicar) ---
+  // Predice categoría a partir del título (domain discovery). site: MLA/MLM/MLB/...
+  predictCategory(site: string, title: string) {
+    return this.req({ method: 'get', url: `/sites/${site}/domain_discovery/search`, params: { limit: 3, q: title } });
+  }
+  getCategoryAttributes(categoryId: string) { return this.req({ method: 'get', url: `/categories/${categoryId}/attributes` }); }
+  setItemDescription(itemId: string, plainText: string) { return this.req({ method: 'post', url: `/items/${itemId}/description`, data: { plain_text: plainText } }); }
+
   // --- Órdenes ---
   getOrder(orderId: string) { return this.req({ method: 'get', url: `/orders/${orderId}` }); }
   searchOrders(params: Record<string, any>) { return this.req({ method: 'get', url: '/orders/search', params }); }
