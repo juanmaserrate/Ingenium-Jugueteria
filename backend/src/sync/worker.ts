@@ -3,6 +3,7 @@ import { prisma } from '../db.js';
 import { takeNextJobs, markDone, markFailed, reapStuckJobs, cleanupOldJobs } from './queue.js';
 import { ensureMonthlySnapshot } from '../services/stockSnapshot.js';
 import { syncHandlers, type SyncOperation } from '../tiendanube/sync.js';
+import { mlSyncHandlers } from '../mercadolibre/sync.js';
 import type { FastifyBaseLogger } from 'fastify';
 
 let running = false;
@@ -65,8 +66,13 @@ export function startSyncWorker(log: FastifyBaseLogger) {
     try {
       // Foto mensual: antes del guard de TN, para que corra aunque TN esté desconectado.
       if (Date.now() - lastSnapshotAt >= 60 * 60 * 1000) await runSnapshot(log);
-      const integration = await prisma.integration.findUnique({ where: { provider: 'tiendanube' } });
-      if (!integration?.active) {
+      // El worker procesa jobs si TN O ML están conectados. Si ninguno lo está, duerme.
+      // (Cada handler igual valida su propio canal; los jobs del canal apagado fallan/reintentan.)
+      const [tn, ml] = await Promise.all([
+        prisma.integration.findUnique({ where: { provider: 'tiendanube' } }),
+        prisma.integration.findUnique({ where: { provider: 'mercadolibre' } }),
+      ]);
+      if (!tn?.active && !ml?.active) {
         setTimeout(tick, env.SYNC_WORKER_INTERVAL_MS);
         return;
       }
@@ -79,7 +85,7 @@ export function startSyncWorker(log: FastifyBaseLogger) {
       const jobs = await takeNextJobs(10);
       for (const job of jobs) {
         const op = job.operation as SyncOperation;
-        const handler = syncHandlers[op];
+        const handler = (syncHandlers as any)[op] ?? (mlSyncHandlers as any)[op];
         if (!handler) {
           await markFailed(job.id, `Unknown operation: ${op}`, env.SYNC_MAX_RETRIES);
           continue;

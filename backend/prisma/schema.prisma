@@ -156,6 +156,7 @@ model Product {
   variants    Variant[]
   images      ProductImage[]
   tnMapping   ProductTnMapping?
+  mlMapping   ProductMeliMapping?
 
   @@index([code])
   @@index([name])
@@ -184,6 +185,7 @@ model Variant {
   product    Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
   stocks     Stock[]
   tnMapping  VariantTnMapping?
+  mlMapping  VariantMeliMapping?
   saleItems  SaleItem[]
   purchaseItems PurchaseItem[]
 
@@ -705,6 +707,35 @@ model VariantTnMapping {
 
   @@index([tnProductId])
   @@map("variant_tn_mapping")
+}
+
+// Mapeo producto/variante interno ↔ publicación de Mercado Libre (item_id / variation_id).
+model ProductMeliMapping {
+  id          String   @id @default(cuid())
+  productId   String   @unique @map("product_id")
+  mlItemId    String   @unique @map("ml_item_id")
+  lastPushAt  DateTime? @map("last_push_at")
+  lastPullAt  DateTime? @map("last_pull_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("product_meli_mapping")
+}
+
+model VariantMeliMapping {
+  id            String   @id @default(cuid())
+  variantId     String   @unique @map("variant_id")
+  mlItemId      String   @map("ml_item_id")
+  mlVariationId String?  @map("ml_variation_id")
+  lastPushAt    DateTime? @map("last_push_at")
+  lastPullAt    DateTime? @map("last_pull_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  variant Variant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([mlItemId])
+  @@map("variant_meli_mapping")
 }
 
 // \u00d3rdenes de TN ya pagadas, esperando asignaci\u00f3n de sucursal

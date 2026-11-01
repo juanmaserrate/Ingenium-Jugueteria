@@ -22,6 +22,15 @@ export async function computeTnStockForVariant(variantId: string): Promise<numbe
   return target ? Math.max(0, target.qty - target.reservedQty) : 0;
 }
 
+/**
+ * Stock publicado en Mercado Libre: suma de (qty - reservedQty) de todas las sucursales.
+ * (Modo 'sum' fijo por ahora; ML no tiene aún un stockMode configurable como TN.)
+ */
+export async function computeMlStockForVariant(variantId: string): Promise<number> {
+  const stocks = await prisma.stock.findMany({ where: { variantId } });
+  return stocks.reduce((sum, s) => sum + Math.max(0, s.qty - s.reservedQty), 0);
+}
+
 export async function getStock(variantId: string, branchId: string) {
   return prisma.stock.findUnique({
     where: { variantId_branchId: { variantId, branchId } },

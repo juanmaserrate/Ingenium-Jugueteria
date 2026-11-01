@@ -83,6 +83,44 @@ export async function runSeed() {
   } catch (err) {
     console.warn('[seed] no se pudo asegurar columnas ML en integrations:', err);
   }
+  // Mapeos producto/variante ↔ publicación de Mercado Libre (db push no los crea confiable).
+  try {
+    await prisma.$executeRawUnsafe(
+      `CREATE TABLE IF NOT EXISTS "product_meli_mapping" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "product_id" TEXT NOT NULL,
+        "ml_item_id" TEXT NOT NULL,
+        "last_push_at" TIMESTAMP(3),
+        "last_pull_at" TIMESTAMP(3),
+        "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "product_meli_mapping_product_id_key" ON "product_meli_mapping" ("product_id")`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "product_meli_mapping_ml_item_id_key" ON "product_meli_mapping" ("ml_item_id")`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE TABLE IF NOT EXISTS "variant_meli_mapping" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "variant_id" TEXT NOT NULL,
+        "ml_item_id" TEXT NOT NULL,
+        "ml_variation_id" TEXT,
+        "last_push_at" TIMESTAMP(3),
+        "last_pull_at" TIMESTAMP(3),
+        "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "variant_meli_mapping_variant_id_key" ON "variant_meli_mapping" ("variant_id")`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "variant_meli_mapping_ml_item_id_idx" ON "variant_meli_mapping" ("ml_item_id")`,
+    );
+  } catch (err) {
+    console.warn('[seed] no se pudo asegurar mapeos ML:', err);
+  }
   // Tabla de fotos mensuales de stock (db push no la crea de forma confiable acá;
   // la creamos idempotente al arrancar). Debe coincidir con el modelo StockSnapshot.
   try {

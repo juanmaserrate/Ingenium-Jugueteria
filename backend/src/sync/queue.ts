@@ -1,22 +1,31 @@
 import { prisma } from '../db.js';
 
-export async function enqueueSync(operation: string, payload: Record<string, unknown>) {
-  // Deduplicaci\u00f3n: si ya hay una operaci\u00f3n igual "queued" para el mismo variant/product,
+async function createOrDedupe(operation: string, payload: Record<string, unknown>) {
+  // Deduplicaci\u00f3n: si ya hay una operaci\u00f3n igual "queued" para el mismo variant,
   // no agregamos otra (evita spam cuando se hacen varias operaciones seguidas).
-  if (operation === 'push_stock' && typeof payload.variantId === 'string') {
+  if ((operation === 'push_stock' || operation === 'ml_push_stock') && typeof payload.variantId === 'string') {
     const existing = await prisma.syncQueue.findFirst({
       where: { operation, status: 'queued', payload: { equals: payload as any } },
     });
     if (existing) return existing;
   }
   return prisma.syncQueue.create({
-    data: {
-      operation,
-      payload: payload as any,
-      status: 'queued',
-      nextRunAt: new Date(),
-    },
+    data: { operation, payload: payload as any, status: 'queued', nextRunAt: new Date() },
   });
+}
+
+export async function enqueueSync(operation: string, payload: Record<string, unknown>) {
+  const job = await createOrDedupe(operation, payload);
+  // Fan-out multicanal: todo push de stock a TN tambi\u00e9n empuja a Mercado Libre, pero SOLO
+  // si la variante est\u00e1 mapeada a ML (si no, no se encola nada y no hay ruido). As\u00ed un
+  // \u00fanico punto cubre todos los call sites de push_stock (venta, ajuste, transfer, etc.).
+  if (operation === 'push_stock' && typeof payload.variantId === 'string') {
+    try {
+      const hasMl = await prisma.variantMeliMapping.findUnique({ where: { variantId: payload.variantId as string } });
+      if (hasMl) await createOrDedupe('ml_push_stock', { variantId: payload.variantId });
+    } catch { /* la tabla puede no existir todav\u00eda (antes del seed) */ }
+  }
+  return job;
 }
 
 export async function takeNextJobs(limit = 10) {

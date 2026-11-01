@@ -53,6 +53,8 @@ export async function mount(el) {
       el.querySelector('#btn-connect').classList.toggle('hidden', !s.configured || s.connected);
       el.querySelector('#btn-disconnect').classList.toggle('hidden', !s.connected);
       el.querySelector('#btn-test').classList.toggle('hidden', !s.connected);
+      el.querySelector('#ml-link-box').classList.toggle('hidden', !s.connected);
+      if (s.connected) await loadMappings();
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) {
         el.querySelector('#status-badge').innerHTML = '<span class="px-2 py-0.5 rounded-full bg-red-100 text-red-800 text-xs font-bold">Backend offline</span>';
@@ -60,9 +62,44 @@ export async function mount(el) {
     }
   }
 
+  async function loadMappings() {
+    try {
+      const maps = await api('/api/integrations/ml/mappings');
+      const rows = (maps || []).map((m) => `
+        <tr class="border-b border-[#fff1e6]">
+          <td class="py-1 px-2 text-sm font-bold">${esc(m.productName)}${m.variantName && m.variantName !== 'default' ? ` <span class="text-[#7d6c5c] font-normal">· ${esc(m.variantName)}</span>` : ''}</td>
+          <td class="py-1 px-2 text-xs font-mono">${esc(m.mlItemId)}${m.mlVariationId ? ` / ${esc(m.mlVariationId)}` : ''}</td>
+          <td class="py-1 px-2 text-sm text-right">${m.stock}</td>
+          <td class="py-1 px-2 text-xs">${m.lastPushAt ? new Date(m.lastPushAt).toLocaleString('es-AR') : '—'}</td>
+          <td class="py-1 px-2 text-right"><button data-unlink="${esc(m.variantId)}" class="text-xs text-[#7d6c5c] hover:text-red-600">Desvincular</button></td>
+        </tr>`).join('');
+      el.querySelector('#ml-maps tbody').innerHTML = rows || '<tr><td colspan="5" class="py-4 text-center text-sm text-[#7d6c5c]">Sin publicaciones vinculadas todavía</td></tr>';
+      el.querySelectorAll('[data-unlink]').forEach((b) => b.addEventListener('click', async () => {
+        if (!confirm('¿Desvincular esta publicación?')) return;
+        try { await api('/api/integrations/ml/unlink', { method: 'POST', body: { variantId: b.dataset.unlink } }); toast('Desvinculado', 'success'); loadMappings(); }
+        catch (err) { toast(err.message, 'error'); }
+      }));
+    } catch (err) { console.error(err); }
+  }
+
+  el.querySelector('#btn-link').addEventListener('click', async () => {
+    const barcode = el.querySelector('#link-barcode').value.trim();
+    const mlItemId = el.querySelector('#link-item').value.trim();
+    const mlVariationId = el.querySelector('#link-variation').value.trim();
+    if (!barcode || !mlItemId) { toast('Completá código de barras e ítem de ML', 'warn'); return; }
+    try {
+      await api('/api/integrations/ml/link', { method: 'POST', body: { barcode, mlItemId, mlVariationId: mlVariationId || undefined } });
+      toast('Vinculado — el stock se empuja a ML', 'success');
+      el.querySelector('#link-barcode').value = ''; el.querySelector('#link-item').value = ''; el.querySelector('#link-variation').value = '';
+      loadMappings();
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
   if (!getToken()) toast('Necesitás iniciar sesión para usar esta sección', 'warning');
   await refresh();
 }
+
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 function renderShell() {
   return `
@@ -99,10 +136,29 @@ function renderShell() {
         <div id="test-out" class="text-sm text-[#7d6c5c]"></div>
       </section>
 
+      <section id="ml-link-box" class="hidden bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 space-y-4">
+        <div>
+          <h2 class="text-lg font-bold">Publicaciones vinculadas (stock)</h2>
+          <p class="text-xs text-[#7d6c5c]">Vinculá cada publicación de ML a un producto por su código de barras. Desde ahí, cada venta (POS/TN/ML) descuenta el stock en ML automáticamente.</p>
+        </div>
+        <div class="flex flex-wrap gap-2 items-end">
+          <div><label class="text-xs font-bold text-[#7d6c5c] uppercase block mb-1">Código de barras / SKU</label><input id="link-barcode" class="px-3 py-2 rounded-xl border border-[#fff1e6] w-56" placeholder="del producto en el sistema" /></div>
+          <div><label class="text-xs font-bold text-[#7d6c5c] uppercase block mb-1">Ítem de ML (MLA…)</label><input id="link-item" class="px-3 py-2 rounded-xl border border-[#fff1e6] w-44" placeholder="MLA123456789" /></div>
+          <div><label class="text-xs font-bold text-[#7d6c5c] uppercase block mb-1">Variación (opcional)</label><input id="link-variation" class="px-3 py-2 rounded-xl border border-[#fff1e6] w-40" placeholder="id de variación" /></div>
+          <button id="btn-link" class="px-4 py-2 bg-[#d82f1e] text-white rounded-xl font-bold">Vincular</button>
+        </div>
+        <table id="ml-maps" class="w-full">
+          <thead><tr class="text-left text-xs text-[#7d6c5c] uppercase">
+            <th class="py-2 px-2">Producto</th><th class="py-2 px-2">Ítem ML</th><th class="py-2 px-2 text-right">Stock</th><th class="py-2 px-2">Último push</th><th class="py-2 px-2"></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
       <section class="bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 text-sm text-[#7d6c5c]">
         <h2 class="text-base font-bold text-[#241a0d] mb-2">Próximas fases</h2>
         <ul class="list-disc pl-5 space-y-1">
-          <li><b>Fase 1</b> — Stock: enlazar publicaciones y que nunca sobrevendas.</li>
+          <li><b>Fase 1 ✓</b> — Stock: vinculás publicaciones y cada venta descuenta el stock en ML (arriba).</li>
           <li><b>Fase 2</b> — Ventas: las órdenes de ML entran como venta con su costo real de Mercado Pago.</li>
           <li><b>Fase 3</b> — Publicar/editar publicaciones desde el inventario.</li>
         </ul>
