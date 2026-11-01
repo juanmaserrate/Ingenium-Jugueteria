@@ -42,6 +42,14 @@ async function resolvePictures(product: any, extra: string[]): Promise<string[]>
 const isRequiredAttr = (a: any) =>
   !!(a?.tags && (a.tags.required || a.tags.catalog_required || a.tags.fixed));
 
+// Mapea la clave de variante local (texto libre) al atributo de variación de ML.
+// Solo estas dimensiones se pueden variar; cualquier otra (p.ej. "Modelo") no es variable en ML.
+function mapVariationAttr(key: string): string | null {
+  if (/color/i.test(key)) return 'COLOR';
+  if (/talle|talla|size|medida/i.test(key)) return 'SIZE';
+  return null;
+}
+
 // Predice categorías candidatas a partir del título (domain discovery).
 export async function predictCategory(title: string) {
   const ml = await requireMlClient();
@@ -81,6 +89,16 @@ export async function publishProduct(input: {
   }
   if (!variant) return { error: 'not_found', message: 'No se encontró el producto a publicar' };
   const product = variant.product;
+  const allVariants = await prisma.variant.findMany({ where: { productId: product.id } });
+
+  // ¿Se puede publicar con variaciones de ML? Requiere >1 variante, una sola dimensión
+  // (ej. "Color") que mapee a un atributo de variación (COLOR/SIZE). Se confirma más abajo
+  // contra la categoría (allow_variations). Si no, se publica la variante default como item simple.
+  const varKeys = new Set<string>();
+  for (const v of allVariants) for (const k of Object.keys((v.attributes as any) || {})) varKeys.add(k);
+  const varKey = [...varKeys].find((k) => mapVariationAttr(k)) ?? null;
+  const mlVarAttr = varKey ? mapVariationAttr(varKey) : null;
+  const canVary = allVariants.length > 1 && varKeys.size === 1 && !!mlVarAttr;
 
   // Idempotencia: si el producto YA está publicado/mapeado en ML, no creamos otra publicación.
   const already = await prisma.productMeliMapping.findUnique({ where: { productId: product.id } });
@@ -113,6 +131,9 @@ export async function publishProduct(input: {
   try { catAttrs = await ml.getCategoryAttributes(categoryId); } catch { /* seguimos sin esquema */ }
   const byId: Record<string, any> = Object.fromEntries((catAttrs || []).map((a: any) => [a.id, a]));
 
+  // Variaciones: solo si la categoría marca el atributo como variable (allow_variations).
+  const varyMode = canVary && !!(byId[mlVarAttr!]?.tags?.allow_variations);
+
   const attributes: any[] = [];
   const have = new Set<string>();
   const put = (id: string, value: any) => {
@@ -135,8 +156,10 @@ export async function publishProduct(input: {
   }
 
   // Atributos obligatorios que no pudimos resolver (con lista de valores acotada) → al form.
+  // En modo variaciones, el atributo que varía (COLOR/SIZE) se satisface dentro de cada variación.
   const missing = (catAttrs || [])
-    .filter((a: any) => isRequiredAttr(a) && !have.has(a.id) && !/^SELLER_PACKAGE_/.test(a.id))
+    .filter((a: any) => isRequiredAttr(a) && !have.has(a.id) && !/^SELLER_PACKAGE_/.test(a.id)
+      && !(varyMode && a.id === mlVarAttr))
     .map((a: any) => ({
       id: a.id, name: a.name, valueType: a.value_type,
       values: (a.values || []).slice(0, 40).map((v: any) => ({ id: v.id, name: v.name })),
@@ -148,9 +171,7 @@ export async function publishProduct(input: {
   const payload: any = {
     site_id: SITE,
     category_id: categoryId,
-    price: Number(price),
     currency_id: 'ARS',
-    available_quantity: Math.max(0, Math.round(quantity)),
     buying_mode: 'buy_it_now',
     condition: input.condition || 'new',
     pictures,
@@ -158,6 +179,27 @@ export async function publishProduct(input: {
   // ML (2026): se lista por familia de catálogo → el título lo define la familia, NO se manda `title`.
   payload.family_name = input.familyName || title;
   if (attributes.length) payload.attributes = attributes;
+
+  // Stock/precio: por variación (si se puede variar) o plano (item simple).
+  const variationBuild: Array<{ variantId: string; value: string }> = [];
+  if (varyMode) {
+    const variations: any[] = [];
+    for (const v of allVariants) {
+      const value = String((v.attributes as any)?.[varKey!] ?? '').trim();
+      if (!value) continue;
+      const qty = await computeMlStockForVariant(v.id);
+      variations.push({
+        attribute_combinations: [{ id: mlVarAttr, value_name: value }],
+        available_quantity: Math.max(0, Math.round(qty)),
+        price: Number(v.priceOverride ?? product.price),
+      });
+      variationBuild.push({ variantId: v.id, value });
+    }
+    payload.variations = variations;
+  } else {
+    payload.price = Number(price);
+    payload.available_quantity = Math.max(0, Math.round(quantity));
+  }
 
   // Crear. Si el tipo de publicación no está disponible en la categoría, reintentar con Clásica.
   let created: any;
@@ -183,18 +225,39 @@ export async function publishProduct(input: {
   }
 
   // Mapear + marcar publicado + empujar stock
-  await prisma.variantMeliMapping.upsert({
-    where: { variantId: variant.id },
-    update: { mlItemId: itemId, mlVariationId: null },
-    create: { variantId: variant.id, mlItemId: itemId, mlVariationId: null },
-  });
+  let mappedVariants: string[] = [];
+  if (varyMode && Array.isArray(created.variations) && created.variations.length) {
+    // Emparejar cada variación creada con la variante local por el valor del atributo.
+    for (const cv of created.variations) {
+      const combo = (cv.attribute_combinations || []).find((c: any) => c.id === mlVarAttr) || (cv.attribute_combinations || [])[0];
+      const val = String(combo?.value_name ?? '').trim().toLowerCase();
+      const match = variationBuild.find((b) => b.value.trim().toLowerCase() === val);
+      if (!match) continue;
+      await prisma.variantMeliMapping.upsert({
+        where: { variantId: match.variantId },
+        update: { mlItemId: itemId, mlVariationId: String(cv.id) },
+        create: { variantId: match.variantId, mlItemId: itemId, mlVariationId: String(cv.id) },
+      });
+      mappedVariants.push(match.variantId);
+    }
+  } else {
+    await prisma.variantMeliMapping.upsert({
+      where: { variantId: variant.id },
+      update: { mlItemId: itemId, mlVariationId: null },
+      create: { variantId: variant.id, mlItemId: itemId, mlVariationId: null },
+    });
+    mappedVariants.push(variant.id);
+  }
   await prisma.productMeliMapping.upsert({
     where: { productId: product.id },
     update: { mlItemId: itemId },
     create: { productId: product.id, mlItemId: itemId },
   }).catch(() => { /* item ya mapeado a otro producto */ });
   await prisma.product.update({ where: { id: product.id }, data: { publishedMeli: true } }).catch(() => {});
-  await enqueueSync('ml_push_stock', { variantId: variant.id });
+  for (const vid of mappedVariants) await enqueueSync('ml_push_stock', { variantId: vid });
 
-  return { ok: true, itemId, permalink: created.permalink ?? null, status: created.status ?? null };
+  return {
+    ok: true, itemId, permalink: created.permalink ?? null, status: created.status ?? null,
+    variations: varyMode ? mappedVariants.length : 0,
+  };
 }
