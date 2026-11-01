@@ -661,7 +661,7 @@ model Counter {
 
 model Integration {
   id            String   @id @default(cuid())
-  provider      String   @unique // "tiendanube"
+  provider      String   @unique // "tiendanube" | "mercadolibre"
   tnStoreId     String?  @map("tn_store_id") // id de la tienda (user_id en TN)
   accessTokenEnc String  @map("access_token_enc") // encriptado con ENCRYPTION_KEY
   scope         String?
@@ -670,6 +670,11 @@ model Integration {
   lastSyncAt    DateTime? @map("last_sync_at")
   stockMode     String   @default("sum") @map("stock_mode") // sum | lomas | banfield
   active        Boolean  @default(true)
+  // Mercado Libre: el access token expira (~3-6h) y hay refresh token (de un solo uso).
+  // TN no usa estos campos (son nullables).
+  refreshTokenEnc String? @map("refresh_token_enc") // encriptado con ENCRYPTION_KEY
+  tokenExpiresAt  DateTime? @map("token_expires_at") // cuándo vence el access token
+  mlUserId        String?  @map("ml_user_id") // id del vendedor en ML (seller id)
 
   @@map("integrations")
 }

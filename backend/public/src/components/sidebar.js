@@ -35,6 +35,9 @@ const NAV = [
   { path: '/integraciones',       label: 'Integraciones',     icon: 'link', admin: true },
   { path: '/conflictos',          label: 'Conflictos de sync',icon: 'sync_problem', admin: true },
 
+  { section: 'Mercado Libre' },
+  { path: '/mercadolibre',        label: 'Mercado Libre',     icon: 'storefront', admin: true },
+
   { section: 'Comercial' },
   { path: '/crm',          label: 'Clientes',         icon: 'group' },
   { path: '/balance',      label: 'Saldo',            icon: 'trending_up', admin: true },

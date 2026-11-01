@@ -5,7 +5,7 @@ import { isAdmin } from './auth.js';
 
 // Rutas solo-admin: si un encargado entra por URL, se lo manda al POS.
 const ADMIN_ONLY = new Set([
-  '/dashboard', '/productos-pendientes', '/integraciones', '/conflictos',
+  '/dashboard', '/productos-pendientes', '/integraciones', '/conflictos', '/mercadolibre',
   '/balance', '/profits', '/contribution', '/checks',
   '/employees', '/tasks', '/calendar', '/reports', '/history', '/settings',
 ]);

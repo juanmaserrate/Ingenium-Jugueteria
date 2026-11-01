@@ -16,6 +16,7 @@ import { cashRoutes } from './routes/cash.js';
 import { customersRoutes } from './routes/customers.js';
 import { senasRoutes } from './routes/senas.js';
 import { integrationsRoutes } from './routes/integrations.js';
+import { mlIntegrationsRoutes } from './routes/mlIntegrations.js';
 import { webhooksRoutes } from './routes/webhooks.js';
 import { syncRoutes } from './routes/sync.js';
 import { imagesRoutes } from './routes/images.js';
@@ -169,6 +170,7 @@ async function main() {
   await app.register(branchesRoutes, { prefix: '/api' });
   await app.register(syncStateRoutes, { prefix: '/api' });
   await app.register(integrationsRoutes, { prefix: '/api' });
+  await app.register(mlIntegrationsRoutes, { prefix: '/api' });
   await app.register(imagesRoutes, { prefix: '/api' });
   await app.register(purchasesRoutes, { prefix: '/api' });
   await app.register(catalogRoutes, { prefix: '/api' });

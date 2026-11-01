@@ -68,6 +68,21 @@ export async function runSeed() {
   } catch (err) {
     console.warn('[seed] no se pudo asegurar sale_payments.cost_meta:', err);
   }
+  // Mercado Libre: columnas de refresh token / expiración / seller id en integrations
+  // (el access token de ML expira y hay refresh token de un solo uso; TN no las usa).
+  try {
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "integrations" ADD COLUMN IF NOT EXISTS "refresh_token_enc" TEXT`,
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "integrations" ADD COLUMN IF NOT EXISTS "token_expires_at" TIMESTAMP(3)`,
+    );
+    await prisma.$executeRawUnsafe(
+      `ALTER TABLE "integrations" ADD COLUMN IF NOT EXISTS "ml_user_id" TEXT`,
+    );
+  } catch (err) {
+    console.warn('[seed] no se pudo asegurar columnas ML en integrations:', err);
+  }
   // Tabla de fotos mensuales de stock (db push no la crea de forma confiable acá;
   // la creamos idempotente al arrancar). Debe coincidir con el modelo StockSnapshot.
   try {

@@ -19,6 +19,15 @@ const schema = z.object({
   TN_API_BASE: z.string().default('https://api.tiendanube.com/v1'),
   TN_AUTH_BASE: z.string().default('https://www.tiendanube.com/apps'),
 
+  // Mercado Libre. Vacío → integración deshabilitada (dormida). El redirect por defecto
+  // se arma desde PUBLIC_BASE_URL, pero se puede fijar explícito (debe coincidir EXACTO
+  // con el registrado en el DevCenter de ML). ML_AUTH_BASE es el dominio por país.
+  ML_CLIENT_ID: z.string().default(''),
+  ML_CLIENT_SECRET: z.string().default(''),
+  ML_API_BASE: z.string().default('https://api.mercadolibre.com'),
+  ML_AUTH_BASE: z.string().default('https://auth.mercadolibre.com.ar'),
+  ML_REDIRECT_URI: z.string().default(''),
+
   STORAGE_DRIVER: z.enum(['local', 'r2']).default('local'),
   STORAGE_LOCAL_PATH: z.string().default('./storage/images'),
   STORAGE_PUBLIC_URL: z.string().default('http://localhost:3000/images'),

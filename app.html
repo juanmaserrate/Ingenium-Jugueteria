@@ -100,6 +100,8 @@
     registerRoute('/ventas-web',           () => import('./src/modules/ventas-web.js'));
     registerRoute('/productos-pendientes', () => import('./src/modules/productos-pendientes.js'));
     registerRoute('/conflictos',           () => import('./src/modules/conflictos.js'));
+    // Mercado Libre
+    registerRoute('/mercadolibre',         () => import('./src/modules/mercadolibre.js'));
 
     // Arrancar cola de sync local para modo offline
     import('./src/core/sync-queue.js');

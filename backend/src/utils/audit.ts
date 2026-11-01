@@ -12,6 +12,9 @@ export const AUDIT_ACTIONS = {
   TN_CONNECTED: 'tn_connected',
   TN_DISCONNECTED: 'tn_disconnected',
   TN_SYNC: 'tn_sync',
+  ML_CONNECTED: 'ml_connected',
+  ML_DISCONNECTED: 'ml_disconnected',
+  ML_SYNC: 'ml_sync',
 } as const;
 
 export async function logAudit(entry: {
