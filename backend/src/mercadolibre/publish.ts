@@ -1,5 +1,6 @@
 import { prisma } from '../db.js';
 import { requireMlClient } from './client.js';
+import { getTnClient } from '../tiendanube/client.js';
 import { computeMlStockForVariant } from '../services/stock.js';
 import { enqueueSync } from '../sync/queue.js';
 
@@ -8,10 +9,38 @@ import { enqueueSync } from '../sync/queue.js';
 // Si ML rechaza (categoría/atributos obligatorios), se devuelve el error exacto para corregir.
 
 const SITE = 'MLA'; // Argentina
+const FALLBACK_LISTING = 'gold_special'; // "Clásica": sin costo de publicación, siempre disponible
 
 function stripHtml(s: string): string {
   return String(s).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 50000);
 }
+
+// Fotos: ML exige al menos una. Las del sistema no se espejan (viven en TN), así que si el
+// producto no tiene imágenes locales, las traemos de la publicación de Tienda Nube.
+async function resolvePictures(product: any, extra: string[]): Promise<string[]> {
+  const local = (product.images || [])
+    .slice().sort((a: any, b: any) => (a.position ?? 0) - (b.position ?? 0))
+    .map((im: any) => im.url).filter(Boolean);
+  if (local.length) return [...local, ...extra];
+  // Sin fotos locales → intentar las de TN.
+  const tnId = product.tnMapping?.tnProductId;
+  if (tnId) {
+    try {
+      const tn = await getTnClient();
+      if (tn) {
+        const tp: any = await tn.getProduct(tnId);
+        const tnPics = (Array.isArray(tp?.images) ? tp.images : [])
+          .slice().sort((a: any, b: any) => (a.position ?? 0) - (b.position ?? 0))
+          .map((im: any) => im.src).filter(Boolean);
+        return [...tnPics, ...extra];
+      }
+    } catch { /* si TN falla, seguimos con lo que haya */ }
+  }
+  return [...extra];
+}
+
+const isRequiredAttr = (a: any) =>
+  !!(a?.tags && (a.tags.required || a.tags.catalog_required || a.tags.fixed));
 
 // Predice categorías candidatas a partir del título (domain discovery).
 export async function predictCategory(title: string) {
@@ -37,16 +66,17 @@ export async function publishProduct(input: {
 }) {
   // Resolver la variante a publicar: por productId (la variante default) o por barcode/code.
   let variant;
+  const include = { product: { include: { images: true, brand: true, tnMapping: true } } };
   if (input.productId) {
     variant = await prisma.variant.findFirst({
       where: { productId: input.productId },
       orderBy: { isDefault: 'desc' },
-      include: { product: { include: { images: true, brand: true } } },
+      include,
     });
   } else if (input.barcode) {
     variant = await prisma.variant.findFirst({
       where: { OR: [{ barcode: input.barcode }, { code: input.barcode }] },
-      include: { product: { include: { images: true, brand: true } } },
+      include,
     });
   }
   if (!variant) return { error: 'not_found', message: 'No se encontró el producto a publicar' };
@@ -61,6 +91,8 @@ export async function publishProduct(input: {
   if (!price || price <= 0) return { error: 'no_price', message: 'El producto no tiene precio' };
   const quantity = input.quantity ?? (await computeMlStockForVariant(variant.id));
 
+  const ml = await requireMlClient();
+
   let categoryId = input.categoryId;
   if (!categoryId) {
     const preds = await predictCategory(title);
@@ -68,18 +100,49 @@ export async function publishProduct(input: {
   }
   if (!categoryId) return { error: 'no_category', message: 'No se pudo determinar la categoría; elegila manualmente' };
 
-  const localPics = (product.images || [])
-    .slice().sort((a, b) => a.position - b.position)
-    .map((im) => im.url)
-    .filter(Boolean);
-  const extraPics = input.pictures || [];
-  const pictures = [...localPics, ...extraPics].map((url) => ({ source: url }));
+  // Fotos (local o, en su defecto, de TN). ML rechaza sin al menos una.
+  const picUrls = await resolvePictures(product, input.pictures || []);
+  if (!picUrls.length) {
+    return { error: 'no_picture', message: 'El producto no tiene foto. Subí una imagen al producto o publicalo primero en Tienda Nube.' };
+  }
+  const pictures = picUrls.map((url) => ({ source: url }));
+
+  // Atributos de la categoría: traemos el esquema para saber cuáles existen/son obligatorios
+  // y auto-completar lo que podemos (marca, IVA, derecho de importación, nombre de catálogo).
+  let catAttrs: any[] = [];
+  try { catAttrs = await ml.getCategoryAttributes(categoryId); } catch { /* seguimos sin esquema */ }
+  const byId: Record<string, any> = Object.fromEntries((catAttrs || []).map((a: any) => [a.id, a]));
 
   const attributes: any[] = [];
-  if (product.brand?.name) attributes.push({ id: 'BRAND', value_name: product.brand.name });
-  // Atributos obligatorios de la categoría provistos por quien llama (evita duplicar BRAND).
-  for (const a of input.attributes || []) {
-    if (!attributes.some((x) => x.id === a.id)) attributes.push(a);
+  const have = new Set<string>();
+  const put = (id: string, value: any) => {
+    if (!id || value == null || value === '' || have.has(id)) return;
+    attributes.push({ id, value_name: String(value) });
+    have.add(id);
+  };
+  // 1) Lo que mande el form gana (dimensiones del paquete, overrides, etc.).
+  for (const a of input.attributes || []) put(a.id, a.value_name);
+  // 2) Auto-relleno de atributos universales si la categoría los declara.
+  if (product.brand?.name && byId['BRAND']) put('BRAND', product.brand.name);
+  if (byId['VALUE_ADDED_TAX']) put('VALUE_ADDED_TAX', '21%');
+  if (byId['IMPORT_DUTY']) put('IMPORT_DUTY', '0%');
+  // 3) Nombre de catálogo obligatorio y de texto libre (BOARD_GAME_NAME, etc.) → nombre del producto.
+  for (const a of catAttrs) {
+    if (!isRequiredAttr(a) || have.has(a.id)) continue;
+    const openText = (a.value_type === 'string' || a.value_type === 'text')
+      && !(a.values && a.values.length) && !a.allowed_units;
+    if (openText && /_NAME$/.test(a.id)) put(a.id, title);
+  }
+
+  // Atributos obligatorios que no pudimos resolver (con lista de valores acotada) → al form.
+  const missing = (catAttrs || [])
+    .filter((a: any) => isRequiredAttr(a) && !have.has(a.id) && !/^SELLER_PACKAGE_/.test(a.id))
+    .map((a: any) => ({
+      id: a.id, name: a.name, valueType: a.value_type,
+      values: (a.values || []).slice(0, 40).map((v: any) => ({ id: v.id, name: v.name })),
+    }));
+  if (missing.length) {
+    return { error: 'missing_attributes', missing, categoryId, familyName: input.familyName || title };
   }
 
   const payload: any = {
@@ -89,22 +152,27 @@ export async function publishProduct(input: {
     currency_id: 'ARS',
     available_quantity: Math.max(0, Math.round(quantity)),
     buying_mode: 'buy_it_now',
-    listing_type_id: input.listingTypeId,
     condition: input.condition || 'new',
+    pictures,
   };
-  // ML (2026): si se lista por familia de catálogo, el título lo define la familia → NO se manda `title`.
-  if (input.familyName) payload.family_name = input.familyName;
-  else payload.title = title;
-  if (pictures.length) payload.pictures = pictures;
+  // ML (2026): se lista por familia de catálogo → el título lo define la familia, NO se manda `title`.
+  payload.family_name = input.familyName || title;
   if (attributes.length) payload.attributes = attributes;
 
-  const ml = await requireMlClient();
+  // Crear. Si el tipo de publicación no está disponible en la categoría, reintentar con Clásica.
   let created: any;
+  const tryCreate = (listingType: string) => ml.createItem({ ...payload, listing_type_id: listingType });
   try {
-    created = await ml.createItem(payload);
+    created = await tryCreate(input.listingTypeId);
   } catch (err: any) {
-    // ML devuelve el detalle de qué falta (categoría/atributos) → se surfacea para corregir.
-    return { error: 'ml_rejected', details: err?.response?.data ?? err?.message };
+    const causes: any[] = err?.response?.data?.cause ?? [];
+    const ltUnavailable = causes.some((c) => c?.code === 'item.listing_type_id.unavailable');
+    if (ltUnavailable && input.listingTypeId !== FALLBACK_LISTING) {
+      try { created = await tryCreate(FALLBACK_LISTING); }
+      catch (e2: any) { return { error: 'ml_rejected', details: e2?.response?.data ?? e2?.message }; }
+    } else {
+      return { error: 'ml_rejected', details: err?.response?.data ?? err?.message };
+    }
   }
 
   const itemId = String(created.id);

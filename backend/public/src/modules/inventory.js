@@ -926,15 +926,28 @@ async function openProductForm(p, container) {
           <span class="material-symbols-outlined text-[#b88700]">storefront</span>
           <h4 class="font-black text-[#241a0d]">Datos para Mercado Libre</h4>
         </div>
-        <p class="text-xs text-[#7d6c5c]">Se publica al guardar. La categoría se autopredice por el nombre; podés fijarla. Si ML pide atributos obligatorios, te avisamos para completarlos.</p>
+        <p class="text-xs text-[#7d6c5c]">Se publica al guardar. La foto, la marca y el nombre de catálogo se completan solos (la foto se toma de Tienda Nube si no hay local). La categoría se autopredice; podés fijarla. El paquete se usa para calcular el envío.</p>
         <div class="grid grid-cols-3 gap-3">
           <label class="block"><span class="text-xs font-black text-[#7d6c5c] uppercase">Tipo de publicación</span>
-            <select id="ml-listing" class="ing-input mt-1"><option value="free">Gratuita</option><option value="gold_special" selected>Clásica</option><option value="gold_pro">Premium</option></select></label>
+            <select id="ml-listing" class="ing-input mt-1"><option value="gold_special" selected>Clásica (sin costo)</option><option value="gold_pro">Premium</option><option value="free">Gratuita</option></select></label>
           <label class="block"><span class="text-xs font-black text-[#7d6c5c] uppercase">Condición</span>
             <select id="ml-condition" class="ing-input mt-1"><option value="new">Nuevo</option><option value="used">Usado</option></select></label>
           <label class="block"><span class="text-xs font-black text-[#7d6c5c] uppercase">Categoría (auto si vacío)</span>
             <div class="flex gap-1 mt-1"><input id="ml-category" class="ing-input flex-1" placeholder="MLA…" /><button type="button" id="ml-predict" class="ing-btn-secondary !py-1.5 !px-2 text-xs shrink-0">Predecir</button></div></label>
         </div>
+        <div class="grid grid-cols-5 gap-3 items-end">
+          <label class="block"><span class="text-[10px] font-black text-[#7d6c5c] uppercase">Peso (g)</span>
+            <input id="ml-pkg-weight" type="number" min="1" step="1" class="ing-input mt-1" /></label>
+          <label class="block"><span class="text-[10px] font-black text-[#7d6c5c] uppercase">Alto (cm)</span>
+            <input id="ml-pkg-height" type="number" min="1" step="1" class="ing-input mt-1" /></label>
+          <label class="block"><span class="text-[10px] font-black text-[#7d6c5c] uppercase">Ancho (cm)</span>
+            <input id="ml-pkg-width" type="number" min="1" step="1" class="ing-input mt-1" /></label>
+          <label class="block"><span class="text-[10px] font-black text-[#7d6c5c] uppercase">Largo (cm)</span>
+            <input id="ml-pkg-length" type="number" min="1" step="1" class="ing-input mt-1" /></label>
+          <label class="block"><span class="text-[10px] font-black text-[#7d6c5c] uppercase">IVA</span>
+            <select id="ml-iva" class="ing-input mt-1"><option value="21">21%</option><option value="10.5">10,5%</option><option value="0">0%</option></select></label>
+        </div>
+        <div id="ml-missing" class="hidden space-y-2 pt-2 border-t border-[#e8d9a0]"></div>
       </div>
 
       <!-- Sección Tienda Nube: se muestra al tildar "Publicar en Tienda Nube" -->
@@ -1139,6 +1152,16 @@ async function openProductForm(p, container) {
           else toast('Sin sugerencia; cargá la categoría a mano', 'warn');
         } catch (e) { toast(e?.message || 'No se pudo predecir', 'error'); }
       });
+
+      // Prefill del paquete con lo último usado (se recuerda para que publicar sea un-click).
+      const MLPKG_KEY = 'ml_pkg_default';
+      const pkgDefaults = (() => {
+        try { return { ...{ weight: 500, height: 15, width: 20, length: 20, iva: '21' }, ...(JSON.parse(localStorage.getItem(MLPKG_KEY) || '{}')) }; }
+        catch { return { weight: 500, height: 15, width: 20, length: 20, iva: '21' }; }
+      })();
+      const setIf = (sel, v) => { const n = el.querySelector(sel); if (n && v != null) n.value = v; };
+      setIf('#ml-pkg-weight', pkgDefaults.weight); setIf('#ml-pkg-height', pkgDefaults.height);
+      setIf('#ml-pkg-width', pkgDefaults.width); setIf('#ml-pkg-length', pkgDefaults.length); setIf('#ml-iva', pkgDefaults.iva);
 
       // Carga lazy de categorías de Tienda Nube (sólo si la sección está visible o se va a mostrar).
       let tnCategoriesLoaded = false;
@@ -1391,22 +1414,72 @@ async function openProductForm(p, container) {
       // Publica el producto en Mercado Libre si "Publicar en MELI" está tildado. NO es fatal:
       // el producto ya quedó guardado; si ML rechaza (categoría/atributos), se avisa y listo.
       // Idempotente del lado del backend: si ya estaba publicado, no crea otra publicación.
+      // Arma los atributos que aporta el form: dimensiones del paquete (ML las exige para el envío) + IVA.
+      // El resto (foto de TN, marca, nombre de catálogo, family_name) lo completa el backend solo.
+      const collectMlAttributes = () => {
+        const n = (sel) => Math.max(1, Math.round(Number(el.querySelector(sel)?.value) || 0));
+        const weight = n('#ml-pkg-weight'), height = n('#ml-pkg-height'), width = n('#ml-pkg-width'), length = n('#ml-pkg-length');
+        const iva = (el.querySelector('#ml-iva')?.value || '21');
+        // Recordar para la próxima (un-click real).
+        try { localStorage.setItem('ml_pkg_default', JSON.stringify({ weight, height, width, length, iva })); } catch {}
+        return [
+          { id: 'SELLER_PACKAGE_WEIGHT', value_name: weight + ' g' },
+          { id: 'SELLER_PACKAGE_HEIGHT', value_name: height + ' cm' },
+          { id: 'SELLER_PACKAGE_WIDTH', value_name: width + ' cm' },
+          { id: 'SELLER_PACKAGE_LENGTH', value_name: length + ' cm' },
+          { id: 'VALUE_ADDED_TAX', value_name: iva + '%' },
+        ];
+      };
+
+      // Pide al usuario los atributos que ML marcó obligatorios y no pudimos resolver, y reintenta.
+      const renderMissing = (missing, retry) => {
+        const box = el.querySelector('#ml-missing');
+        if (!box) return;
+        box.classList.remove('hidden');
+        box.innerHTML = `<p class="text-xs font-bold text-[#b88700]">Mercado Libre pide completar estos datos:</p>` +
+          missing.map((m, i) => {
+            const opts = (m.values || []);
+            const field = opts.length
+              ? `<select data-mlattr="${m.id}" class="ing-input mt-1">${['<option value=""></option>'].concat(opts.map(v => `<option value="${escapeAttr(v.name)}">${escapeAttr(v.name)}</option>`)).join('')}</select>`
+              : `<input data-mlattr="${m.id}" class="ing-input mt-1" />`;
+            return `<label class="block"><span class="text-[10px] font-black text-[#7d6c5c] uppercase">${escapeAttr(m.name || m.id)}</span>${field}</label>`;
+          }).join('') +
+          `<button type="button" id="ml-retry" class="ing-btn !py-1.5 text-sm mt-1">Completar y publicar</button>`;
+        box.querySelector('#ml-retry')?.addEventListener('click', () => {
+          const extra = [...box.querySelectorAll('[data-mlattr]')]
+            .map((n) => ({ id: n.getAttribute('data-mlattr'), value_name: (n.value || '').trim() }))
+            .filter((a) => a.value_name);
+          retry(extra);
+        });
+      };
+
       const maybePublishMl = async (saved, d) => {
         if (!d.published_meli || !saved?.id) return;
         const listingTypeId = el.querySelector('#ml-listing')?.value || 'gold_special';
         const condition = el.querySelector('#ml-condition')?.value || 'new';
         const categoryId = (el.querySelector('#ml-category')?.value || '').trim() || undefined;
-        try {
-          const { api } = await import('../core/api.js');
-          const res = await api('/api/integrations/ml/publish', { method: 'POST', body: { productId: saved.id, listingTypeId, condition, categoryId } });
-          if (res?.alreadyLinked) toast('Ya estaba publicado en Mercado Libre', 'info');
-          else toast('Publicado en Mercado Libre ✓', 'success');
-        } catch (err) {
-          const body = err?.body || {};
-          const det = body.details ? (typeof body.details === 'string' ? body.details : JSON.stringify(body.details)) : '';
-          toast('Producto guardado, pero Mercado Libre lo rechazó: ' + (body.message || body.error || err?.message || 'error'), 'error');
-          if (det) console.warn('[ML publish] detalle:', det);
-        }
+        const { api } = await import('../core/api.js');
+        const doPublish = async (extraAttrs = []) => {
+          const attributes = [...collectMlAttributes(), ...extraAttrs];
+          try {
+            const res = await api('/api/integrations/ml/publish', { method: 'POST', body: { productId: saved.id, listingTypeId, condition, categoryId, attributes } });
+            if (res?.alreadyLinked) toast('Ya estaba publicado en Mercado Libre', 'info');
+            else toast('Publicado en Mercado Libre ✓', 'success');
+            el.querySelector('#ml-missing')?.classList.add('hidden');
+          } catch (err) {
+            const body = err?.body || {};
+            if (body.error === 'missing_attributes' && Array.isArray(body.missing) && body.missing.length) {
+              toast('Mercado Libre pide algunos datos más (completalos abajo)', 'warn');
+              renderMissing(body.missing, (filled) => doPublish([...extraAttrs, ...filled]));
+              return;
+            }
+            if (body.error === 'no_picture') { toast('ML: ' + body.message, 'error'); return; }
+            const det = body.details ? (typeof body.details === 'string' ? body.details : JSON.stringify(body.details)) : '';
+            toast('Producto guardado, pero Mercado Libre lo rechazó: ' + (body.message || body.error || err?.message || 'error'), 'error');
+            if (det) console.warn('[ML publish] detalle:', det);
+          }
+        };
+        await doPublish();
       };
 
       const persistOne = async ({ d, qtyLomas, qtyBanf, variants }) => {
