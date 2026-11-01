@@ -221,14 +221,10 @@ export async function publishProduct(input: {
   if (varyMode && variations.length) {
     const r = await createWithLtFallback(variationPayload);
     if (r.created) { created = r.created; usedVariations = true; }
-    else {
-      // Si la categoría es de catálogo, ML rechaza variaciones del vendedor → caemos a item simple.
-      const causes: any[] = r.error?.response?.data?.cause ?? [];
-      const variationsUnsupported = causes.some((c) =>
-        (c?.code === 'body.invalid_fields' && /variation/i.test(c?.message || '')) ||
-        /family_name/i.test(c?.message || ''));
-      if (!variationsUnsupported) return { error: 'ml_rejected', details: r.error?.response?.data ?? r.error?.message };
-    }
+    // Si falla (típico: categoría de catálogo que no admite variaciones del vendedor) caemos a
+    // item simple — preferimos dejar una publicación válida antes que un error. El detalle del
+    // rechazo de variaciones queda en el log para diagnóstico.
+    else console.warn('[ml] variaciones rechazadas, fallback a item simple:', JSON.stringify(r.error?.response?.data ?? r.error?.message));
   }
   if (!created) {
     const r = await createWithLtFallback(simplePayload);
