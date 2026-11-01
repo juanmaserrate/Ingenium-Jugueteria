@@ -8,6 +8,7 @@ import { adjustStock, releaseReserved } from './stock.js';
 import { enqueueSync } from '../sync/queue.js';
 import { redeemSena } from './senas.js';
 import { redeemCreditNote } from './returns.js';
+import { buildCostMetaForPromo } from './paymentCost.js';
 
 export type SalePaymentInput = {
   methodId: string;
@@ -21,6 +22,8 @@ export type SalePaymentInput = {
   // Si el pago es con un VALE (nota de crédito), su id. No mueve la caja; se canjea
   // (marca usado) al confirmar la venta.
   creditNoteId?: string | null;
+  // Snapshot de costos del pago. Si no viene (POS), se calcula desde la promo (methodId).
+  costMeta?: any;
 };
 
 // Fallback cuando el front no manda affectsCash: tratamos efectivo por id conocido.
@@ -121,6 +124,17 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
     throw new ValidationError(`Total de pagos ${paymentsTotal} no coincide con total ${total}`);
   }
 
+  const saleDatetime = input.datetime ?? new Date();
+  // Costo de cada pago (fuera de la transacción: lee config). Si el front lo manda (TN),
+  // se respeta; si no (POS), se calcula desde la promo. Señas/vales no tienen costo.
+  const paymentCosts = await Promise.all(
+    input.payments.map(async (p) => {
+      if (p.costMeta) return p.costMeta;
+      if (p.senaId || p.creditNoteId) return null;
+      try { return await buildCostMetaForPromo(p.methodId, p.amount, saleDatetime); } catch { return null; }
+    }),
+  );
+
   // Atomic: validate stock, decrement, create sale, create cash movement
   let sale: string;
   try {
@@ -146,7 +160,7 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
 
     const number = await nextCounter(`sale_${input.branchId}_${new Date().getFullYear()}`, tx);
     const saleId = input.id ?? randomId();
-    const datetime = input.datetime ?? new Date();
+    const datetime = saleDatetime;
 
     await tx.sale.create({
       data: {
@@ -199,7 +213,8 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
       });
     }
 
-    for (const p of input.payments) {
+    for (let pi = 0; pi < input.payments.length; pi++) {
+      const p = input.payments[pi];
       await tx.salePayment.create({
         data: {
           id: randomId(),
@@ -207,6 +222,7 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
           methodId: p.methodId,
           methodName: p.methodName,
           amount: p.amount,
+          costMeta: paymentCosts[pi] ?? undefined,
         },
       });
       // Pago con seña → marcarla como usada, validando cliente y monto.

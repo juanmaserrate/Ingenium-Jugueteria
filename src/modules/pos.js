@@ -108,7 +108,7 @@ async function refreshData() {
   }
   const [employees, methods, categories, brands] = await Promise.all([
     Employees.list().catch(() => []),
-    Settings.getConfig('payment_methods', []),
+    Settings.getActivePromos().catch(() => Settings.getConfig('payment_methods', [])),
     Categories.list().catch(() => []),
     Brands.list().catch(() => []),
   ]);

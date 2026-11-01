@@ -559,6 +559,13 @@ export async function integrationsRoutes(app: FastifyInstance) {
       });
       if (claim.count !== 1) throw new ValidationError('La orden ya fue asignada o está en proceso');
 
+      // Costo de la venta online (comisión del gateway + plataforma TN), desde la orden.
+      let tnCostMeta: any = null;
+      try {
+        const { buildCostMetaForTn } = await import('../services/paymentCost.js');
+        tnCostMeta = await buildCostMetaForTn(pending.rawPayload as any, saleAmount, new Date());
+      } catch { tnCostMeta = null; }
+
       let sale;
       try {
         sale = await confirmSale(
@@ -567,7 +574,7 @@ export async function integrationsRoutes(app: FastifyInstance) {
             customerId,
             items: saleItems,
             discountGlobalFixed,
-            payments: [{ methodId: 'tiendanube', methodName: 'Tienda Nube', amount: saleAmount }],
+            payments: [{ methodId: 'tiendanube', methodName: 'Tienda Nube', amount: saleAmount, costMeta: tnCostMeta }],
             source: 'tn',
             tnOrderId: pending.tnOrderId,
           },

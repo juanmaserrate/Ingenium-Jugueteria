@@ -25,6 +25,7 @@ const REPORTS = [
   { id: 'by-category', name: 'Ventas por rubro', desc: 'Unidades e importe por rubro (categoría). Mensual o anual.', icon: 'category', filters: ['period', 'branch', 'source'] },
   { id: 'by-customer-sum', name: 'Ventas por cliente', desc: 'Resumen por cliente: ventas, unidades e importe. Mensual o anual.', icon: 'groups', filters: ['period', 'branch', 'source'] },
   { id: 'by-payment', name: 'Ventas por medio de pago', desc: 'Una hoja por cada medio de pago. Mensual o anual.', icon: 'payments', filters: ['period', 'branch'] },
+  { id: 'profit', name: 'Ganancia (promos y costos)', desc: 'Ganancia por venta/promo/banco/canal, con comisiones, financiero y acreditaciones. Mensual o anual.', icon: 'savings', filters: ['period', 'branch', 'source'] },
   { id: 'stock-snapshot', name: 'Stock inicial vs final', desc: 'Stock al inicio y al cierre del período, por producto. Mensual o anual.', icon: 'inventory', filters: ['period', 'branch'] },
   { id: 'returns', name: 'Devoluciones', desc: 'Devoluciones y vales emitidos', icon: 'assignment_return', filters: ['date', 'branch'] },
   { id: 'cash', name: 'Caja', desc: 'Movimientos de efectivo de la sucursal', icon: 'account_balance_wallet', filters: ['date', 'branch'] },
@@ -63,7 +64,7 @@ export async function mount(el) {
 const REP_FNS = {
   'by-customer': repByCustomer,
   'by-seller': repBySeller, 'by-supplier': repBySupplier, 'by-category': repByCategory,
-  'by-customer-sum': repByCustomerSum, 'by-payment': repByPayment, 'stock-snapshot': repStockSnapshot,
+  'by-customer-sum': repByCustomerSum, 'by-payment': repByPayment, 'stock-snapshot': repStockSnapshot, profit: repProfit,
   sales: repSales, returns: repReturns, cash: repCash, expenses: repExpenses,
   pnl: repPnl, inventory: repInventory, transfers: repTransfers, 'stock-by-cat': repStockByCat,
   checks: repChecks, employees: repEmployees, audit: repAudit, customers: repCustomers, comparison: repComparison,
@@ -249,6 +250,51 @@ async function repByPayment(f = {}) {
   const sheets = [{ name: 'Resumen', rows: [...resumen.values()].sort((a, b) => b.Total - a.Total) }];
   for (const [k, rows] of perMethod) sheets.push({ name: sheetSafe(k), rows });
   return saveXLSX('ventas_por_medio_pago.xlsx', sheets);
+}
+
+async function repProfit(f = {}) {
+  const { sales, brMap } = await salesContext(f);
+  const perSale = [];
+  const byMedio = new Map(), byBank = new Map(), byCanal = new Map(), byAcred = new Map();
+  const g = (map, key, seed) => { if (!map.has(key)) map.set(key, seed()); return map.get(key); };
+  const pctAmt = (p, k) => (p.costMeta && p.costMeta[k]) ? (p.amount || 0) * p.costMeta[k] / 100 : 0;
+  for (const s of sales) {
+    const ingreso = s.total || 0;
+    const costoMerc = round2((s.items || []).reduce((n, it) => n + (it.costSnapshot || 0) * (it.qty || 0), 0));
+    const pays = s.payments || [];
+    const costoPagos = round2(pays.reduce((n, p) => n + (p.costMeta?.costAmount || 0), 0));
+    const ganancia = round2(ingreso - costoMerc - costoPagos);
+    const canal = s.source === 'tn' ? 'Tienda Nube' : 'POS';
+    const cm0 = pays.find((p) => p.costMeta)?.costMeta || null;
+    perSale.push({
+      Numero: s.number, Fecha: fmtDateTime(s.datetime), Sucursal: brMap[s.branchId] || s.branchId, Canal: canal,
+      Banco: cm0?.bank || '', Medio: pays.map((p) => p.methodName).join(' + '), Cuotas: cm0?.installments || 1,
+      Ingreso: ingreso, CostoMercaderia: costoMerc,
+      Comision: round2(pays.reduce((n, p) => n + pctAmt(p, 'commissionPct'), 0)),
+      Financiero: round2(pays.reduce((n, p) => n + pctAmt(p, 'financingPct'), 0)),
+      Plataforma: round2(pays.reduce((n, p) => n + pctAmt(p, 'platformPct'), 0)),
+      CostoPagos: costoPagos, Ganancia: ganancia, MargenPct: ingreso ? round2((ganancia / ingreso) * 100) : 0,
+    });
+    for (const p of pays) {
+      const cm = p.costMeta || {};
+      const merchShare = round2(costoMerc * (ingreso ? (p.amount || 0) / ingreso : 0));
+      const cost = round2(cm.costAmount || 0);
+      const gan = round2((p.amount || 0) - merchShare - cost);
+      const acc = (map, key, label, field) => { const e = g(map, key, () => ({ [field]: label, Pagos: 0, Ingreso: 0, Costo: 0, Ganancia: 0 })); e.Pagos++; e.Ingreso = round2(e.Ingreso + (p.amount || 0)); e.Costo = round2(e.Costo + cost); e.Ganancia = round2(e.Ganancia + gan); };
+      acc(byMedio, p.methodName || '—', p.methodName || '—', 'Medio');
+      acc(byBank, cm.bank || '(sin banco)', cm.bank || '(sin banco)', 'Banco');
+      acc(byCanal, canal, canal, 'Canal');
+      if (cm.creditDate) { const d = String(cm.creditDate).slice(0, 10); const e = g(byAcred, d, () => ({ Fecha: d, Pagos: 0, Neto: 0 })); e.Pagos++; e.Neto = round2(e.Neto + ((p.amount || 0) - cost)); }
+    }
+  }
+  const byGan = (arr) => arr.sort((a, b) => b.Ganancia - a.Ganancia);
+  return saveXLSX('ganancia.xlsx', [
+    { name: 'Por venta', rows: perSale },
+    { name: 'Por medio', rows: byGan([...byMedio.values()]) },
+    { name: 'Por banco', rows: byGan([...byBank.values()]) },
+    { name: 'Por canal', rows: byGan([...byCanal.values()]) },
+    { name: 'Acreditaciones', rows: [...byAcred.values()].sort((a, b) => String(a.Fecha).localeCompare(String(b.Fecha))) },
+  ]);
 }
 
 async function repStockSnapshot(f = {}) {

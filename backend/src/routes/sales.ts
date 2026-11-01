@@ -19,6 +19,7 @@ const paymentSchema = z.object({
   affectsCash: z.boolean().optional(),
   senaId: z.string().nullable().optional(),
   creditNoteId: z.string().nullable().optional(),
+  costMeta: z.any().optional(),
 });
 
 const saleSchema = z.object({
