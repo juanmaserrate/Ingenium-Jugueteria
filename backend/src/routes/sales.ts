@@ -34,7 +34,7 @@ const saleSchema = z.object({
   discountGlobalFixed: z.number().nullable().optional(),
   surchargeGlobalPct: z.number().nullable().optional(),
   surchargeGlobalFixed: z.number().nullable().optional(),
-  source: z.enum(['pos', 'tn']).optional(),
+  source: z.enum(['pos', 'tn', 'ml']).optional(),
   tnOrderId: z.string().nullable().optional(),
   offlineId: z.string().nullable().optional(),
   datetime: z.coerce.date().optional(),

@@ -128,7 +128,7 @@ async function repSales(f = {}) {
   const header = (sales || []).map(s => ({
     Numero: s.number, Fecha: fmtDateTime(s.datetime), Sucursal: brMap[s.branchId] || s.branchId,
     Cliente: s.customer?.name || '', Vendedor: emMap[s.sellerId] || '',
-    Origen: s.source === 'tn' ? 'Tienda Nube' : 'POS',
+    Origen: s.source === 'tn' ? 'Tienda Nube' : s.source === 'ml' ? 'Mercado Libre' : 'POS',
     Items: s.items?.length || 0, Total: s.total,
     Pagos: (s.payments || []).map(p => `${p.methodName || p.methodId}: ${p.amount}`).join(' · '),
   }));
@@ -264,7 +264,7 @@ async function repProfit(f = {}) {
     const pays = s.payments || [];
     const costoPagos = round2(pays.reduce((n, p) => n + (p.costMeta?.costAmount || 0), 0));
     const ganancia = round2(ingreso - costoMerc - costoPagos);
-    const canal = s.source === 'tn' ? 'Tienda Nube' : 'POS';
+    const canal = s.source === 'tn' ? 'Tienda Nube' : s.source === 'ml' ? 'Mercado Libre' : 'POS';
     const cm0 = pays.find((p) => p.costMeta)?.costMeta || null;
     perSale.push({
       Numero: s.number, Fecha: fmtDateTime(s.datetime), Sucursal: brMap[s.branchId] || s.branchId, Canal: canal,
@@ -391,7 +391,7 @@ function pickFilters(fields = [], title = 'Filtros del reporte') {
     if (has('source')) parts.push(`
       <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Origen</span>
         <select id="rf-source" class="ing-input w-full mt-1">
-          <option value="">Todos</option><option value="pos">POS (local)</option><option value="tn">Tienda Nube</option>
+          <option value="">Todos</option><option value="pos">POS (local)</option><option value="tn">Tienda Nube</option><option value="ml">Mercado Libre</option>
         </select></label>`);
     if (has('customer')) parts.push(`
       <label class="block col-span-2"><span class="text-xs font-bold text-[#7d6c5c]">Cliente (nombre o documento, opcional)</span>
@@ -496,7 +496,7 @@ async function repByCustomer(f = {}) {
     for (const s of vs) {
       compras.push({
         Cliente: nombre, Documento: doc, NumeroVenta: s.number, Fecha: fmtDateTime(s.datetime),
-        Sucursal: brMap[s.branchId] || s.branchId, Origen: s.source === 'tn' ? 'Tienda Nube' : 'POS',
+        Sucursal: brMap[s.branchId] || s.branchId, Origen: s.source === 'tn' ? 'Tienda Nube' : s.source === 'ml' ? 'Mercado Libre' : 'POS',
         Items: (s.items || []).length, Total: s.total,
         Pagos: (s.payments || []).map(p => `${p.methodName || p.methodId}: ${p.amount}`).join(' · '),
       });

@@ -7,6 +7,10 @@ import { toast } from '../core/notifications.js';
 export async function mount(el) {
   el.innerHTML = renderShell();
 
+  let branches = [];
+  try { branches = await api('/auth/branches'); } catch { branches = []; }
+  const branchOpts = (branches || []).map((b) => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');
+
   // Mensajes del callback de OAuth (?connected=1 / ?error=...)
   const hash = location.hash || '';
   if (hash.includes('connected=1')) toast('Mercado Libre conectado', 'success');
@@ -54,11 +58,55 @@ export async function mount(el) {
       el.querySelector('#btn-disconnect').classList.toggle('hidden', !s.connected);
       el.querySelector('#btn-test').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-link-box').classList.toggle('hidden', !s.connected);
-      if (s.connected) await loadMappings();
+      el.querySelector('#ml-orders-box').classList.toggle('hidden', !s.connected);
+      if (s.connected) { await loadOrders(); await loadMappings(); }
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) {
         el.querySelector('#status-badge').innerHTML = '<span class="px-2 py-0.5 rounded-full bg-red-100 text-red-800 text-xs font-bold">Backend offline</span>';
       } else { toast(err.message, 'error'); }
+    }
+  }
+
+  async function loadOrders() {
+    try {
+      const orders = await api('/api/ml-orders?status=pending');
+      const box = el.querySelector('#ml-orders-list');
+      if (!orders || !orders.length) { box.innerHTML = '<p class="text-sm text-[#7d6c5c]">No hay ventas de Mercado Libre pendientes de asignar.</p>'; return; }
+      box.innerHTML = orders.map((o) => {
+        const items = (o.items || []).map((i) => `${i.qty}× ${esc(i.title || i.mlItemId)}`).join(', ');
+        return `
+        <div class="border border-[#fff1e6] rounded-xl p-3 flex items-center justify-between gap-3 flex-wrap">
+          <div class="min-w-0">
+            <div class="font-bold text-sm">Orden #${esc(o.mlOrderId)} · ${esc(o.customerName)} · <span class="text-[#d82f1e]">$${o.total}</span></div>
+            <div class="text-xs text-[#7d6c5c] truncate">${esc(items)}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <select data-br="${esc(o.id)}" class="px-3 py-1.5 rounded-lg border border-[#fff1e6] text-sm">${branchOpts}</select>
+            <button data-assign="${esc(o.id)}" class="px-3 py-1.5 bg-[#d82f1e] text-white rounded-lg font-bold text-sm">Asignar</button>
+          </div>
+        </div>`;
+      }).join('');
+      box.querySelectorAll('[data-assign]').forEach((b) => b.addEventListener('click', () => assignOrder(b.dataset.assign)));
+    } catch (err) { console.error(err); }
+  }
+
+  async function assignOrder(id, allowNegative = false) {
+    const branchId = el.querySelector(`[data-br="${id}"]`)?.value;
+    if (!branchId) { toast('Elegí una sucursal', 'warn'); return; }
+    try {
+      const res = await api(`/api/ml-orders/${id}/assign`, { method: 'POST', body: { branchId, allowNegative } });
+      if (res && res.error === 'unmapped_items') {
+        toast('Hay ítems sin vincular a un producto. Vinculá sus publicaciones abajo y reintentá.', 'error');
+        return;
+      }
+      toast('Venta registrada y stock descontado', 'success');
+      loadOrders(); loadMappings();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && err.code === 'STOCK_INSUFFICIENT') {
+        if (confirm('No alcanza el stock. ¿Confirmar igual? (el stock puede quedar negativo)')) return assignOrder(id, true);
+        return;
+      }
+      toast(err.message, 'error');
     }
   }
 
@@ -136,6 +184,14 @@ function renderShell() {
         <div id="test-out" class="text-sm text-[#7d6c5c]"></div>
       </section>
 
+      <section id="ml-orders-box" class="hidden bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 space-y-4">
+        <div>
+          <h2 class="text-lg font-bold">Ventas de Mercado Libre pendientes</h2>
+          <p class="text-xs text-[#7d6c5c]">Asigná cada venta a una sucursal: se registra como venta (con su comisión real de Mercado Pago) y descuenta el stock.</p>
+        </div>
+        <div id="ml-orders-list" class="space-y-2"></div>
+      </section>
+
       <section id="ml-link-box" class="hidden bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 space-y-4">
         <div>
           <h2 class="text-lg font-bold">Publicaciones vinculadas (stock)</h2>
@@ -158,8 +214,8 @@ function renderShell() {
       <section class="bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 text-sm text-[#7d6c5c]">
         <h2 class="text-base font-bold text-[#241a0d] mb-2">Próximas fases</h2>
         <ul class="list-disc pl-5 space-y-1">
-          <li><b>Fase 1 ✓</b> — Stock: vinculás publicaciones y cada venta descuenta el stock en ML (arriba).</li>
-          <li><b>Fase 2</b> — Ventas: las órdenes de ML entran como venta con su costo real de Mercado Pago.</li>
+          <li><b>Fase 1 ✓</b> — Stock: vinculás publicaciones y cada venta descuenta el stock en ML.</li>
+          <li><b>Fase 2 ✓</b> — Ventas: las órdenes de ML entran como venta con su costo real de Mercado Pago (arriba).</li>
           <li><b>Fase 3</b> — Publicar/editar publicaciones desde el inventario.</li>
         </ul>
       </section>

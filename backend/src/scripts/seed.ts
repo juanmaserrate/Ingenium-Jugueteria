@@ -121,6 +121,40 @@ export async function runSeed() {
   } catch (err) {
     console.warn('[seed] no se pudo asegurar mapeos ML:', err);
   }
+  // Órdenes de Mercado Libre pendientes de asignar (espejo de tn_orders_pending).
+  try {
+    await prisma.$executeRawUnsafe(
+      `CREATE TABLE IF NOT EXISTS "ml_orders_pending" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "ml_order_id" TEXT NOT NULL,
+        "number" TEXT,
+        "customer_name" TEXT NOT NULL,
+        "customer_email" TEXT,
+        "customer_phone" TEXT,
+        "items" JSONB NOT NULL,
+        "total" DOUBLE PRECISION NOT NULL,
+        "currency" TEXT NOT NULL DEFAULT 'ARS',
+        "payment_status" TEXT NOT NULL,
+        "raw_payload" JSONB NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'pending',
+        "assigned_branch_id" TEXT,
+        "assigned_sale_id" TEXT,
+        "received_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "assigned_at" TIMESTAMP(3)
+      )`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "ml_orders_pending_ml_order_id_key" ON "ml_orders_pending" ("ml_order_id")`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "ml_orders_pending_status_idx" ON "ml_orders_pending" ("status")`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "ml_orders_pending_received_at_idx" ON "ml_orders_pending" ("received_at")`,
+    );
+  } catch (err) {
+    console.warn('[seed] no se pudo asegurar ml_orders_pending:', err);
+  }
   // Tabla de fotos mensuales de stock (db push no la crea de forma confiable acá;
   // la creamos idempotente al arrancar). Debe coincidir con el modelo StockSnapshot.
   try {

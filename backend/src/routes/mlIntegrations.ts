@@ -1,10 +1,29 @@
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { prisma } from '../db.js';
 import { env } from '../config.js';
 import { buildAuthorizeUrl, exchangeCodeForToken, saveMlIntegration, disconnect } from '../mercadolibre/oauth.js';
 import { requireRole } from '../auth/jwt.js';
 import { enqueueSync } from '../sync/queue.js';
 import { computeMlStockForVariant } from '../services/stock.js';
+import { confirmSale } from '../services/sales.js';
+import { buildCostMetaForMl } from '../services/paymentCost.js';
+import { maybeReconcileMl } from '../mercadolibre/webhooks.js';
+import { ValidationError } from '../utils/errors.js';
+
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+// Resuelve el variantId local a partir de un item de orden ML (item + variación opcional).
+async function resolveVariantId(mlItemId: string, mlVariationId: string | null): Promise<string | null> {
+  const maps = await prisma.variantMeliMapping.findMany({ where: { mlItemId } });
+  if (!maps.length) return null;
+  if (mlVariationId) {
+    return maps.find((m) => m.mlVariationId === String(mlVariationId))?.variantId
+      ?? maps.find((m) => !m.mlVariationId)?.variantId
+      ?? null;
+  }
+  return maps.find((m) => !m.mlVariationId)?.variantId ?? maps[0].variantId;
+}
 
 // Rutas de la integración con Mercado Libre. Todo queda DORMIDO mientras ML_CLIENT_ID esté
 // vacío (sin credenciales no se puede conectar). Espeja el patrón de Tienda Nube.
@@ -127,6 +146,81 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       if (!b.variantId) return reply.status(400).send({ error: 'Falta variantId' });
       await prisma.variantMeliMapping.deleteMany({ where: { variantId: b.variantId } });
       return { ok: true };
+    });
+
+    // --- Órdenes de ML pendientes de asignar a sucursal (Fase 2) ---
+    r.get('/ml-orders', async (req) => {
+      maybeReconcileMl(); // respaldo: trae las que se hayan perdido por un webhook
+      const status = (req.query as any).status ?? 'pending';
+      return prisma.mlOrderPending.findMany({ where: { status }, orderBy: { receivedAt: 'desc' }, take: 100 });
+    });
+
+    r.get('/ml-orders/pending-count', async () => {
+      const count = await prisma.mlOrderPending.count({ where: { status: 'pending' } });
+      return { count };
+    });
+
+    // Asigna una orden de ML a una sucursal = la confirma como venta (con el costo MP real).
+    // Espejo de /tn-orders/:id/assign.
+    r.post('/ml-orders/:id/assign', async (req) => {
+      const { id } = req.params as { id: string };
+      const body = z.object({ branchId: z.string(), allowNegative: z.boolean().optional() }).parse(req.body);
+      const pending = await prisma.mlOrderPending.findUnique({ where: { id } });
+      if (!pending) throw new ValidationError('Orden pendiente no encontrada');
+      if (pending.status !== 'pending') throw new ValidationError('La orden ya fue procesada');
+
+      // Mapear items ML → variantes locales
+      const items = pending.items as any[];
+      const saleItems: Array<{ variantId: string; qty: number; unitPrice: number }> = [];
+      const missing: any[] = [];
+      for (const it of items) {
+        const variantId = await resolveVariantId(String(it.mlItemId), it.mlVariationId != null ? String(it.mlVariationId) : null);
+        if (!variantId) { missing.push(it); continue; }
+        saleItems.push({ variantId, qty: Math.round(Number(it.qty)) || 0, unitPrice: Number(it.unitPrice) || 0 });
+      }
+      if (missing.length > 0) return { error: 'unmapped_items', missing };
+
+      // La venta toma el subtotal de PRODUCTOS (no el total de la orden, que puede incluir envío).
+      const saleAmount = round2(saleItems.reduce((s, it) => s + it.qty * it.unitPrice, 0));
+
+      // Cliente por email si vino (ML rara vez lo expone).
+      let customerId: string | null = null;
+      if (pending.customerEmail) {
+        const c = await prisma.customer.findFirst({ where: { email: pending.customerEmail } });
+        customerId = c?.id ?? null;
+      }
+
+      // Claim atómico pending→assigning: si dos asignaciones llegan a la vez, solo una gana.
+      const claim = await prisma.mlOrderPending.updateMany({ where: { id, status: 'pending' }, data: { status: 'assigning' } });
+      if (claim.count !== 1) throw new ValidationError('La orden ya fue asignada o está en proceso');
+
+      // Costo real de Mercado Pago (sale_fee de la orden), congelado en el pago.
+      let mlCostMeta: any = null;
+      try { mlCostMeta = await buildCostMetaForMl(pending.rawPayload as any, saleAmount, new Date()); } catch { mlCostMeta = null; }
+
+      let sale;
+      try {
+        sale = await confirmSale(
+          {
+            branchId: body.branchId,
+            customerId,
+            items: saleItems,
+            payments: [{ methodId: 'mercadolibre', methodName: 'Mercado Libre', amount: saleAmount, costMeta: mlCostMeta }],
+            source: 'ml',
+            offlineId: `ml_${pending.mlOrderId}`, // idempotencia: no duplica la venta
+          },
+          { userId: (req as any).user?.userId, allowNegative: body.allowNegative },
+        );
+      } catch (e) {
+        await prisma.mlOrderPending.updateMany({ where: { id, status: 'assigning' }, data: { status: 'pending' } });
+        throw e;
+      }
+
+      await prisma.mlOrderPending.update({
+        where: { id },
+        data: { status: 'assigned', assignedBranchId: body.branchId, assignedSaleId: sale.id, assignedAt: new Date() },
+      });
+      return { ok: true, saleId: sale.id };
     });
   });
 }

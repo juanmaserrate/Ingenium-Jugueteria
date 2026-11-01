@@ -80,6 +80,26 @@ export async function buildCostMetaForPromo(idOrPromoId: string, amount: number,
   };
 }
 
+// Mercado Libre: la comisión real (sale_fee) viene en la propia orden → NO se estima. Se
+// suma el sale_fee de cada item y se guarda como costAmount; costPct se deriva del monto.
+// Mantiene el shape de cost_meta que consume el reporte de ganancia (reports.js repProfit).
+export async function buildCostMetaForMl(order: any, amount: number, datetime: Date) {
+  const items = order?.order_items ?? [];
+  const saleFee = round2(items.reduce((s: number, oi: any) => s + (Number(oi?.sale_fee) || 0), 0));
+  const costPct = amount > 0 ? round2((saleFee / amount) * 100) : 0;
+  // Acreditación: ML suele liberar el dinero según su calendario (post-entrega). Sin un dato
+  // confiable en la orden, dejamos creditDate = fecha de la venta (se puede refinar luego).
+  return {
+    source: 'ml', promoId: null, promoName: 'Mercado Libre', bank: 'Mercado Pago',
+    methodId: 'mercadolibre', methodName: 'Mercado Libre',
+    acquirerId: null, acquirerName: 'Mercado Pago',
+    cardType: null, installments: 1,
+    commissionPct: costPct, financingPct: 0, platformPct: 0, costPct,
+    costAmount: saleFee, settlementDays: 0, creditDate: datetime.toISOString(),
+    discountFunder: 'banco', discountPct: 0,
+  };
+}
+
 // Tienda Nube: no pasa por el selector. Usa una forma de pago marcada como "online" (kind)
 // para la comisión + plataforma; la plataforma aplica salvo con Pago Nube. Si no hay ningún
 // medio online configurado, el costo queda en 0 hasta que se configure.

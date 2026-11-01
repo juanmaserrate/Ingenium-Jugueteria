@@ -17,6 +17,7 @@ import { customersRoutes } from './routes/customers.js';
 import { senasRoutes } from './routes/senas.js';
 import { integrationsRoutes } from './routes/integrations.js';
 import { mlIntegrationsRoutes } from './routes/mlIntegrations.js';
+import { mlWebhooksRoutes } from './routes/mlWebhooks.js';
 import { webhooksRoutes } from './routes/webhooks.js';
 import { syncRoutes } from './routes/sync.js';
 import { imagesRoutes } from './routes/images.js';
@@ -176,8 +177,9 @@ async function main() {
   await app.register(catalogRoutes, { prefix: '/api' });
   await app.register(metricsRoutes, { prefix: '/api' });
   await app.register(syncRoutes, { prefix: '/api' });
-  // Webhooks SIN prefix /api porque TN los consulta en URL p\u00fablica
+  // Webhooks SIN prefix /api porque TN/ML los consultan en URL p\u00fablica
   await app.register(webhooksRoutes);
+  await app.register(mlWebhooksRoutes);
 
   // Idempotent seed on startup: ensures branches + default admin exist
   try {

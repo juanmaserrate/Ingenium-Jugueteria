@@ -738,6 +738,30 @@ model VariantMeliMapping {
   @@map("variant_meli_mapping")
 }
 
+// Órdenes de Mercado Libre ya pagadas, esperando asignación de sucursal (espejo de TnOrderPending).
+model MlOrderPending {
+  id         String   @id @default(cuid())
+  mlOrderId  String   @unique @map("ml_order_id")
+  number     String?
+  customerName String  @map("customer_name")
+  customerEmail String? @map("customer_email")
+  customerPhone String? @map("customer_phone")
+  items      Json     // [{ mlItemId, mlVariationId, qty, unitPrice, title, saleFee }]
+  total      Float
+  currency   String   @default("ARS")
+  paymentStatus String @map("payment_status")
+  rawPayload Json     @map("raw_payload")
+  status     String   @default("pending") // pending | assigning | assigned | cancelled | error
+  assignedBranchId String? @map("assigned_branch_id")
+  assignedSaleId   String? @map("assigned_sale_id")
+  receivedAt DateTime @default(now()) @map("received_at")
+  assignedAt DateTime? @map("assigned_at")
+
+  @@index([status])
+  @@index([receivedAt])
+  @@map("ml_orders_pending")
+}
+
 // \u00d3rdenes de TN ya pagadas, esperando asignaci\u00f3n de sucursal
 model TnOrderPending {
   id         String   @id @default(cuid())

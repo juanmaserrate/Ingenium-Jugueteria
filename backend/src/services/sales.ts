@@ -56,7 +56,7 @@ export type SaleInput = {
   discountGlobalFixed?: number | null;
   surchargeGlobalPct?: number | null;
   surchargeGlobalFixed?: number | null;
-  source?: 'pos' | 'tn';
+  source?: 'pos' | 'tn' | 'ml';
   tnOrderId?: string | null;
   offlineId?: string | null;
   datetime?: Date;

@@ -233,6 +233,7 @@ function render(el) {
           <option value="" ${state.source === '' ? 'selected' : ''}>Todo origen</option>
           <option value="pos" ${state.source === 'pos' ? 'selected' : ''}>POS</option>
           <option value="tn" ${state.source === 'tn' ? 'selected' : ''}>Tienda Nube</option>
+          <option value="ml" ${state.source === 'ml' ? 'selected' : ''}>Mercado Libre</option>
         </select>
         <input id="v-q" placeholder="Buscar N°, cliente, vendedor o producto…" class="ing-filter flex-1 min-w-[160px]" value="${escapeHtml(state.q)}" />
       </div>
@@ -270,7 +271,9 @@ function rowHTML(e) {
     ? '<span class="text-[0.6rem] font-black uppercase bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full">Devolución</span>'
     : (e.source === 'tn'
         ? '<span class="text-[0.6rem] font-black uppercase bg-[#eaf3ff] text-[#2563eb] px-1.5 py-0.5 rounded-full">TN</span>'
-        : '<span class="text-[0.6rem] font-black uppercase bg-[#fff1e6] text-[#d82f1e] px-1.5 py-0.5 rounded-full">POS</span>');
+        : e.source === 'ml'
+          ? '<span class="text-[0.6rem] font-black uppercase bg-[#fff9e6] text-[#b88700] px-1.5 py-0.5 rounded-full">ML</span>'
+          : '<span class="text-[0.6rem] font-black uppercase bg-[#fff1e6] text-[#d82f1e] px-1.5 py-0.5 rounded-full">POS</span>');
   const combinado = (e.payments || []).length > 1
     ? '<span class="ml-1 text-[0.6rem] font-black uppercase bg-[#f3e8ff] text-[#7c3aed] px-1.5 py-0.5 rounded-full">Combinado</span>' : '';
 

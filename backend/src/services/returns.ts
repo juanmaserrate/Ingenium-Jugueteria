@@ -23,7 +23,7 @@ export type ReturnInput = {
   emitCreditNote?: boolean;
   reason?: string;
   userId?: string;
-  source?: 'pos' | 'tn_cancelled';
+  source?: 'pos' | 'tn_cancelled' | 'ml_cancelled';
   tnOrderId?: string | null;
 };
 
