@@ -106,9 +106,10 @@ async function refreshData() {
       throw e;
     }
   }
-  const [employees, methods, categories, brands] = await Promise.all([
+  const [employees, paymentMethods, promos, categories, brands] = await Promise.all([
     Employees.list().catch(() => []),
-    Settings.getActivePromos().catch(() => Settings.getConfig('payment_methods', [])),
+    Settings.getConfig('payment_methods', []).catch(() => []),
+    Settings.getActivePromos().catch(() => []),
     Categories.list().catch(() => []),
     Brands.list().catch(() => []),
   ]);
@@ -121,7 +122,11 @@ async function refreshData() {
     const bids = Array.isArray(e.branchIds) && e.branchIds.length ? e.branchIds : (e.branchId ? [e.branchId] : []);
     return bids.length === 0 || bids.includes(br);
   });
-  state.methods = methods || [];
+  // Formas de pago base (Efectivo, Débito, Crédito, ...) y promos activas del mes atadas a
+  // cada forma de pago (promo.method_id). En el cobro se elige el medio y, si tiene promos,
+  // la promo. La promo lleva la comisión/costo (vía adquirente), cuotas, descuento y tope.
+  state.paymentMethods = paymentMethods || [];
+  state.promos = promos || [];
   state.categories = categories;
   state.brands = brands;
 }
@@ -598,21 +603,22 @@ function renderSide(root, totals) {
   side.querySelector('#pos-confirm').addEventListener('click', () => openCobroModal(root));
 }
 
-// Descuento al cliente financiado por el COMERCIO (no por el banco) de la promo elegida.
-// Solo se auto-aplica si la venta se cobra con UN único medio que sea una promo con
-// discount_funder='comercio' y discount_pct>0 (el caso de caja: una tarjeta/plan por venta).
-// En pagos mixtos (o con vale/seña) NO se toca el total — queda solo informado para el
-// reporte — para no romper la conciliación de los montos. El tope recorta el descuento
-// únicamente cuando tope_mode='aplicado'; si es 'informativo', el % aplica sin tope.
-function storePromoDiscount(baseTotal, payments) {
-  const real = (payments || []).filter(p => p.method_id && p.method_id !== 'credit_note' && p.method_id !== 'sena');
-  const hasFixed = (payments || []).some(p => p.method_id === 'credit_note' || p.method_id === 'sena');
-  if (hasFixed || real.length !== 1) return { amount: 0, promo: null };
-  const m = state.methods.find(x => x.id === real[0].method_id);
-  if (!m || m.discount_funder !== 'comercio' || !(Number(m.discount_pct) > 0)) return { amount: 0, promo: null };
-  let disc = (Number(baseTotal) || 0) * Number(m.discount_pct) / 100;
-  if (m.tope_mode === 'aplicado' && Number(m.tope_amount) > 0) disc = Math.min(disc, Number(m.tope_amount));
-  return { amount: round2(Math.max(0, disc)), promo: m };
+// Promos activas (del mes) de una forma de pago, y lookup por id. Las carga refreshData.
+function promosForMethod(methodId) {
+  return (state.promos || []).filter(pr => pr.method_id === methodId);
+}
+function findPromoById(promoId) {
+  return (state.promos || []).find(pr => pr.id === promoId) || null;
+}
+// Descuento que el CLIENTE ve de su banco con una promo (capeado al tope si hay). Es SOLO
+// informativo: NUNCA cambia el total de la venta. El cliente lo recibe por su banco/tarjeta;
+// el comercio cobra el monto completo. Sirve para avisarle al cliente en caja.
+function promoCustomerDiscount(amount, promo) {
+  if (!promo || !(Number(promo.discount_pct) > 0)) return { disc: 0, capped: false };
+  const raw = (Number(amount) || 0) * Number(promo.discount_pct) / 100;
+  const tope = Number(promo.tope_amount) || 0;
+  const capped = tope > 0 && raw > tope;
+  return { disc: round2(capped ? tope : raw), capped };
 }
 
 // ===== Modal de cobro (se abre al "Confirmar venta") =====
@@ -627,10 +633,8 @@ async function openCobroModal(root) {
   if (!sale.payments.length) sale.payments = [{ method_id: '', amount: round2(totals.total) }];
 
   const bodyHTML = () => {
-    const disc = storePromoDiscount(totals.total, sale.payments);
-    const net = round2(totals.total - disc.amount);
     const paid = round2((sale.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0));
-    const pending = round2(net - paid);
+    const pending = round2(totals.total - paid);
     const exact = Math.abs(pending) <= 0.01;
     const allChosen = sale.payments.length > 0 && !sale.payments.some(p => !p.method_id);
     const canConfirm = allChosen && exact;
@@ -639,22 +643,16 @@ async function openCobroModal(root) {
       : pending < -0.01
         ? `<span class="text-orange-600 font-bold">Se pasó ${money(-pending)} — ajustá los montos</span>`
         : `<span class="text-green-700 font-bold">Monto exacto ✓</span>`;
-    const descLine = disc.amount > 0 ? `
-        <div class="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm">
-          <div class="flex justify-between text-[#7d6c5c]"><span>Subtotal</span><span>${money(totals.total)}</span></div>
-          <div class="flex justify-between text-emerald-700 font-bold"><span>Descuento ${escapeHtml(disc.promo?.name || 'promo')} (${disc.promo?.discount_pct}%${disc.promo?.tope_mode === 'aplicado' && Number(disc.promo?.tope_amount) > 0 ? `, tope ${money(disc.promo.tope_amount)}` : ''})</span><span>− ${money(disc.amount)}</span></div>
-        </div>` : '';
     return `
       <div class="space-y-4">
-        ${descLine}
         <div class="bg-[#fff8f4] rounded-xl p-3 flex justify-between items-center">
           <span class="font-black text-[#241a0d]">TOTAL A COBRAR</span>
-          <span class="font-black text-2xl text-[#d82f1e]">${money(net)}</span>
+          <span class="font-black text-2xl text-[#d82f1e]">${money(totals.total)}</span>
         </div>
         <div>
           <div class="text-xs font-bold text-[#7d6c5c] uppercase mb-1">Pago rápido (un solo medio)</div>
           <div class="flex flex-wrap gap-2">
-            ${state.methods.map(m => `<button type="button" data-quick="${m.id}" class="ing-btn-secondary text-sm !py-1.5 !px-3">${escapeHtml(m.name)}</button>`).join('')}
+            ${(state.paymentMethods || []).map(m => `<button type="button" data-quick="${m.id}" class="ing-btn-secondary text-sm !py-1.5 !px-3">${escapeHtml(m.name)}</button>`).join('')}
           </div>
         </div>
         <div>
@@ -683,25 +681,24 @@ async function openCobroModal(root) {
           // Preserva pagos fijos (vale/seña) y cubre el resto con el medio elegido.
           const fixed = sale.payments.filter(p => p.method_id === 'credit_note' || p.method_id === 'sena');
           const fixedPaid = round2(fixed.reduce((s, p) => s + (Number(p.amount) || 0), 0));
-          // Si el medio es una promo con descuento del comercio, el total baja (ver storePromoDiscount).
-          const next = [...fixed, { method_id: b.dataset.quick, amount: 0 }];
-          const net = round2(totals.total - storePromoDiscount(totals.total, next).amount);
-          const rest = round2(Math.max(0, net - fixedPaid));
-          sale.payments = [...fixed, ...(rest > 0 ? [{ method_id: b.dataset.quick, amount: rest }] : [])];
+          const rest = round2(Math.max(0, totals.total - fixedPaid));
+          sale.payments = [...fixed, ...(rest > 0 ? [{ method_id: b.dataset.quick, promo_id: null, amount: rest }] : [])];
           persistDraft(); redraw();
         }));
         el.querySelector('[data-add]')?.addEventListener('click', () => {
-          const net = round2(totals.total - storePromoDiscount(totals.total, sale.payments).amount);
           const paid = round2((sale.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0));
-          sale.payments.push({ method_id: '', amount: round2(Math.max(0, net - paid)) });
+          sale.payments.push({ method_id: '', promo_id: null, amount: round2(Math.max(0, totals.total - paid)) });
           persistDraft(); redraw();
         });
         el.querySelectorAll('[data-pay-method]').forEach(s => s.addEventListener('change', (ev) => {
           const i = Number(s.dataset.payMethod);
           sale.payments[i].method_id = ev.target.value;
-          // Si quedó un único medio y es promo del comercio, ajustamos el monto al neto con descuento.
-          const disc = storePromoDiscount(totals.total, sale.payments);
-          if (disc.amount > 0) sale.payments[i].amount = round2(totals.total - disc.amount);
+          sale.payments[i].promo_id = null; // las promos dependen de la forma de pago elegida
+          persistDraft(); redraw();
+        }));
+        el.querySelectorAll('[data-pay-promo]').forEach(s => s.addEventListener('change', (ev) => {
+          const i = Number(s.dataset.payPromo);
+          sale.payments[i].promo_id = ev.target.value || null;
           persistDraft(); redraw();
         }));
         el.querySelectorAll('[data-pay-amount]').forEach(inp => inp.addEventListener('change', (ev) => { sale.payments[Number(inp.dataset.payAmount)].amount = Math.max(0, Number(ev.target.value) || 0); persistDraft(); redraw(); }));
@@ -742,16 +739,32 @@ function payRow(p, i) {
       </button>
     </div>`;
   }
+  // Forma de pago base + (si tiene) promo asociada. La promo lleva descuento/tope/cuotas.
+  const promos = p.method_id ? promosForMethod(p.method_id) : [];
+  const promo = p.promo_id ? findPromoById(p.promo_id) : null;
+  const { disc, capped } = promoCustomerDiscount(p.amount, promo);
   return `
-    <div class="flex gap-2 items-center">
-      <select data-pay-method="${i}" class="ing-input flex-1">
-        <option value="" disabled ${!p.method_id ? 'selected' : ''}>— Forma de pago —</option>
-        ${state.methods.map(m => `<option value="${m.id}" ${p.method_id === m.id ? 'selected' : ''}>${m.name}${m.surcharge_pct ? ` (+${m.surcharge_pct}%)` : ''}</option>`).join('')}
-      </select>
-      <input data-pay-amount="${i}" type="number" step="0.01" min="0" value="${p.amount || 0}" class="ing-input w-28 text-right font-bold" />
-      <button data-pay-remove="${i}" class="w-8 h-8 rounded-md text-[#7d6c5c] hover:bg-red-50 hover:text-red-600 flex items-center justify-center">
-        <span class="material-symbols-outlined text-base">close</span>
-      </button>
+    <div class="space-y-1">
+      <div class="flex gap-2 items-center">
+        <select data-pay-method="${i}" class="ing-input flex-1">
+          <option value="" disabled ${!p.method_id ? 'selected' : ''}>— Forma de pago —</option>
+          ${(state.paymentMethods || []).map(m => `<option value="${m.id}" ${p.method_id === m.id ? 'selected' : ''}>${escapeHtml(m.name)}${m.surcharge_pct ? ` (+${m.surcharge_pct}%)` : ''}</option>`).join('')}
+        </select>
+        <input data-pay-amount="${i}" type="number" step="0.01" min="0" value="${p.amount || 0}" class="ing-input w-28 text-right font-bold" />
+        <button data-pay-remove="${i}" class="w-8 h-8 rounded-md text-[#7d6c5c] hover:bg-red-50 hover:text-red-600 flex items-center justify-center">
+          <span class="material-symbols-outlined text-base">close</span>
+        </button>
+      </div>
+      ${promos.length ? `
+      <select data-pay-promo="${i}" class="ing-input w-full text-sm !py-1.5">
+        <option value="" ${!p.promo_id ? 'selected' : ''}>Sin promo</option>
+        ${promos.map(pr => `<option value="${pr.id}" ${p.promo_id === pr.id ? 'selected' : ''}>${escapeHtml(pr.name)}${Number(pr.installments) > 1 ? ` · ${pr.installments} cuotas` : ''}${Number(pr.discount_pct) > 0 ? ` · ${pr.discount_pct}% desc` : ''}</option>`).join('')}
+      </select>` : ''}
+      ${disc > 0 ? `
+      <div class="text-xs bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-md px-2 py-1.5 flex items-start gap-1">
+        <span class="material-symbols-outlined text-sm leading-none mt-0.5">info</span>
+        <span>El cliente recibe <b>${money(disc)}</b> de descuento de su banco${capped ? ` (tope ${money(promo.tope_amount)})` : ''} → pagaría <b>${money(round2((Number(p.amount) || 0) - disc))}</b> en su resumen. No cambia lo que cobrás (${money(p.amount || 0)}).</span>
+      </div>` : ''}
     </div>
   `;
 }
@@ -824,10 +837,9 @@ async function _confirmSaleInner(root) {
   // Ya NO se asume efectivo: la forma de pago se elige en el modal de cobro.
   if (!sale.payments || !sale.payments.length) { toast('Agregá la forma de pago', 'warn'); return; }
   if (sale.payments.some(p => !p.method_id)) { toast('Elegí la forma de pago', 'warn'); return; }
-  // Neto = total menos el descuento del comercio de la promo elegida (ver storePromoDiscount).
-  const netTotal = round2(totals.total - storePromoDiscount(totals.total, sale.payments).amount);
-  if (Math.abs(paid - netTotal) > 0.01) {
-    toast(`Los pagos (${money(paid)}) no coinciden con el total (${money(netTotal)})`, 'error');
+  // El descuento de la promo NO cambia el total: el cliente lo recibe por su banco (solo leyenda).
+  if (Math.abs(paid - totals.total) > 0.01) {
+    toast(`Los pagos (${money(paid)}) no coinciden con el total (${money(totals.total)})`, 'error');
     return;
   }
 
@@ -874,10 +886,6 @@ async function _confirmSaleInner(root) {
   // para verlo/filtrarlo en Ventas y queda fijo aunque el empleado cambie después.
   const sellerEmp = sale.seller_id ? (state.employees || []).find(e => e.id === sale.seller_id) : null;
   const sellerName = sellerEmp ? `${sellerEmp.name || ''}${sellerEmp.lastname ? ' ' + sellerEmp.lastname : ''}`.trim() : null;
-  // Descuento del comercio por la promo elegida (ver storePromoDiscount): se pliega en el
-  // descuento fijo global para que el backend recalcule el total y los pagos (ya seteados al
-  // neto en el modal de cobro) cuadren. El costo de comisión lo calcula el backend sobre el neto.
-  const promoDiscFixed = storePromoDiscount(Sales.computeTotals(sale).total, sale.payments).amount;
   const buildBody = (negative) => ({
     branchId: br,
     sellerId: null, // ver nota arriba: el vendedor va como sellerName (snapshot)
@@ -901,17 +909,21 @@ async function _confirmSaleInner(root) {
       if (p.method_id === 'credit_note') {
         return { methodId: 'credit_note', methodName: `Vale ${p.code || ''}`.trim(), amount: Number(p.amount) || 0, affectsCash: false, creditNoteId: p.credit_note_id };
       }
-      const m = state.methods.find(x => x.id === p.method_id);
+      // Forma de pago base + promo opcional. El id que mandamos como methodId es el de la
+      // PROMO cuando hay (así el backend congela el cost_meta desde la promo vía
+      // buildCostMetaForPromo); si no hay promo, el id del medio base (sin costo asociado).
+      const base = (state.paymentMethods || []).find(x => x.id === p.method_id);
+      const promo = p.promo_id ? findPromoById(p.promo_id) : null;
       return {
-        methodId: p.method_id,
-        methodName: m?.name || p.method_id,
+        methodId: promo?.id || p.method_id,
+        methodName: promo?.name || base?.name || p.method_id,
         amount: Number(p.amount) || 0,
-        // El backend usa esto para saber si el pago entra a la caja (efectivo).
-        affectsCash: m ? !!m.affects_cash : (p.method_id === 'cash'),
+        // El backend usa esto para saber si el pago entra a la caja (efectivo). Lo define el medio base.
+        affectsCash: base ? !!base.affects_cash : (p.method_id === 'cash'),
       };
     }),
     discountGlobalPct: sale.discount_global_pct || null,
-    discountGlobalFixed: round2((sale.discount_global_fixed || 0) + promoDiscFixed) || null,
+    discountGlobalFixed: sale.discount_global_fixed || null,
     surchargeGlobalPct: sale.surcharge_global_pct || null,
     surchargeGlobalFixed: sale.surcharge_global_fixed || null,
     source: 'pos',

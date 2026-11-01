@@ -407,9 +407,11 @@ async function renderPromos(container) {
   if (!state.promoMonth) state.promoMonth = curMonthKey();
   const month = state.promoMonth;
   const acquirers = (await Settings.getConfig('acquirers', [])) || [];
+  const payMethods = (await Settings.getConfig('payment_methods', [])) || [];
   const promosAll = (await Settings.getConfig('promos', {})) || {};
   const promos = promosAll[month] || [];
   const acqName = (id) => (acquirers.find((a) => a.id === id)?.name) || '—';
+  const methodName = (id) => (payMethods.find((m) => m.id === id)?.name) || '—';
 
   container.innerHTML = `
     <div class="ing-card p-4 mb-5">
@@ -444,16 +446,18 @@ async function renderPromos(container) {
         </div>
       </div>
       <div class="overflow-x-auto"><table class="ing-table w-full text-sm">
-        <thead><tr><th>Nombre</th><th>Banco</th><th>Adquirente</th><th class="text-right">Cuotas</th><th class="text-right">Desc.</th><th>Paga</th><th>Tope</th><th>Activa</th><th></th></tr></thead>
+        <thead><tr><th>Nombre</th><th>Forma de pago</th><th>Banco</th><th>Adquirente</th><th class="text-right">Cuotas</th><th class="text-right">Desc.</th><th>Paga</th><th>Tope</th><th>Activa</th><th></th></tr></thead>
         <tbody>${promos.length ? promos.map((p, i) => `
           <tr>
-            <td class="font-bold">${esc(p.name)}</td><td>${esc(p.bank || '—')}</td><td>${esc(acqName(p.acquirer_id))}</td>
+            <td class="font-bold">${esc(p.name)}</td>
+            <td>${p.method_id ? esc(methodName(p.method_id)) : '<span class="text-amber-600 text-xs font-bold">sin asignar</span>'}</td>
+            <td>${esc(p.bank || '—')}</td><td>${esc(acqName(p.acquirer_id))}</td>
             <td class="text-right">${p.installments || 1}</td><td class="text-right">${p.discount_pct || 0}%</td>
             <td>${p.discount_funder === 'comercio' ? 'Comercio' : 'Banco'}</td>
             <td>${p.tope_amount ? `${money(p.tope_amount)} · ${p.tope_mode === 'aplicado' ? 'aplicado' : 'info'}` : '—'}</td>
             <td>${p.active !== false ? '<span class="text-green-700 text-xs font-bold">SÍ</span>' : '<span class="text-[#7d6c5c] text-xs">NO</span>'}</td>
             <td class="text-right whitespace-nowrap"><button data-pred="${i}" class="text-xs text-[#d82f1e] hover:underline">Editar</button> <button data-prdel="${i}" class="text-xs text-[#7d6c5c] hover:text-red-600 ml-1">Borrar</button></td>
-          </tr>`).join('') : '<tr><td colspan="9" class="text-center text-[#7d6c5c] py-4">Sin promos para este mes. Creá una o traé las del mes anterior.</td></tr>'}</tbody>
+          </tr>`).join('') : '<tr><td colspan="10" class="text-center text-[#7d6c5c] py-4">Sin promos para este mes. Creá una o traé las del mes anterior.</td></tr>'}</tbody>
       </table></div>
     </div>
   `;
@@ -476,8 +480,8 @@ async function renderPromos(container) {
     try { await Settings.setConfig('promos', promosAll); toast(`${prev.length} promo(s) traídas`, 'success'); } catch (e) { toast(e?.message || 'No se pudo', 'error'); }
     renderPromos(container);
   });
-  container.querySelector('#pr-new').addEventListener('click', () => editPromo(container, promosAll, month, acquirers, null));
-  container.querySelectorAll('[data-pred]').forEach((b) => b.addEventListener('click', () => editPromo(container, promosAll, month, acquirers, Number(b.dataset.pred))));
+  container.querySelector('#pr-new').addEventListener('click', () => editPromo(container, promosAll, month, acquirers, payMethods, null));
+  container.querySelectorAll('[data-pred]').forEach((b) => b.addEventListener('click', () => editPromo(container, promosAll, month, acquirers, payMethods, Number(b.dataset.pred))));
   container.querySelectorAll('[data-prdel]').forEach((b) => b.addEventListener('click', async () => {
     if (!(await confirmModal({ title: 'Borrar', message: '¿Eliminar promo?', danger: true, confirmLabel: 'Borrar' }))) return;
     promosAll[month].splice(Number(b.dataset.prdel), 1);
@@ -531,13 +535,14 @@ async function editAcquirer(container, acquirers, index) {
   renderPromos(container);
 }
 
-async function editPromo(container, promosAll, month, acquirers, index) {
+async function editPromo(container, promosAll, month, acquirers, payMethods, index) {
   const list = promosAll[month] || (promosAll[month] = []);
   const isNew = index === null;
   const p = isNew
-    ? { id: '', name: '', bank: '', card_type: 'credito', acquirer_id: '', installments: 1, discount_pct: 0, discount_funder: 'banco', tope_amount: 0, tope_mode: 'informativo', valid_days: [], valid_from: '', valid_to: '', affects_cash: false, icon: 'credit_card', active: true }
+    ? { id: '', name: '', method_id: '', bank: '', card_type: 'credito', acquirer_id: '', installments: 1, discount_pct: 0, discount_funder: 'banco', tope_amount: 0, tope_mode: 'informativo', valid_days: [], valid_from: '', valid_to: '', affects_cash: false, icon: 'credit_card', active: true }
     : { ...list[index] };
   const acqOpts = ['<option value="">(elegí adquirente)</option>'].concat(acquirers.map((a) => `<option value="${a.id}" ${p.acquirer_id === a.id ? 'selected' : ''}>${esc(a.name)}</option>`)).join('');
+  const methodOpts = ['<option value="">(elegí forma de pago)</option>'].concat((payMethods || []).map((m) => `<option value="${m.id}" ${p.method_id === m.id ? 'selected' : ''}>${esc(m.name)}</option>`)).join('');
   const dayChecks = DIAS.map((d, i) => `<label class="flex items-center gap-1 text-xs"><input type="checkbox" class="pr-day" data-day="${i}" ${(p.valid_days || []).includes(i) ? 'checked' : ''} /> ${d}</label>`).join('');
   await openModal({
     title: isNew ? 'Nueva promo' : 'Editar promo',
@@ -545,6 +550,7 @@ async function editPromo(container, promosAll, month, acquirers, index) {
     bodyHTML: `
       <div class="grid grid-cols-2 gap-3">
         <div class="col-span-2"><label class="text-xs font-bold text-[#7d6c5c] uppercase">Nombre visible</label><input id="pr-name" value="${esc(p.name)}" class="ing-input w-full mt-1" placeholder="ej: Cuenta DNI miércoles 6 cuotas" /></div>
+        <div class="col-span-2"><label class="text-xs font-bold text-[#7d6c5c] uppercase">Forma de pago (a qué medio pertenece)</label><select id="pr-method" class="ing-input w-full mt-1">${methodOpts}</select><p class="text-[11px] text-[#7d6c5c] mt-1">En el POS, al elegir esta forma de pago aparece esta promo para seleccionar.</p></div>
         <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Banco</label><input id="pr-bank" value="${esc(p.bank)}" class="ing-input w-full mt-1" placeholder="ej: Provincia" /></div>
         <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Tarjeta / red</label><select id="pr-card" class="ing-input w-full mt-1">${['credito', 'debito', 'qr', 'otro'].map((t) => `<option value="${t}" ${p.card_type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
         <div><label class="text-xs font-bold text-[#7d6c5c] uppercase">Adquirente / gateway</label><select id="pr-acq" class="ing-input w-full mt-1">${acqOpts}</select></div>
@@ -568,6 +574,7 @@ async function editPromo(container, promosAll, month, acquirers, index) {
         if (!name) { toast('Nombre requerido', 'warn'); return; }
         const updated = {
           id: isNew ? newId('promo') : p.id, name,
+          method_id: el.querySelector('#pr-method').value || '',
           bank: el.querySelector('#pr-bank').value.trim(), card_type: el.querySelector('#pr-card').value,
           acquirer_id: el.querySelector('#pr-acq').value, installments: Math.max(1, Number(el.querySelector('#pr-inst').value) || 1),
           discount_pct: Number(el.querySelector('#pr-disc').value) || 0, discount_funder: el.querySelector('#pr-funder').value,
