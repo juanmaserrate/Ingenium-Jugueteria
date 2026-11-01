@@ -157,6 +157,36 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       catch (err: any) { return reply.status(502).send({ error: 'No se pudo predecir', details: err?.response?.data ?? err?.message }); }
     });
 
+    // Despublicar: cierra la publicación en ML y limpia el mapeo + el flag (deshace un publish).
+    r.post('/integrations/ml/unpublish', adminOnly, async (req) => {
+      const b = (req.body ?? {}) as { productId?: string; itemId?: string };
+      let productId = b.productId;
+      let itemId = b.itemId;
+      if (productId && !itemId) {
+        const pm = await prisma.productMeliMapping.findUnique({ where: { productId } });
+        itemId = pm?.mlItemId ?? undefined;
+      }
+      let closed = false, deleted = false;
+      if (itemId) {
+        try {
+          const { requireMlClient } = await import('../mercadolibre/client.js');
+          const ml = await requireMlClient();
+          await ml.updateItem(itemId, { status: 'closed' }); closed = true;
+          try { await ml.updateItem(itemId, { deleted: true }); deleted = true; } catch { /* cerrar alcanza */ }
+        } catch { /* seguimos con la limpieza local igual */ }
+      }
+      if (productId) {
+        const variants = await prisma.variant.findMany({ where: { productId }, select: { id: true } });
+        await prisma.variantMeliMapping.deleteMany({ where: { variantId: { in: variants.map((v) => v.id) } } });
+        await prisma.productMeliMapping.deleteMany({ where: { productId } });
+        await prisma.product.update({ where: { id: productId }, data: { publishedMeli: false } }).catch(() => {});
+      } else if (itemId) {
+        await prisma.variantMeliMapping.deleteMany({ where: { mlItemId: itemId } });
+        await prisma.productMeliMapping.deleteMany({ where: { mlItemId: itemId } });
+      }
+      return { ok: true, itemId: itemId ?? null, closed, deleted };
+    });
+
     r.post('/integrations/ml/publish', adminOnly, async (req, reply) => {
       const b = z.object({
         productId: z.string().optional(),
