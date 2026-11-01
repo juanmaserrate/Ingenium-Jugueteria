@@ -168,7 +168,7 @@ export async function publishProduct(input: {
     return { error: 'missing_attributes', missing, categoryId, familyName: input.familyName || title };
   }
 
-  const payload: any = {
+  const basePayload: any = {
     site_id: SITE,
     category_id: categoryId,
     currency_id: 'ARS',
@@ -176,16 +176,13 @@ export async function publishProduct(input: {
     condition: input.condition || 'new',
     pictures,
   };
-  // ML (2026): un item simple se lista por familia de catálogo (family_name, sin title).
-  // Pero `variations` es INCOMPATIBLE con family_name → ahí va como publicación propia (title).
-  if (varyMode) payload.title = title;
-  else payload.family_name = input.familyName || title;
-  if (attributes.length) payload.attributes = attributes;
+  if (attributes.length) basePayload.attributes = attributes;
 
-  // Stock/precio: por variación (si se puede variar) o plano (item simple).
+  // Dos formas de listar: con variaciones del vendedor (publicación propia, con `title`) o como
+  // item simple por familia de catálogo (`family_name`, sin title). Son INCOMPATIBLES entre sí.
   const variationBuild: Array<{ variantId: string; value: string }> = [];
+  const variations: any[] = [];
   if (varyMode) {
-    const variations: any[] = [];
     for (const v of allVariants) {
       const value = String((v.attributes as any)?.[varKey!] ?? '').trim();
       if (!value) continue;
@@ -197,26 +194,46 @@ export async function publishProduct(input: {
       });
       variationBuild.push({ variantId: v.id, value });
     }
-    payload.variations = variations;
-  } else {
-    payload.price = Number(price);
-    payload.available_quantity = Math.max(0, Math.round(quantity));
   }
+  const variationPayload = () => ({ ...basePayload, title, variations });
+  const simplePayload = () => ({
+    ...basePayload,
+    family_name: input.familyName || title,
+    price: Number(price),
+    available_quantity: Math.max(0, Math.round(quantity)),
+  });
 
-  // Crear. Si el tipo de publicación no está disponible en la categoría, reintentar con Clásica.
-  let created: any;
-  const tryCreate = (listingType: string) => ml.createItem({ ...payload, listing_type_id: listingType });
-  try {
-    created = await tryCreate(input.listingTypeId);
-  } catch (err: any) {
-    const causes: any[] = err?.response?.data?.cause ?? [];
-    const ltUnavailable = causes.some((c) => c?.code === 'item.listing_type_id.unavailable');
-    if (ltUnavailable && input.listingTypeId !== FALLBACK_LISTING) {
-      try { created = await tryCreate(FALLBACK_LISTING); }
-      catch (e2: any) { return { error: 'ml_rejected', details: e2?.response?.data ?? e2?.message }; }
-    } else {
-      return { error: 'ml_rejected', details: err?.response?.data ?? err?.message };
+  // Crear, reintentando con Clásica si el tipo de publicación no está disponible en la categoría.
+  const createWithLtFallback = async (build: (lt: string) => any): Promise<{ created?: any; error?: any }> => {
+    try { return { created: await ml.createItem({ ...build(input.listingTypeId), listing_type_id: input.listingTypeId }) }; }
+    catch (err: any) {
+      const causes: any[] = err?.response?.data?.cause ?? [];
+      if (causes.some((c) => c?.code === 'item.listing_type_id.unavailable') && input.listingTypeId !== FALLBACK_LISTING) {
+        try { return { created: await ml.createItem({ ...build(FALLBACK_LISTING), listing_type_id: FALLBACK_LISTING }) }; }
+        catch (e2: any) { return { error: e2 }; }
+      }
+      return { error: err };
     }
+  };
+
+  let created: any = null;
+  let usedVariations = false;
+  if (varyMode && variations.length) {
+    const r = await createWithLtFallback(variationPayload);
+    if (r.created) { created = r.created; usedVariations = true; }
+    else {
+      // Si la categoría es de catálogo, ML rechaza variaciones del vendedor → caemos a item simple.
+      const causes: any[] = r.error?.response?.data?.cause ?? [];
+      const variationsUnsupported = causes.some((c) =>
+        (c?.code === 'body.invalid_fields' && /variation/i.test(c?.message || '')) ||
+        /family_name/i.test(c?.message || ''));
+      if (!variationsUnsupported) return { error: 'ml_rejected', details: r.error?.response?.data ?? r.error?.message };
+    }
+  }
+  if (!created) {
+    const r = await createWithLtFallback(simplePayload);
+    if (r.created) { created = r.created; usedVariations = false; }
+    else return { error: 'ml_rejected', details: r.error?.response?.data ?? r.error?.message };
   }
 
   const itemId = String(created.id);
@@ -228,7 +245,7 @@ export async function publishProduct(input: {
 
   // Mapear + marcar publicado + empujar stock
   let mappedVariants: string[] = [];
-  if (varyMode && Array.isArray(created.variations) && created.variations.length) {
+  if (usedVariations && Array.isArray(created.variations) && created.variations.length) {
     // Emparejar cada variación creada con la variante local por el valor del atributo.
     for (const cv of created.variations) {
       const combo = (cv.attribute_combinations || []).find((c: any) => c.id === mlVarAttr) || (cv.attribute_combinations || [])[0];
@@ -260,6 +277,7 @@ export async function publishProduct(input: {
 
   return {
     ok: true, itemId, permalink: created.permalink ?? null, status: created.status ?? null,
-    variations: varyMode ? mappedVariants.length : 0,
+    variations: usedVariations ? mappedVariants.length : 0,
+    mode: usedVariations ? 'variations' : 'simple',
   };
 }
