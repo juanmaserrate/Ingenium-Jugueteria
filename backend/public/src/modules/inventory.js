@@ -920,6 +920,23 @@ async function openProductForm(p, container) {
         </label>
       </div>
 
+      <!-- Sección Mercado Libre: se muestra al tildar "Publicar en MercadoLibre" -->
+      <div id="ml-section" class="${p?.published_meli ? '' : 'hidden'} col-span-3 mt-2 p-4 rounded-2xl bg-[#fffbea] border border-[#e8d9a0] space-y-3">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="material-symbols-outlined text-[#b88700]">storefront</span>
+          <h4 class="font-black text-[#241a0d]">Datos para Mercado Libre</h4>
+        </div>
+        <p class="text-xs text-[#7d6c5c]">Se publica al guardar. La categoría se autopredice por el nombre; podés fijarla. Si ML pide atributos obligatorios, te avisamos para completarlos.</p>
+        <div class="grid grid-cols-3 gap-3">
+          <label class="block"><span class="text-xs font-black text-[#7d6c5c] uppercase">Tipo de publicación</span>
+            <select id="ml-listing" class="ing-input mt-1"><option value="free">Gratuita</option><option value="gold_special" selected>Clásica</option><option value="gold_pro">Premium</option></select></label>
+          <label class="block"><span class="text-xs font-black text-[#7d6c5c] uppercase">Condición</span>
+            <select id="ml-condition" class="ing-input mt-1"><option value="new">Nuevo</option><option value="used">Usado</option></select></label>
+          <label class="block"><span class="text-xs font-black text-[#7d6c5c] uppercase">Categoría (auto si vacío)</span>
+            <div class="flex gap-1 mt-1"><input id="ml-category" class="ing-input flex-1" placeholder="MLA…" /><button type="button" id="ml-predict" class="ing-btn-secondary !py-1.5 !px-2 text-xs shrink-0">Predecir</button></div></label>
+        </div>
+      </div>
+
       <!-- Sección Tienda Nube: se muestra al tildar "Publicar en Tienda Nube" -->
       <div id="tn-section" class="${p?.published_tn ? '' : 'hidden'} col-span-3 mt-2 p-4 rounded-2xl bg-[#fff8f0] border border-[#e3ceba] space-y-3">
         <div class="flex items-center gap-2 mb-1">
@@ -1107,6 +1124,21 @@ async function openProductForm(p, container) {
         tnSection.classList.toggle('hidden', !tnChk.checked);
       };
       tnChk?.addEventListener('change', refreshTnSection);
+
+      // Toggle de la sección ML según el checkbox "Publicar en MercadoLibre" + predecir categoría.
+      const mlSection = el.querySelector('#ml-section');
+      const mlChk = form.elements.published_meli;
+      mlChk?.addEventListener('change', () => { if (mlSection) mlSection.classList.toggle('hidden', !mlChk.checked); });
+      el.querySelector('#ml-predict')?.addEventListener('click', async () => {
+        const title = (form.elements.name.value || '').trim();
+        if (!title) { toast('Poné el nombre del producto primero', 'warn'); return; }
+        try {
+          const { api } = await import('../core/api.js');
+          const preds = await api('/api/integrations/ml/predict-category?title=' + encodeURIComponent(title));
+          if (preds && preds[0]) { el.querySelector('#ml-category').value = preds[0].categoryId; toast('Categoría sugerida: ' + preds[0].categoryName, 'success'); }
+          else toast('Sin sugerencia; cargá la categoría a mano', 'warn');
+        } catch (e) { toast(e?.message || 'No se pudo predecir', 'error'); }
+      });
 
       // Carga lazy de categorías de Tienda Nube (sólo si la sección está visible o se va a mostrar).
       let tnCategoriesLoaded = false;
@@ -1356,6 +1388,27 @@ async function openProductForm(p, container) {
         renderImageThumbs();
       };
 
+      // Publica el producto en Mercado Libre si "Publicar en MELI" está tildado. NO es fatal:
+      // el producto ya quedó guardado; si ML rechaza (categoría/atributos), se avisa y listo.
+      // Idempotente del lado del backend: si ya estaba publicado, no crea otra publicación.
+      const maybePublishMl = async (saved, d) => {
+        if (!d.published_meli || !saved?.id) return;
+        const listingTypeId = el.querySelector('#ml-listing')?.value || 'gold_special';
+        const condition = el.querySelector('#ml-condition')?.value || 'new';
+        const categoryId = (el.querySelector('#ml-category')?.value || '').trim() || undefined;
+        try {
+          const { api } = await import('../core/api.js');
+          const res = await api('/api/integrations/ml/publish', { method: 'POST', body: { productId: saved.id, listingTypeId, condition, categoryId } });
+          if (res?.alreadyLinked) toast('Ya estaba publicado en Mercado Libre', 'info');
+          else toast('Publicado en Mercado Libre ✓', 'success');
+        } catch (err) {
+          const body = err?.body || {};
+          const det = body.details ? (typeof body.details === 'string' ? body.details : JSON.stringify(body.details)) : '';
+          toast('Producto guardado, pero Mercado Libre lo rechazó: ' + (body.message || body.error || err?.message || 'error'), 'error');
+          if (det) console.warn('[ML publish] detalle:', det);
+        }
+      };
+
       const persistOne = async ({ d, qtyLomas, qtyBanf, variants }) => {
         if (!d.name?.trim()) { toast('Nombre requerido', 'error'); return null; }
         if (d.published_tn) {
@@ -1372,6 +1425,7 @@ async function openProductForm(p, container) {
               price_override: parseNumAR(v.price), stocks: { br_lomas: v.lomas, br_banfield: v.banf },
             })) });
             await drainImages(saved);
+            await maybePublishMl(saved, d);
             return saved;
           }
           // Edición: actualizar producto + diff de variantes (el backend sincroniza a TN solo).
@@ -1398,6 +1452,7 @@ async function openProductForm(p, container) {
             }
           }
           await drainImages(saved);
+          await maybePublishMl(saved, d);
           return saved;
         }
 
@@ -1406,6 +1461,7 @@ async function openProductForm(p, container) {
         await P.setStock(saved.id, 'br_lomas',    { qty: qtyLomas, reason: isEdit ? 'Ajuste desde inventario' : 'Stock inicial' });
         await P.setStock(saved.id, 'br_banfield', { qty: qtyBanf,  reason: isEdit ? 'Ajuste desde inventario' : 'Stock inicial' });
         await drainImages(saved);
+        await maybePublishMl(saved, d);
         return saved;
       };
 

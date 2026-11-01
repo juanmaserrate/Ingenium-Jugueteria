@@ -159,7 +159,8 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
 
     r.post('/integrations/ml/publish', adminOnly, async (req, reply) => {
       const b = z.object({
-        barcode: z.string(),
+        productId: z.string().optional(),
+        barcode: z.string().optional(),
         categoryId: z.string().optional(),
         listingTypeId: z.string(),
         price: z.number().optional(),
@@ -167,6 +168,7 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
         title: z.string().optional(),
         condition: z.string().optional(),
       }).parse(req.body);
+      if (!b.productId && !b.barcode) return reply.status(400).send({ error: 'Falta productId o barcode' });
       try {
         const res = await publishProduct(b);
         if ((res as any).error) return reply.status(422).send(res);

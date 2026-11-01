@@ -23,7 +23,8 @@ export async function predictCategory(title: string) {
 }
 
 export async function publishProduct(input: {
-  barcode: string;
+  productId?: string;
+  barcode?: string;
   categoryId?: string;
   listingTypeId: string;
   price?: number;
@@ -31,12 +32,26 @@ export async function publishProduct(input: {
   title?: string;
   condition?: string;
 }) {
-  const variant = await prisma.variant.findFirst({
-    where: { OR: [{ barcode: input.barcode }, { code: input.barcode }] },
-    include: { product: { include: { images: true, brand: true } } },
-  });
-  if (!variant) return { error: 'not_found', message: 'No se encontró un producto con ese código/barcode' };
+  // Resolver la variante a publicar: por productId (la variante default) o por barcode/code.
+  let variant;
+  if (input.productId) {
+    variant = await prisma.variant.findFirst({
+      where: { productId: input.productId },
+      orderBy: { isDefault: 'desc' },
+      include: { product: { include: { images: true, brand: true } } },
+    });
+  } else if (input.barcode) {
+    variant = await prisma.variant.findFirst({
+      where: { OR: [{ barcode: input.barcode }, { code: input.barcode }] },
+      include: { product: { include: { images: true, brand: true } } },
+    });
+  }
+  if (!variant) return { error: 'not_found', message: 'No se encontró el producto a publicar' };
   const product = variant.product;
+
+  // Idempotencia: si el producto YA está publicado/mapeado en ML, no creamos otra publicación.
+  const already = await prisma.productMeliMapping.findUnique({ where: { productId: product.id } });
+  if (already) return { ok: true, itemId: already.mlItemId, alreadyLinked: true };
 
   const title = (input.title || product.name).slice(0, 60); // ML limita el título a 60 chars
   const price = input.price ?? variant.priceOverride ?? product.price;
