@@ -84,7 +84,6 @@ export async function publishProduct(input: {
 
   const payload: any = {
     site_id: SITE,
-    title,
     category_id: categoryId,
     price: Number(price),
     currency_id: 'ARS',
@@ -93,7 +92,9 @@ export async function publishProduct(input: {
     listing_type_id: input.listingTypeId,
     condition: input.condition || 'new',
   };
+  // ML (2026): si se lista por familia de catálogo, el título lo define la familia → NO se manda `title`.
   if (input.familyName) payload.family_name = input.familyName;
+  else payload.title = title;
   if (pictures.length) payload.pictures = pictures;
   if (attributes.length) payload.attributes = attributes;
 
