@@ -35,17 +35,17 @@ type MlTokenResponse = {
   refresh_token: string;
 };
 
-// Canje del code por tokens (form-urlencoded, como pide ML).
+// Canje del code por tokens. Se manda como JSON (ML acepta JSON en /oauth/token y así se
+// evita el "invalid_request: parameters are required" que daba con form-urlencoded).
 export async function exchangeCodeForToken(code: string): Promise<MlTokenResponse> {
-  const body = new URLSearchParams({
+  const res = await axios.post(`${env.ML_API_BASE}/oauth/token`, {
     grant_type: 'authorization_code',
     client_id: env.ML_CLIENT_ID,
     client_secret: env.ML_CLIENT_SECRET,
     code,
     redirect_uri: getRedirectUri(),
-  });
-  const res = await axios.post(`${env.ML_API_BASE}/oauth/token`, body.toString(), {
-    headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+  }, {
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
   });
   return res.data as MlTokenResponse;
 }
@@ -53,14 +53,13 @@ export async function exchangeCodeForToken(code: string): Promise<MlTokenRespons
 // Refresh del access token usando el refresh token actual. Devuelve nuevos access +
 // refresh (el refresh viejo queda invalidado → hay que guardar el nuevo sí o sí).
 export async function refreshAccessToken(refreshToken: string): Promise<MlTokenResponse> {
-  const body = new URLSearchParams({
+  const res = await axios.post(`${env.ML_API_BASE}/oauth/token`, {
     grant_type: 'refresh_token',
     client_id: env.ML_CLIENT_ID,
     client_secret: env.ML_CLIENT_SECRET,
     refresh_token: refreshToken,
-  });
-  const res = await axios.post(`${env.ML_API_BASE}/oauth/token`, body.toString(), {
-    headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+  }, {
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
   });
   return res.data as MlTokenResponse;
 }
