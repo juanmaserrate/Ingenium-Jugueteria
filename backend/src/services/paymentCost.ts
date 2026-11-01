@@ -2,46 +2,52 @@ import { getSetting } from './settings.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
-type Acquirer = {
-  id: string; name: string; kind?: string;
-  debit_pct?: number; credit_pct?: number;
-  fin3?: number; fin6?: number; fin12?: number;
-  days_debit?: number; days_credit?: number; days_cuotas?: number;
-  fixed_monthly?: number; tn_platform_pct?: number; active?: boolean;
+// Forma de pago con su costo plegado (modelo "todo dentro del medio"). Se mantienen los
+// campos viejos (debit_pct/credit_pct/days_*) como compat por si quedó config del modelo
+// anterior basado en adquirentes.
+type Method = {
+  id: string; name: string; card_type?: string; kind?: string;
+  commission_pct?: number; fin3?: number; fin6?: number; fin12?: number;
+  settle_days?: number; settle_days_cuotas?: number; tn_platform_pct?: number;
+  debit_pct?: number; credit_pct?: number; days_debit?: number; days_credit?: number; days_cuotas?: number;
 };
 type Promo = {
-  id: string; name: string; bank?: string; card_type?: string; acquirer_id?: string;
-  installments?: number; discount_pct?: number; discount_funder?: string;
-  tope_amount?: number; tope_mode?: string;
+  id: string; name?: string; method_id?: string; installments?: number;
+  discount_pct?: number; tope_amount?: number;
 };
 
-async function configs(): Promise<{ acquirers: Acquirer[]; promosByMonth: Record<string, Promo[]> }> {
-  const acquirers = ((await getSetting('acquirers')) as Acquirer[]) || [];
-  const promosByMonth = ((await getSetting('promos')) as Record<string, Promo[]>) || {};
-  return { acquirers, promosByMonth };
+async function cfg(): Promise<{ methods: Method[]; promos: Promo[] }> {
+  const methods = ((await getSetting('payment_methods')) as Method[]) || [];
+  const raw = (await getSetting('promos')) as any;
+  // Promos: array plano (modelo nuevo). Tolera el shape viejo { "YYYY-MM": [...] }.
+  const promos: Promo[] = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === 'object' ? (Object.values(raw).flat() as Promo[]) : [];
+  return { methods, promos };
 }
 
-function findPromo(promosByMonth: Record<string, Promo[]>, promoId: string): Promo | null {
-  for (const list of Object.values(promosByMonth || {})) {
-    const hit = (list || []).find((p) => p.id === promoId);
-    if (hit) return hit;
-  }
-  return null;
+function methodCommission(m: Method): number {
+  if (typeof m.commission_pct === 'number') return m.commission_pct || 0;
+  // compat modelo viejo (adquirente): usa débito/crédito según el tipo del medio.
+  return (m.card_type || '').toLowerCase() === 'debito' ? (m.debit_pct || 0) : (m.credit_pct || 0);
 }
 
-// Costo de un pago según el adquirente y el plan (comisión + financiero cuotas + plataforma TN).
-function computeCost(opts: { acquirer: Acquirer | null; cardType?: string; installments?: number; amount: number; includePlatform?: boolean }) {
-  const a = opts.acquirer;
-  const inst = Math.max(1, opts.installments || 1);
-  const card = (opts.cardType || 'credito').toLowerCase();
-  if (!a) return { commissionPct: 0, financingPct: 0, platformPct: 0, costPct: 0, costAmount: 0, settlementDays: 0 };
-  const commissionPct = card === 'debito' ? (a.debit_pct || 0) : card === 'credito' ? (a.credit_pct || 0) : 0;
-  const financingPct = inst <= 1 ? 0 : inst <= 3 ? (a.fin3 || 0) : inst <= 6 ? (a.fin6 || 0) : (a.fin12 || 0);
-  const platformPct = opts.includePlatform ? (a.tn_platform_pct || 0) : 0;
+function settleDays(m: Method, installments: number): number {
+  if (installments > 1) return m.settle_days_cuotas ?? m.days_cuotas ?? m.settle_days ?? 2;
+  const ct = (m.card_type || '').toLowerCase();
+  if (ct === 'debito') return m.settle_days ?? m.days_debit ?? 2;
+  return m.settle_days ?? m.days_credit ?? 10;
+}
+
+function computeCost(method: Method | null, installments: number, amount: number, includePlatform: boolean) {
+  if (!method) return { commissionPct: 0, financingPct: 0, platformPct: 0, costPct: 0, costAmount: 0, settlementDays: 0 };
+  const inst = Math.max(1, installments || 1);
+  const commissionPct = methodCommission(method);
+  const financingPct = inst <= 1 ? 0 : inst <= 3 ? (method.fin3 || 0) : inst <= 6 ? (method.fin6 || 0) : (method.fin12 || 0);
+  const platformPct = includePlatform ? (method.tn_platform_pct || 0) : 0;
   const costPct = round2(commissionPct + financingPct + platformPct);
-  const costAmount = round2((opts.amount * costPct) / 100);
-  const settlementDays = card === 'debito' ? (a.days_debit ?? 2) : inst > 1 ? (a.days_cuotas ?? 2) : (a.days_credit ?? 10);
-  return { commissionPct, financingPct, platformPct, costPct, costAmount, settlementDays };
+  const costAmount = round2((amount * costPct) / 100);
+  return { commissionPct, financingPct, platformPct, costPct, costAmount, settlementDays: settleDays(method, inst) };
 }
 
 function addDays(d: Date, days: number): string {
@@ -50,43 +56,52 @@ function addDays(d: Date, days: number): string {
   return x.toISOString();
 }
 
-// POS: el pago referencia una promo por su id → sacamos banco/adquirente/cuotas y calculamos.
-// Devuelve null si el método no es una promo con adquirente (ej. Efectivo) → sin costo.
-export async function buildCostMetaForPromo(methodId: string, amount: number, datetime: Date) {
-  if (!methodId) return null;
-  const { acquirers, promosByMonth } = await configs();
-  const promo = findPromo(promosByMonth, methodId);
-  if (!promo) return null;
-  const acquirer = promo.acquirer_id ? acquirers.find((a) => a.id === promo.acquirer_id) || null : null;
-  const c = computeCost({ acquirer, cardType: promo.card_type, installments: promo.installments, amount, includePlatform: false });
+// POS: el pago referencia una PROMO por id, o directamente el id de la FORMA DE PAGO (sin
+// promo). El costo (comisión + financiero de cuotas) sale de la forma de pago; la promo
+// aporta las cuotas y el descuento (este último informativo, NO cambia el total de la venta).
+// Devuelve null si no hay promo y el medio no tiene costo (ej. Efectivo).
+export async function buildCostMetaForPromo(idOrPromoId: string, amount: number, datetime: Date) {
+  if (!idOrPromoId) return null;
+  const { methods, promos } = await cfg();
+  const promo = promos.find((p) => p.id === idOrPromoId) || null;
+  const methodId = promo ? promo.method_id : idOrPromoId;
+  const method = methods.find((m) => m.id === methodId) || null;
+  if (!method) return null;
+  const installments = Math.max(1, Number(promo?.installments) || 1);
+  const c = computeCost(method, installments, amount, false);
+  if (!promo && c.costPct === 0) return null; // medio plano sin costo → sin cost_meta
   return {
-    source: 'pos', promoId: promo.id, promoName: promo.name, bank: promo.bank || null,
-    acquirerId: acquirer?.id || null, acquirerName: acquirer?.name || null,
-    cardType: promo.card_type || null, installments: Math.max(1, promo.installments || 1),
+    source: 'pos', promoId: promo?.id || null, promoName: promo?.name || method.name,
+    bank: method.name, methodId: method.id, methodName: method.name,
+    acquirerId: null, acquirerName: method.name,
+    cardType: method.card_type || null, installments,
     ...c, creditDate: addDays(datetime, c.settlementDays),
-    discountFunder: promo.discount_funder || 'banco', discountPct: promo.discount_pct || 0,
+    discountFunder: 'banco', discountPct: Number(promo?.discount_pct) || 0,
   };
 }
 
-// Tienda Nube: no pasa por el selector. Sacamos gateway + cuotas de la orden y matcheamos
-// un adquirente por nombre; la comisión de plataforma TN aplica salvo con Pago Nube.
+// Tienda Nube: no pasa por el selector. Usa una forma de pago marcada como "online" (kind)
+// para la comisión + plataforma; la plataforma aplica salvo con Pago Nube. Si no hay ningún
+// medio online configurado, el costo queda en 0 hasta que se configure.
 export async function buildCostMetaForTn(order: any, amount: number, datetime: Date) {
-  const { acquirers } = await configs();
+  const { methods } = await cfg();
   const gateway = String(order?.gateway_name || order?.gateway || 'Tienda Nube');
   const installments = Math.max(1, Number(order?.payment_details?.installments) || 1);
   const method = String(order?.payment_details?.method || '').toLowerCase();
-  const cardType = method.includes('debit') ? 'debito' : 'credito';
   const gl = gateway.toLowerCase();
-  const acquirer =
-    acquirers.find((a) => a.kind === 'online' && a.name && gl.includes(a.name.toLowerCase())) ||
-    acquirers.find((a) => a.kind === 'online' && a.name && a.name.toLowerCase().includes(gl)) ||
-    acquirers.find((a) => a.kind === 'online') || null;
+  const online = methods.filter((m) => m.kind === 'online');
+  const m =
+    online.find((a) => a.name && gl.includes(a.name.toLowerCase())) ||
+    online.find((a) => a.name && a.name.toLowerCase().includes(gl)) ||
+    online[0] || null;
   const includePlatform = !/pago\s*nube/i.test(gateway);
-  const c = computeCost({ acquirer, cardType, installments, amount, includePlatform });
+  const c = computeCost(m, installments, amount, includePlatform);
   return {
     source: 'tn', promoId: null, promoName: 'Tienda Nube', bank: gateway,
-    acquirerId: acquirer?.id || null, acquirerName: acquirer?.name || null,
-    cardType, installments, ...c, creditDate: addDays(datetime, c.settlementDays),
+    methodId: m?.id || null, methodName: m?.name || 'Tienda Nube',
+    acquirerId: null, acquirerName: m?.name || gateway,
+    cardType: method.includes('debit') ? 'debito' : 'credito', installments,
+    ...c, creditDate: addDays(datetime, c.settlementDays),
     discountFunder: 'banco', discountPct: 0,
   };
 }

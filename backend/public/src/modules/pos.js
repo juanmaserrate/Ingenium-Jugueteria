@@ -122,10 +122,12 @@ async function refreshData() {
     const bids = Array.isArray(e.branchIds) && e.branchIds.length ? e.branchIds : (e.branchId ? [e.branchId] : []);
     return bids.length === 0 || bids.includes(br);
   });
-  // Formas de pago base (Efectivo, Débito, Crédito, ...) y promos activas del mes atadas a
-  // cada forma de pago (promo.method_id). En el cobro se elige el medio y, si tiene promos,
-  // la promo. La promo lleva la comisión/costo (vía adquirente), cuotas, descuento y tope.
-  state.paymentMethods = paymentMethods || [];
+  // Formas de pago base (Efectivo, Débito, Crédito, ...) y promos activas atadas a cada
+  // forma de pago (promo.method_id). En el cobro se elige el medio y, si tiene promos, la
+  // promo. La comisión/costo y las cuotas salen de la forma de pago; la promo aporta el
+  // descuento (informativo) y el tope. Los medios "online" (Tienda Nube) no se cobran en
+  // caja, así que no se muestran en el POS.
+  state.paymentMethods = (paymentMethods || []).filter(m => m.kind !== 'online');
   state.promos = promos || [];
   state.categories = categories;
   state.brands = brands;
