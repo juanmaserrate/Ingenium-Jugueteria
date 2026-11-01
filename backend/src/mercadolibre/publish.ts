@@ -176,8 +176,10 @@ export async function publishProduct(input: {
     condition: input.condition || 'new',
     pictures,
   };
-  // ML (2026): se lista por familia de catálogo → el título lo define la familia, NO se manda `title`.
-  payload.family_name = input.familyName || title;
+  // ML (2026): un item simple se lista por familia de catálogo (family_name, sin title).
+  // Pero `variations` es INCOMPATIBLE con family_name → ahí va como publicación propia (title).
+  if (varyMode) payload.title = title;
+  else payload.family_name = input.familyName || title;
   if (attributes.length) payload.attributes = attributes;
 
   // Stock/precio: por variación (si se puede variar) o plano (item simple).
