@@ -31,6 +31,9 @@ export async function publishProduct(input: {
   quantity?: number;
   title?: string;
   condition?: string;
+  familyName?: string;
+  pictures?: string[]; // URLs extra (p.ej. fotos de TN que no están locales)
+  attributes?: Array<{ id: string; value_name: string }>; // atributos obligatorios de la categoría
 }) {
   // Resolver la variante a publicar: por productId (la variante default) o por barcode/code.
   let variant;
@@ -65,13 +68,19 @@ export async function publishProduct(input: {
   }
   if (!categoryId) return { error: 'no_category', message: 'No se pudo determinar la categoría; elegila manualmente' };
 
-  const pictures = (product.images || [])
+  const localPics = (product.images || [])
     .slice().sort((a, b) => a.position - b.position)
-    .map((im) => ({ source: im.url }))
-    .filter((p) => p.source);
+    .map((im) => im.url)
+    .filter(Boolean);
+  const extraPics = input.pictures || [];
+  const pictures = [...localPics, ...extraPics].map((url) => ({ source: url }));
 
   const attributes: any[] = [];
   if (product.brand?.name) attributes.push({ id: 'BRAND', value_name: product.brand.name });
+  // Atributos obligatorios de la categoría provistos por quien llama (evita duplicar BRAND).
+  for (const a of input.attributes || []) {
+    if (!attributes.some((x) => x.id === a.id)) attributes.push(a);
+  }
 
   const payload: any = {
     site_id: SITE,
@@ -84,6 +93,7 @@ export async function publishProduct(input: {
     listing_type_id: input.listingTypeId,
     condition: input.condition || 'new',
   };
+  if (input.familyName) payload.family_name = input.familyName;
   if (pictures.length) payload.pictures = pictures;
   if (attributes.length) payload.attributes = attributes;
 

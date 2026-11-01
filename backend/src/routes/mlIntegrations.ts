@@ -197,6 +197,9 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
         quantity: z.number().optional(),
         title: z.string().optional(),
         condition: z.string().optional(),
+        familyName: z.string().optional(),
+        pictures: z.array(z.string()).optional(),
+        attributes: z.array(z.object({ id: z.string(), value_name: z.string() })).optional(),
       }).parse(req.body);
       if (!b.productId && !b.barcode) return reply.status(400).send({ error: 'Falta productId o barcode' });
       try {
