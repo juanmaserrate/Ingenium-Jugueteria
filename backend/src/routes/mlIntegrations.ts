@@ -157,34 +157,57 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       catch (err: any) { return reply.status(502).send({ error: 'No se pudo predecir', details: err?.response?.data ?? err?.message }); }
     });
 
-    // Despublicar: cierra la publicación en ML y limpia el mapeo + el flag (deshace un publish).
+    // Despublicar: cierra TODAS las publicaciones del producto en ML (fan-out = varios items) y
+    // limpia los mapeos + el flag. Deshace un publish, sea simple, con variaciones o fan-out.
     r.post('/integrations/ml/unpublish', adminOnly, async (req) => {
       const b = (req.body ?? {}) as { productId?: string; itemId?: string };
       let productId = b.productId;
-      let itemId = b.itemId;
-      if (productId && !itemId) {
+
+      // Resolver el producto desde el item si no vino el productId (para limpiar todo su fan-out).
+      if (!productId && b.itemId) {
+        const vm = await prisma.variantMeliMapping.findFirst({ where: { mlItemId: b.itemId }, include: { variant: true } });
+        productId = vm?.variant?.productId ?? undefined;
+      }
+
+      // Reunir todos los items a cerrar: el del body + el de ProductMeliMapping + los de cada variante.
+      const itemIds = new Set<string>();
+      if (b.itemId) itemIds.add(b.itemId);
+      if (productId) {
         const pm = await prisma.productMeliMapping.findUnique({ where: { productId } });
-        itemId = pm?.mlItemId ?? undefined;
+        if (pm?.mlItemId) itemIds.add(pm.mlItemId);
+        const variants = await prisma.variant.findMany({ where: { productId }, select: { id: true } });
+        const vmaps = await prisma.variantMeliMapping.findMany({ where: { variantId: { in: variants.map((v) => v.id) } } });
+        for (const m of vmaps) if (m.mlItemId) itemIds.add(m.mlItemId);
       }
-      let closed = false, deleted = false;
-      if (itemId) {
-        try {
-          const { requireMlClient } = await import('../mercadolibre/client.js');
-          const ml = await requireMlClient();
-          await ml.updateItem(itemId, { status: 'closed' }); closed = true;
-          try { await ml.updateItem(itemId, { deleted: true }); deleted = true; } catch { /* cerrar alcanza */ }
-        } catch { /* seguimos con la limpieza local igual */ }
+
+      const results: Array<{ itemId: string; closed: boolean; deleted: boolean }> = [];
+      if (itemIds.size) {
+        const { getMlClient } = await import('../mercadolibre/client.js');
+        const ml = await getMlClient();
+        for (const id of itemIds) {
+          let closed = false, deleted = false;
+          if (ml) {
+            try {
+              await ml.updateItem(id, { status: 'closed' }); closed = true;
+              try { await ml.updateItem(id, { deleted: true }); deleted = true; } catch { /* cerrar alcanza */ }
+            } catch { /* seguimos con la limpieza local igual */ }
+          }
+          results.push({ itemId: id, closed, deleted });
+        }
       }
+
       if (productId) {
         const variants = await prisma.variant.findMany({ where: { productId }, select: { id: true } });
         await prisma.variantMeliMapping.deleteMany({ where: { variantId: { in: variants.map((v) => v.id) } } });
         await prisma.productMeliMapping.deleteMany({ where: { productId } });
         await prisma.product.update({ where: { id: productId }, data: { publishedMeli: false } }).catch(() => {});
-      } else if (itemId) {
-        await prisma.variantMeliMapping.deleteMany({ where: { mlItemId: itemId } });
-        await prisma.productMeliMapping.deleteMany({ where: { mlItemId: itemId } });
+      } else {
+        for (const id of itemIds) {
+          await prisma.variantMeliMapping.deleteMany({ where: { mlItemId: id } });
+          await prisma.productMeliMapping.deleteMany({ where: { mlItemId: id } });
+        }
       }
-      return { ok: true, itemId: itemId ?? null, closed, deleted };
+      return { ok: true, items: results, closed: results.filter((r2) => r2.closed).length, total: results.length };
     });
 
     r.post('/integrations/ml/publish', adminOnly, async (req, reply) => {

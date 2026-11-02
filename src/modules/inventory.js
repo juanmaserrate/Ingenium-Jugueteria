@@ -1464,6 +1464,7 @@ async function openProductForm(p, container) {
           try {
             const res = await api('/api/integrations/ml/publish', { method: 'POST', body: { productId: saved.id, listingTypeId, condition, categoryId, attributes } });
             if (res?.alreadyLinked) toast('Ya estaba publicado en Mercado Libre', 'info');
+            else if (res?.mode === 'fanout') toast(`Publicado en Mercado Libre: ${res.count} variante${res.count === 1 ? '' : 's'} ✓`, 'success');
             else toast('Publicado en Mercado Libre ✓', 'success');
             el.querySelector('#ml-missing')?.classList.add('hidden');
           } catch (err) {
