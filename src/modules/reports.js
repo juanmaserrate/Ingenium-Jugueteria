@@ -95,12 +95,127 @@ async function runReport(id, btn) {
   }
 }
 
-// Exporta sólo si hay filas. Devuelve el total (para el aviso "Sin datos").
-function saveXLSX(filename, sheets) {
+// Exporta sólo si hay filas. Antes de generar el archivo ofrece FILTRAR POR COLUMNA
+// (opcional): el usuario acota las filas y recién ahí se baja el XLSX.
+// Devuelve el total exportado, 0 si no quedaron filas, o null si canceló.
+async function saveXLSX(filename, sheets) {
   const total = sheets.reduce((n, s) => n + (s.rows?.length || 0), 0);
   if (total === 0) return 0;
-  exportToXLSX({ filename, sheets });
-  return total;
+  const filters = await pickColumnFilters(sheets, filename);
+  if (filters === null) return null; // canceló
+  const filtered = applyColumnFilters(sheets, filters);
+  const ftotal = filtered.reduce((n, s) => n + (s.rows?.length || 0), 0);
+  if (ftotal === 0) return 0;
+  exportToXLSX({ filename, sheets: filtered });
+  return ftotal;
+}
+
+const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Infiere cómo filtrar una columna a partir de sus valores:
+//  - number: todos los valores no vacíos son números → rango desde/hasta
+//  - list:   pocos valores distintos (≤ 20) → casilleros para elegir
+//  - text:   el resto → "contiene"
+function colTypeOf(rows, col) {
+  let hasEmpty = false;
+  const vals = [];
+  for (const r of rows) {
+    const v = r[col];
+    if (v === '' || v == null) { hasEmpty = true; continue; }
+    vals.push(v);
+  }
+  if (!vals.length) return { kind: 'text', hasEmpty };
+  const allNum = vals.every((v) => typeof v === 'number' || (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v))));
+  if (allNum) return { kind: 'number', hasEmpty };
+  const distinct = [...new Set(vals.map((v) => String(v)))];
+  if (distinct.length <= 20) return { kind: 'list', values: distinct.sort((a, b) => a.localeCompare(b, 'es', { numeric: true })), hasEmpty };
+  return { kind: 'text', hasEmpty };
+}
+
+// Diálogo genérico de filtros por columna. Una sección por hoja; un control por columna
+// según su tipo. Todo arranca "sin filtrar": lo que el usuario deja vacío no filtra.
+// Devuelve un array de filtros [{si, col, kind, ...}] (puede ser []), o null si cancela.
+function pickColumnFilters(sheets, filename) {
+  const specs = []; // {si, col, kind, options?}
+  let body = '';
+  sheets.forEach((sheet, si) => {
+    const rows = sheet.rows || [];
+    if (!rows.length) return;
+    const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+    if (!cols.length) return;
+    body += `<div class="mb-4"><div class="text-xs font-black uppercase text-[#7d6c5c] mb-2">Hoja: ${escHtml(sheet.name)}</div><div class="grid grid-cols-2 gap-3">`;
+    for (const col of cols) {
+      const t = colTypeOf(rows, col);
+      const i = specs.length;
+      specs.push({ si, col, kind: t.kind });
+      if (t.kind === 'number') {
+        body += `<div><label class="text-xs font-bold text-[#7d6c5c]">${escHtml(col)}</label>
+          <div class="flex gap-1 mt-1">
+            <input data-spec="${i}" data-role="min" type="number" step="any" placeholder="desde" class="ing-input w-full" />
+            <input data-spec="${i}" data-role="max" type="number" step="any" placeholder="hasta" class="ing-input w-full" />
+          </div></div>`;
+      } else if (t.kind === 'list') {
+        const opts = t.values.map((v) => `<label class="flex items-center gap-1 text-xs"><input data-spec="${i}" data-role="list" type="checkbox" value="${escHtml(v)}" checked class="w-3.5 h-3.5" /> ${escHtml(v)}</label>`).join('');
+        const emptyOpt = t.hasEmpty ? `<label class="flex items-center gap-1 text-xs"><input data-spec="${i}" data-role="list" value="" type="checkbox" checked class="w-3.5 h-3.5" /> <i>(vacío)</i></label>` : '';
+        body += `<div><label class="text-xs font-bold text-[#7d6c5c]">${escHtml(col)}</label>
+          <div class="mt-1 max-h-28 overflow-auto border border-[#fff1e6] rounded-lg p-1.5 space-y-0.5">${opts}${emptyOpt}</div></div>`;
+      } else {
+        body += `<div><label class="text-xs font-bold text-[#7d6c5c]">${escHtml(col)}</label>
+          <input data-spec="${i}" data-role="text" placeholder="contiene…" class="ing-input w-full mt-1" /></div>`;
+      }
+    }
+    body += `</div></div>`;
+  });
+  if (!specs.length) return Promise.resolve([]); // nada que filtrar
+
+  return new Promise((resolve) => {
+    openModal({
+      title: 'Filtrar por columna (opcional)', size: 'lg',
+      bodyHTML: `<div style="max-height:60vh;overflow:auto">${body}</div>
+        <p class="text-xs text-[#7d6c5c] mt-3">Acotá lo que quieras y tocá <b>Descargar</b>. Lo que dejes vacío no filtra. En las listas, destildá lo que no quieras incluir.</p>`,
+      footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button>
+                   <button class="ing-btn-primary" data-act="ok"><span class="material-symbols-outlined text-sm align-middle">download</span> Descargar</button>`,
+      onOpen: (el, close) => {
+        el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
+        el.querySelector('[data-act="ok"]').addEventListener('click', () => {
+          const filters = [];
+          specs.forEach((spec, i) => {
+            if (spec.kind === 'number') {
+              const min = el.querySelector(`[data-spec="${i}"][data-role="min"]`).value;
+              const max = el.querySelector(`[data-spec="${i}"][data-role="max"]`).value;
+              if (min === '' && max === '') return;
+              filters.push({ si: spec.si, col: spec.col, kind: 'number', lo: min === '' ? -Infinity : Number(min), hi: max === '' ? Infinity : Number(max) });
+            } else if (spec.kind === 'list') {
+              const boxes = [...el.querySelectorAll(`[data-spec="${i}"][data-role="list"]`)];
+              const checked = boxes.filter((b) => b.checked);
+              if (checked.length === boxes.length || checked.length === 0) return; // todo o nada = sin filtro
+              filters.push({ si: spec.si, col: spec.col, kind: 'list', allowed: new Set(checked.map((b) => b.value)) });
+            } else {
+              const term = el.querySelector(`[data-spec="${i}"][data-role="text"]`).value.trim().toLowerCase();
+              if (term) filters.push({ si: spec.si, col: spec.col, kind: 'text', term });
+            }
+          });
+          close(filters);
+        });
+      },
+    }).then((v) => resolve(v ?? null));
+  });
+}
+
+// Aplica los filtros elegidos, cada uno sobre su hoja. No muta las hojas originales.
+function applyColumnFilters(sheets, filters) {
+  if (!filters || !filters.length) return sheets;
+  return sheets.map((sheet, si) => {
+    const fs = filters.filter((f) => f.si === si);
+    if (!fs.length) return sheet;
+    const rows = (sheet.rows || []).filter((row) => fs.every((f) => {
+      const v = row[f.col];
+      if (f.kind === 'number') { const n = Number(v); return !isNaN(n) && n >= f.lo && n <= f.hi; }
+      if (f.kind === 'list') return f.allowed.has(v === '' || v == null ? '' : String(v));
+      return String(v == null ? '' : v).toLowerCase().includes(f.term);
+    }));
+    return { ...sheet, rows };
+  });
 }
 
 const getBranches = () => api('/api/branches').catch(() => []);
