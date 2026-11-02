@@ -244,7 +244,7 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
         for (const a of catAttrs) {
           if (!isReq(a) || have.has(a.id)) continue;
           const openText = (a.value_type === 'string' || a.value_type === 'text') && !(a.values && a.values.length) && !a.allowed_units;
-          if (openText && /_NAME$/.test(a.id)) put(a.id, titleForNames);
+          if (openText) put(a.id, titleForNames); // _NAME, MODEL, etc.
         }
         return { attrs, have };
       };
