@@ -187,6 +187,108 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       return { ok: true, itemId: itemId ?? null, closed, deleted };
     });
 
+    // --- TEST TEMPORAL: ¿ML acepta una publicación por variante? ---
+    // Crea un item simple por cada variante (family_name distinto = nombre + variante) y
+    // CIERRA+BORRA todo lo creado en el mismo request (autolimpieza). No toca la base ni mapeos.
+    // Sirve para decidir si "una publicación por variante" es viable en categorías de catálogo.
+    r.post('/integrations/ml/test-per-variant', adminOnly, async (req, reply) => {
+      const b = (req.body ?? {}) as { productId?: string; categoryId?: string; pkg?: any };
+      if (!b.productId) return reply.status(400).send({ error: 'Falta productId' });
+      const { requireMlClient } = await import('../mercadolibre/client.js');
+      const { getTnClient } = await import('../tiendanube/client.js');
+      const ml = await requireMlClient();
+
+      const product = await prisma.product.findUnique({
+        where: { id: b.productId },
+        include: { brand: true, tnMapping: true, variants: true, images: true },
+      });
+      if (!product) return reply.status(404).send({ error: 'Producto inexistente' });
+      const variants = product.variants;
+      if (variants.length < 2) return reply.status(400).send({ error: 'El producto no tiene 2+ variantes', variantCount: variants.length });
+
+      const baseTitle = product.name.slice(0, 50);
+
+      let categoryId = b.categoryId;
+      if (!categoryId) {
+        const preds: any = await ml.predictCategory('MLA', baseTitle);
+        categoryId = (Array.isArray(preds) ? preds : [])[0]?.category_id;
+      }
+      if (!categoryId) return reply.status(422).send({ error: 'no_category' });
+
+      let pics: string[] = (product.images || []).map((im: any) => im.url).filter(Boolean);
+      if (!pics.length && product.tnMapping?.tnProductId) {
+        try {
+          const tn = await getTnClient();
+          if (tn) { const tp: any = await tn.getProduct(product.tnMapping.tnProductId); pics = (tp?.images || []).map((im: any) => im.src).filter(Boolean); }
+        } catch { /* seguimos */ }
+      }
+      if (!pics.length) return reply.status(422).send({ error: 'no_picture' });
+      const pictures = pics.map((url) => ({ source: url }));
+
+      let catAttrs: any[] = [];
+      try { catAttrs = await ml.getCategoryAttributes(categoryId); } catch { /* seguimos */ }
+      const byId: Record<string, any> = Object.fromEntries((catAttrs || []).map((a: any) => [a.id, a]));
+      const isReq = (a: any) => !!(a?.tags && (a.tags.required || a.tags.catalog_required || a.tags.fixed));
+
+      const pkg = { weight: 500, height: 15, width: 20, length: 20, iva: '21', ...(b.pkg || {}) };
+      const buildAttrs = (titleForNames: string) => {
+        const attrs: any[] = []; const have = new Set<string>();
+        const put = (id: string, v: any) => { if (!id || v == null || v === '' || have.has(id)) return; attrs.push({ id, value_name: String(v) }); have.add(id); };
+        if (byId['SELLER_PACKAGE_WEIGHT']) put('SELLER_PACKAGE_WEIGHT', `${pkg.weight} g`);
+        if (byId['SELLER_PACKAGE_HEIGHT']) put('SELLER_PACKAGE_HEIGHT', `${pkg.height} cm`);
+        if (byId['SELLER_PACKAGE_WIDTH']) put('SELLER_PACKAGE_WIDTH', `${pkg.width} cm`);
+        if (byId['SELLER_PACKAGE_LENGTH']) put('SELLER_PACKAGE_LENGTH', `${pkg.length} cm`);
+        if (byId['VALUE_ADDED_TAX']) put('VALUE_ADDED_TAX', `${pkg.iva}%`);
+        if (byId['IMPORT_DUTY']) put('IMPORT_DUTY', '0%');
+        if (product.brand?.name && byId['BRAND']) put('BRAND', product.brand.name);
+        for (const a of catAttrs) {
+          if (!isReq(a) || have.has(a.id)) continue;
+          const openText = (a.value_type === 'string' || a.value_type === 'text') && !(a.values && a.values.length) && !a.allowed_units;
+          if (openText && /_NAME$/.test(a.id)) put(a.id, titleForNames);
+        }
+        return { attrs, have };
+      };
+
+      const probe = buildAttrs(baseTitle);
+      const missing = (catAttrs || [])
+        .filter((a: any) => isReq(a) && !probe.have.has(a.id) && !/^SELLER_PACKAGE_/.test(a.id))
+        .map((a: any) => ({ id: a.id, name: a.name, values: (a.values || []).slice(0, 10).map((v: any) => v.name) }));
+      if (missing.length) return reply.status(422).send({ error: 'missing_attributes', missing, categoryId });
+
+      const attrKey = [...new Set(variants.flatMap((v) => Object.keys((v.attributes as any) || {})))][0] || null;
+
+      const created: string[] = [];
+      const results: any[] = [];
+      for (const v of variants) {
+        const vval = attrKey ? String((v.attributes as any)?.[attrKey] ?? '').trim() : (v.name || '');
+        const famTitle = `${baseTitle} ${vval}`.slice(0, 60).trim();
+        const { attrs } = buildAttrs(famTitle);
+        const price = Number(v.priceOverride ?? product.price);
+        const qty = await computeMlStockForVariant(v.id);
+        const payload: any = {
+          site_id: 'MLA', category_id: categoryId, currency_id: 'ARS', buying_mode: 'buy_it_now',
+          condition: 'new', listing_type_id: 'gold_special', pictures,
+          family_name: famTitle, price, available_quantity: Math.max(1, Math.round(qty || 1)), attributes: attrs,
+        };
+        try {
+          const item: any = await ml.createItem(payload);
+          created.push(String(item.id));
+          results.push({ variant: vval || v.name, ok: true, itemId: String(item.id), status: item.status, family_name: famTitle, permalink: item.permalink ?? null });
+        } catch (err: any) {
+          results.push({ variant: vval || v.name, ok: false, family_name: famTitle, error: err?.response?.data ?? err?.message });
+        }
+      }
+
+      const cleanup: any[] = [];
+      for (const id of created) {
+        let c = false, d = false;
+        try { await ml.updateItem(id, { status: 'closed' }); c = true; try { await ml.updateItem(id, { deleted: true }); d = true; } catch { /* cerrar alcanza */ } } catch { /* ya veremos */ }
+        cleanup.push({ itemId: id, closed: c, deleted: d });
+      }
+
+      return { ok: true, categoryId, variantCount: variants.length, attrKey, results, cleanup };
+    });
+
     r.post('/integrations/ml/publish', adminOnly, async (req, reply) => {
       const b = z.object({
         productId: z.string().optional(),
