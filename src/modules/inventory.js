@@ -1778,18 +1778,56 @@ async function openBulkCostModal(container) {
         mapEl.querySelector('#bc-col-cost').addEventListener('change', e => { colCost = e.target.value; runPreview(); });
       };
 
+      // Cantidad de filas de una hoja (por su rango), para elegir la hoja "principal".
+      const rowCount = (ws) => { try { return XLSX.utils.decode_range(ws['!ref']).e.r; } catch { return 0; } };
+      // Encuentra la fila de encabezados aunque arriba haya título/logo/notas. Busca en las
+      // primeras filas una que tenga una celda de "código" y otra de costo/precio; si no, la
+      // fila con más celdas de texto.
+      const H_CODE = ['codigo', 'código', 'cod', 'barra', 'barcode', 'ean', 'sku'];
+      const H_COSTPRICE = ['costo', 'cost', 'precio', 'pvp', 'importe'];
+      const findHeaderRow = (aoa) => {
+        const limit = Math.min(aoa.length, 25);
+        for (let i = 0; i < limit; i++) {
+          const cells = (aoa[i] || []).map(c => String(c).toLowerCase());
+          const hasCode = cells.some(c => H_CODE.some(k => c.includes(k)));
+          const hasCP = cells.some(c => H_COSTPRICE.some(k => c.includes(k)));
+          if (hasCode && hasCP) return i;
+        }
+        let best = -1, bestScore = 1;
+        for (let i = 0; i < limit; i++) {
+          const score = (aoa[i] || []).filter(c => String(c).trim() !== '' && isNaN(Number(c))).length;
+          if (score > bestScore) { bestScore = score; best = i; }
+        }
+        return best;
+      };
+
       fileIn.addEventListener('change', async () => {
         const file = fileIn.files?.[0]; if (!file) return;
         prevEl.innerHTML = '<p class="text-sm text-[#7d6c5c]">Leyendo archivo…</p>';
+        let wb;
+        try { wb = XLSX.read(await file.arrayBuffer(), { type: 'array' }); }
+        catch (err) { console.warn('[bulkcost] XLSX.read', err); prevEl.innerHTML = '<p class="text-sm text-red-600">No se pudo abrir el archivo. ¿Está dañado o protegido con contraseña? Probá "Guardar como" un .xlsx nuevo o exportá a CSV.</p>'; return; }
         try {
-          const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-          data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
-          headers = data.length ? Object.keys(data[0]) : [];
-          if (!headers.length) { prevEl.innerHTML = '<p class="text-sm text-red-600">El archivo está vacío.</p>'; return; }
+          // Hoja con más filas (las listas suelen tener una hoja principal y otra resumen).
+          const sheetName = wb.SheetNames.slice().sort((a, b) => rowCount(wb.Sheets[b]) - rowCount(wb.Sheets[a]))[0] || wb.SheetNames[0];
+          const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: '', blankrows: false });
+          const hi = findHeaderRow(aoa);
+          if (hi < 0) { prevEl.innerHTML = '<p class="text-sm text-red-600">No encontramos los encabezados (una columna de código y otra de costo o precio). Revisá el archivo.</p>'; return; }
+          // Encabezados de esa fila (celdas vacías → "Columna N"; duplicados → se numeran).
+          const seen = {};
+          headers = (aoa[hi] || []).map((h, i) => {
+            let name = String(h).trim() || `Columna ${i + 1}`;
+            if (seen[name]) { seen[name]++; name = `${name} (${seen[name]})`; } else seen[name] = 1;
+            return name;
+          });
+          data = aoa.slice(hi + 1)
+            .filter(r => (r || []).some(c => String(c).trim() !== ''))
+            .map(r => { const o = {}; headers.forEach((h, i) => { o[h] = r[i] ?? ''; }); return o; });
+          if (!data.length) { prevEl.innerHTML = '<p class="text-sm text-red-600">No hay filas de datos debajo de los encabezados.</p>'; return; }
           prevEl.innerHTML = '';
           detect();
           runPreview();
-        } catch { prevEl.innerHTML = '<p class="text-sm text-red-600">No se pudo leer el archivo.</p>'; }
+        } catch (err) { console.warn('[bulkcost] parse', err); prevEl.innerHTML = '<p class="text-sm text-red-600">No se pudo interpretar el contenido del archivo.</p>'; }
       });
 
       applyBtn.addEventListener('click', async () => {
