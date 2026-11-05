@@ -135,6 +135,72 @@ export async function handleOrderCancelled(event: any) {
   return { ok: true };
 }
 
+// Mapea los ítems de una orden de TN al formato que guardamos en tnOrderPending.
+function mapTnItems(order: any) {
+  return (order.products ?? []).map((p: any) => ({
+    tnProductId: String(p.product_id),
+    tnVariantId: String(p.variant_id),
+    qty: p.quantity,
+    unitPrice: parseFloat(p.price),
+    productName: p.name,
+    variantName: p.variant_values?.join(' / ') ?? null,
+  }));
+}
+
+// Firma estable de una orden (ítems + total) para detectar si REALMENTE cambió.
+function orderSig(items: any, total: any): string {
+  const arr = (Array.isArray(items) ? items : []).map((x: any) => `${x.tnVariantId}:${x.qty}:${x.unitPrice}`).sort();
+  return JSON.stringify({ t: Number(total) || 0, i: arr });
+}
+
+// Refresca la foto de una orden PENDIENTE (aún sin asignar) con los datos actuales de TN.
+// Lo usan el webhook order/updated (orden completa → updateRaw) y el respaldo reconcile
+// (orden del listado, más liviana → NO pisa rawPayload, que el costo de asignación necesita).
+// No toca órdenes ya asignadas o canceladas. Devuelve {changed} si hubo diferencias.
+export async function refreshPendingOrderSnapshot(order: any, { updateRaw = true }: { updateRaw?: boolean } = {}) {
+  const tnOrderId = String(order.id);
+  const pending = await prisma.tnOrderPending.findUnique({ where: { tnOrderId } });
+  if (!pending || pending.status !== 'pending') return { skipped: 'not pending' };
+  const items = mapTnItems(order);
+  const total = parseFloat(order.total ?? '0');
+  if (orderSig(pending.items, pending.total) === orderSig(items, total)) return { skipped: 'unchanged' };
+  await prisma.tnOrderPending.update({
+    where: { tnOrderId },
+    data: {
+      number: order.number ? String(order.number) : pending.number,
+      customerName: order.customer?.name ?? pending.customerName,
+      customerEmail: order.customer?.email ?? pending.customerEmail,
+      customerPhone: order.customer?.phone ?? pending.customerPhone,
+      items: items as any,
+      total,
+      currency: order.currency ?? pending.currency,
+      paymentStatus: order.payment_status ?? pending.paymentStatus,
+      ...(updateRaw ? { rawPayload: order } : {}),
+    },
+  });
+  return { ok: true, changed: true, tnOrderId };
+}
+
+// order/updated: TN editó una orden (p.ej. cancelás un ítem → cancelación parcial). Si la
+// tenemos pendiente, refrescamos la foto; si TN la marcó cancelada, delegamos al handler de
+// cancelación; si todavía no la teníamos y ya está pagada, la ingresamos (como paid perdido).
+export async function handleOrderUpdated(event: any) {
+  const tnOrderId = String(event.id);
+  const tn = await getTnClient();
+  if (!tn) throw new Error('TN not connected');
+  const order = await tn.getOrder(tnOrderId);
+
+  if (order.status === 'cancelled' || order.cancelled_at) return handleOrderCancelled({ id: tnOrderId });
+
+  const pending = await prisma.tnOrderPending.findUnique({ where: { tnOrderId } });
+  if (!pending) {
+    if (order.payment_status === 'paid') return ingestPaidOrder(order);
+    return { skipped: 'order not received yet' };
+  }
+  if (pending.status !== 'pending') return { skipped: `order ${pending.status}` };
+  return refreshPendingOrderSnapshot(order);
+}
+
 export async function handleProductCreated(event: any) {
   const tnProductId = String(event.id);
   // \u00bfYa existe mapping? → lo creamos nosotros, ignoramos
@@ -279,6 +345,8 @@ export async function dispatchWebhook(event: string, body: any) {
   switch (event) {
     case 'order/paid':
       return handleOrderPaid(body);
+    case 'order/updated':
+      return handleOrderUpdated(body);
     case 'order/cancelled':
       return handleOrderCancelled(body);
     case 'product/created':

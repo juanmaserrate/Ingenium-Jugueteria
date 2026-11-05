@@ -86,7 +86,7 @@ export async function registerWebhooks(baseUrl: string) {
   const { requireTnClient } = await import('./client.js');
   const tn = await requireTnClient();
   const url = `${baseUrl}/webhooks/tiendanube`;
-  const events = ['order/paid', 'order/cancelled', 'product/created', 'product/updated', 'product/deleted', 'customer/created'];
+  const events = ['order/paid', 'order/updated', 'order/cancelled', 'product/created', 'product/updated', 'product/deleted', 'customer/created'];
   const existing = await tn.listWebhooks().catch(() => []);
   for (const ev of events) {
     const already = Array.isArray(existing) && existing.find((w: any) => w.event === ev);

@@ -15,7 +15,7 @@ import { requireRole } from '../auth/jwt.js';
 import { confirmSale } from '../services/sales.js';
 import { enqueueSync } from '../sync/queue.js';
 import { getTnClient } from '../tiendanube/client.js';
-import { ingestPaidOrder } from '../tiendanube/webhooks.js';
+import { ingestPaidOrder, refreshPendingOrderSnapshot } from '../tiendanube/webhooks.js';
 import { linkByBarcode, dumpTnCatalog, searchTnCatalog, linkManual, linkManualVariants, unlinkProduct, relinkProduct, findCodeMismatches, alignTnBarcode, enqueueAlignAllBarcodes } from '../tiendanube/link.js';
 
 // Una orden de TN deja de necesitar asignación cuando ya está cancelada/cerrada o
@@ -43,11 +43,22 @@ let lastReconcileAt = 0;
 let reconcileInFlight = false;
 const RECONCILE_THROTTLE_MS = 3 * 60 * 1000;
 
-async function reconcileTnOrders(): Promise<{ scanned: number; ingested: number; skippedDone: number } | null> {
+// Asegura (una vez por proceso) que los webhooks estén registrados en TN, para tiendas que
+// se conectaron antes de que sumáramos un evento nuevo (p.ej. order/updated). registerWebhooks
+// es idempotente: salta los que ya existen y crea solo los que faltan.
+let webhooksEnsured = false;
+async function ensureWebhooksOnce() {
+  if (webhooksEnsured) return;
+  webhooksEnsured = true;
+  try { await registerWebhooks(env.PUBLIC_BASE_URL); } catch { webhooksEnsured = false; }
+}
+
+async function reconcileTnOrders(): Promise<{ scanned: number; ingested: number; refreshed: number; skippedDone: number } | null> {
   const tn = await getTnClient();
   if (!tn) return null;
+  await ensureWebhooksOnce();
   const sinceIso = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString(); // últimos 60 días
-  let scanned = 0, ingested = 0, skippedDone = 0;
+  let scanned = 0, ingested = 0, refreshed = 0, skippedDone = 0;
   for (let page = 1; page <= 10; page++) {
     let batch: any;
     try {
@@ -61,12 +72,20 @@ async function reconcileTnOrders(): Promise<{ scanned: number; ingested: number;
       if (tnOrderIsDone(order)) { skippedDone++; continue; } // ya enviada/retirada/cerrada
       const tnOrderId = String(order.id);
       const existing = await prisma.tnOrderPending.findUnique({ where: { tnOrderId } });
-      if (existing) continue;
+      if (existing) {
+        // Ya la teníamos: si sigue PENDIENTE de asignar, refrescamos su foto por si la
+        // editaron en TN (ej. cancelaron un ítem) y se perdió el webhook. No pisamos
+        // rawPayload (el del listado es más liviano y el costo de asignación lo usa).
+        if (existing.status === 'pending') {
+          try { const r: any = await refreshPendingOrderSnapshot(order, { updateRaw: false }); if (r?.changed) refreshed++; } catch { /* no frenar el resto */ }
+        }
+        continue;
+      }
       try { await ingestPaidOrder(order); ingested++; } catch { /* no frenar el resto */ }
     }
     if (batch.length < 50) break;
   }
-  return { scanned, ingested, skippedDone };
+  return { scanned, ingested, refreshed, skippedDone };
 }
 
 // Dispara el reconcile como mucho 1 vez cada RECONCILE_THROTTLE_MS. No bloquea: si ya
