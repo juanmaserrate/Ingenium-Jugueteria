@@ -391,9 +391,54 @@ function groupItemsBy(sales, vMap, dimKey, label, supplierId) {
   return rows;
 }
 
+// Detalle por PRODUCTO vendido (una fila por variante/SKU): cantidad, precio, costo, margen.
+// supplierId (opcional) filtra a un proveedor. Ordena por importe desc, con fila TOTAL.
+function productDetail(sales, vMap, supplierId) {
+  const g = new Map(); // variantId -> agregado
+  for (const s of sales) for (const it of (s.items || [])) {
+    const info = vMap[it.variantId] || {};
+    if (supplierId && String(info.supplierId) !== String(supplierId)) continue;
+    const variante = it.variantNameSnap && it.variantNameSnap !== 'default' ? ` (${it.variantNameSnap})` : '';
+    const e = g.get(it.variantId) || {
+      Proveedor: info.proveedor || 'Sin proveedor', Rubro: info.categoria || 'Sin rubro',
+      Codigo: info.code || '', Producto: `${it.productNameSnap || info.nombre || ''}${variante}`,
+      Cantidad: 0, Importe: 0, CostoTotal: 0,
+    };
+    e.Cantidad += it.qty || 0;
+    e.Importe = round2(e.Importe + (it.subtotal || 0));
+    e.CostoTotal = round2(e.CostoTotal + (it.costSnapshot || 0) * (it.qty || 0));
+    g.set(it.variantId, e);
+  }
+  const rows = [...g.values()].map(e => {
+    const ganancia = round2(e.Importe - e.CostoTotal);
+    return {
+      Proveedor: e.Proveedor, Rubro: e.Rubro, Codigo: e.Codigo, Producto: e.Producto,
+      Cantidad: e.Cantidad,
+      'Precio unit.': e.Cantidad ? round2(e.Importe / e.Cantidad) : 0,
+      Importe: e.Importe,
+      'Costo unit.': e.Cantidad ? round2(e.CostoTotal / e.Cantidad) : 0,
+      Costo: e.CostoTotal,
+      Ganancia: ganancia,
+      'Margen %': e.Importe ? round2((ganancia / e.Importe) * 100) : 0,
+    };
+  }).sort((a, b) => b.Importe - a.Importe);
+  if (rows.length) {
+    const t = rows.reduce((a, r) => { a.Cantidad += r.Cantidad; a.Importe = round2(a.Importe + r.Importe); a.Costo = round2(a.Costo + r.Costo); a.Ganancia = round2(a.Ganancia + r.Ganancia); return a; }, { Cantidad: 0, Importe: 0, Costo: 0, Ganancia: 0 });
+    rows.push({
+      Proveedor: '', Rubro: '', Codigo: '', Producto: 'TOTAL', Cantidad: t.Cantidad,
+      'Precio unit.': '', Importe: t.Importe, 'Costo unit.': '', Costo: t.Costo, Ganancia: t.Ganancia,
+      'Margen %': t.Importe ? round2((t.Ganancia / t.Importe) * 100) : 0,
+    });
+  }
+  return rows;
+}
+
 async function repBySupplier(f = {}) {
   const { sales, vMap } = await salesContext(f);
-  return saveXLSX('ventas_por_proveedor.xlsx', [{ name: 'Por proveedor', rows: groupItemsBy(sales, vMap, 'proveedor', 'Proveedor', f.supplierId) }]);
+  return saveXLSX('ventas_por_proveedor.xlsx', [
+    { name: 'Por proveedor', rows: groupItemsBy(sales, vMap, 'proveedor', 'Proveedor', f.supplierId) },
+    { name: 'Productos vendidos', rows: productDetail(sales, vMap, f.supplierId) },
+  ]);
 }
 
 async function repByCategory(f = {}) {
