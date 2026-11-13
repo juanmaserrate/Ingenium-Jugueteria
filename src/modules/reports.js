@@ -21,8 +21,8 @@ const REPORTS = [
   { id: 'by-customer', name: 'Compras por cliente', desc: 'Agrupado por cliente: sus compras, detalle de productos e importes. Elegís los filtros al generar.', icon: 'shopping_cart', filters: ['date', 'branch', 'source', 'customer'] },
   { id: 'sales', name: 'Ventas', desc: 'Todas las ventas con detalle', icon: 'trending_up', filters: ['date', 'branch', 'source'] },
   { id: 'by-seller', name: 'Ventas por vendedor', desc: 'Agrupado por vendedor. Período mensual o anual.', icon: 'badge', filters: ['period', 'branch', 'source'] },
-  { id: 'by-supplier', name: 'Ventas por proveedor', desc: 'Unidades e importe por proveedor. Mensual o anual.', icon: 'local_shipping', filters: ['period', 'branch', 'source'] },
-  { id: 'by-category', name: 'Ventas por rubro', desc: 'Unidades e importe por rubro (categoría). Mensual o anual.', icon: 'category', filters: ['period', 'branch', 'source'] },
+  { id: 'by-supplier', name: 'Ventas por proveedor', desc: 'Por proveedor: ventas, unidades, importe, costo, ganancia, margen y participación. Filtrable por proveedor. Mensual o anual.', icon: 'local_shipping', filters: ['period', 'branch', 'source', 'supplier'] },
+  { id: 'by-category', name: 'Ventas por rubro', desc: 'Unidades e importe por rubro (categoría), filtrable por proveedor. Mensual o anual.', icon: 'category', filters: ['period', 'branch', 'source', 'supplier'] },
   { id: 'by-customer-sum', name: 'Ventas por cliente', desc: 'Resumen por cliente: ventas, unidades e importe. Mensual o anual.', icon: 'groups', filters: ['period', 'branch', 'source'] },
   { id: 'by-payment', name: 'Ventas por medio de pago', desc: 'Una hoja por cada medio de pago. Mensual o anual.', icon: 'payments', filters: ['period', 'branch'] },
   { id: 'profit', name: 'Ganancia (promos y costos)', desc: 'Ganancia por venta/promo/banco/canal, con comisiones, financiero y acreditaciones. Mensual o anual.', icon: 'savings', filters: ['period', 'branch', 'source'] },
@@ -82,25 +82,50 @@ async function runReport(id, btn) {
   }
   if (btn) btn.classList.add('opacity-60', 'pointer-events-none');
   try {
-    const rows = await fn(filters);
-    // null = el usuario canceló el diálogo de filtros → no avisamos nada.
-    if (rows === null) return;
-    // Sin datos → avisamos claro en vez del falso "Exportado ✓".
-    if (rows > 0) toast('Exportado ✓', 'success');
-    else toast('No hay datos para exportar en este reporte', 'warn');
+    if (filters?.branchesSeparate) {
+      // "Las dos sucursales" → una exportación por sucursal, en archivos separados.
+      const brs = await listBranches().catch(() => []);
+      let files = 0;
+      for (const b of brs) {
+        batchExport = { suffix: sheetSafe(b.name).replace(/\s+/g, '_') };
+        try {
+          const r = await fn({ ...filters, branchId: b.id, branchesSeparate: false });
+          if (typeof r === 'number' && r > 0) files++;
+        } finally { batchExport = null; }
+      }
+      if (files > 0) toast(`Exportado ✓ — ${files} archivo${files === 1 ? '' : 's'}, uno por sucursal`, 'success');
+      else toast('No hay datos para exportar en este reporte', 'warn');
+    } else {
+      const rows = await fn(filters);
+      // null = el usuario canceló el diálogo de columnas → no avisamos nada.
+      if (rows === null) return;
+      // Sin datos → avisamos claro en vez del falso "Exportado ✓".
+      if (rows > 0) toast('Exportado ✓', 'success');
+      else toast('No hay datos para exportar en este reporte', 'warn');
+    }
   } catch (err) {
     toast('Error: ' + (err?.message || 'no se pudo generar'), 'error');
   } finally {
     if (btn) btn.classList.remove('opacity-60', 'pointer-events-none');
+    batchExport = null;
   }
 }
 
-// Exporta sólo si hay filas. Antes de generar el archivo ofrece FILTRAR POR COLUMNA
-// (opcional): el usuario acota las filas y recién ahí se baja el XLSX.
+// Cuando se exporta UNA sucursal dentro de un lote (elegiste "las dos" → un archivo por
+// sucursal), esto lleva el sufijo del nombre; en ese modo NO se abre el diálogo de columnas.
+let batchExport = null;
+
+// Exporta sólo si hay filas. En modo normal ofrece FILTRAR POR COLUMNA (opcional) antes de
+// bajar el XLSX. En modo lote (batchExport) baja directo con el sufijo de la sucursal.
 // Devuelve el total exportado, 0 si no quedaron filas, o null si canceló.
 async function saveXLSX(filename, sheets) {
   const total = sheets.reduce((n, s) => n + (s.rows?.length || 0), 0);
   if (total === 0) return 0;
+  if (batchExport) {
+    const fname = batchExport.suffix ? filename.replace(/\.xlsx$/i, `_${batchExport.suffix}.xlsx`) : filename;
+    exportToXLSX({ filename: fname, sheets });
+    return total;
+  }
   const filters = await pickColumnFilters(sheets, filename);
   if (filters === null) return null; // canceló
   const filtered = applyColumnFilters(sheets, filters);
@@ -286,7 +311,7 @@ async function salesContext(f = {}) {
   const cuMap = Object.fromEntries((customers || []).map(c => [c.id, c]));
   const vMap = {};
   for (const p of (products || [])) {
-    const info = { productId: p.id, nombre: p.name, categoria: catMap[p.category_id] || 'Sin rubro', proveedor: suMap[p.supplier_id] || 'Sin proveedor' };
+    const info = { productId: p.id, nombre: p.name, categoria: catMap[p.category_id] || 'Sin rubro', proveedor: suMap[p.supplier_id] || 'Sin proveedor', supplierId: p.supplier_id || null };
     for (const v of (p.variants || [])) vMap[v.id] = { ...info, code: v.code || p.code || '' };
   }
   return { sales: sales || [], vMap, catMap, suMap, brMap, cuMap };
@@ -320,28 +345,54 @@ async function repByCustomerSum(f = {}) {
 }
 
 // Agrupa los ITEMS de venta por una dimensión del producto (proveedor o rubro).
-function groupItemsBy(sales, vMap, dimKey, label) {
+// Enriquecido: ventas, unidades, productos, importe, costo, ganancia, margen y participación,
+// con fila TOTAL. supplierId (opcional) filtra a un proveedor.
+function groupItemsBy(sales, vMap, dimKey, label, supplierId) {
   const g = new Map();
+  let granImporte = 0;
   for (const s of sales) for (const it of (s.items || [])) {
     const info = vMap[it.variantId] || {};
+    if (supplierId && String(info.supplierId) !== String(supplierId)) continue;
     const k = info[dimKey] || `Sin ${label.toLowerCase()}`;
-    const e = g.get(k) || { [label]: k, Unidades: 0, Importe: 0, _prods: new Set() };
-    e.Unidades += it.qty || 0; e.Importe = round2(e.Importe + (it.subtotal || 0));
+    const e = g.get(k) || { [label]: k, Unidades: 0, Importe: 0, Costo: 0, _prods: new Set(), _sales: new Set() };
+    const sub = it.subtotal || 0;
+    e.Unidades += it.qty || 0;
+    e.Importe = round2(e.Importe + sub);
+    e.Costo = round2(e.Costo + (it.costSnapshot || 0) * (it.qty || 0));
     if (info.productId) e._prods.add(info.productId);
+    e._sales.add(s.id);
+    granImporte += sub;
     g.set(k, e);
   }
-  return [...g.values()].map(e => ({ [label]: e[label], Unidades: e.Unidades, Importe: e.Importe, Productos: e._prods.size }))
-    .sort((a, b) => b.Importe - a.Importe);
+  granImporte = round2(granImporte);
+  const rows = [...g.values()].map(e => {
+    const ganancia = round2(e.Importe - e.Costo);
+    return {
+      [label]: e[label], Ventas: e._sales.size, Unidades: e.Unidades, Productos: e._prods.size,
+      Importe: e.Importe, 'Ticket prom.': e._sales.size ? round2(e.Importe / e._sales.size) : 0,
+      Costo: e.Costo, Ganancia: ganancia, 'Margen %': e.Importe ? round2((ganancia / e.Importe) * 100) : 0,
+      'Part. %': granImporte ? round2((e.Importe / granImporte) * 100) : 0,
+    };
+  }).sort((a, b) => b.Importe - a.Importe);
+  if (rows.length) {
+    const t = rows.reduce((a, r) => { a.Unidades += r.Unidades; a.Importe = round2(a.Importe + r.Importe); a.Costo = round2(a.Costo + r.Costo); a.Ganancia = round2(a.Ganancia + r.Ganancia); return a; }, { Unidades: 0, Importe: 0, Costo: 0, Ganancia: 0 });
+    rows.push({
+      [label]: 'TOTAL', Ventas: '', Unidades: t.Unidades, Productos: '', Importe: t.Importe,
+      'Ticket prom.': '', Costo: t.Costo, Ganancia: t.Ganancia,
+      'Margen %': t.Importe ? round2((t.Ganancia / t.Importe) * 100) : 0, 'Part. %': 100,
+    });
+  }
+  return rows;
 }
 
 async function repBySupplier(f = {}) {
   const { sales, vMap } = await salesContext(f);
-  return saveXLSX('ventas_por_proveedor.xlsx', [{ name: 'Por proveedor', rows: groupItemsBy(sales, vMap, 'proveedor', 'Proveedor') }]);
+  return saveXLSX('ventas_por_proveedor.xlsx', [{ name: 'Por proveedor', rows: groupItemsBy(sales, vMap, 'proveedor', 'Proveedor', f.supplierId) }]);
 }
 
 async function repByCategory(f = {}) {
   const { sales, vMap } = await salesContext(f);
-  return saveXLSX('ventas_por_rubro.xlsx', [{ name: 'Por rubro', rows: groupItemsBy(sales, vMap, 'categoria', 'Rubro') }]);
+  return saveXLSX('ventas_por_rubro.xlsx', [{ name: 'Por rubro', rows: groupItemsBy(sales, vMap, 'categoria', 'Rubro', f.supplierId) }]);
 }
 
 // Nombre de hoja válido para Excel: sin \ / ? * [ ] :  y máx 31 chars.
@@ -470,10 +521,13 @@ function pickFilters(fields = [], title = 'Filtros del reporte') {
     const admin = isAdmin();
     let branches = [];
     if (has('branch')) { try { branches = await listBranches(); } catch { branches = []; } }
-    // El admin arranca con SU sucursal activa preseleccionada (pero puede pasar a 'Todas').
-    // El encargado queda ceñido a la suya (única opción).
+    let suppliers = [];
+    if (has('supplier')) { try { suppliers = await Suppliers.list(); } catch { suppliers = []; } }
+    // El admin arranca con SU sucursal activa preseleccionada; puede elegir la otra, o "las dos"
+    // (que genera un XLSX por sucursal). El encargado queda ceñido a la suya (única opción).
     const branchOptions = admin
-      ? `<option value="">Todas</option>` + branches.map(b => `<option value="${b.id}" ${b.id === activeBranchId() ? 'selected' : ''}>${b.name}</option>`).join('')
+      ? branches.map(b => `<option value="${b.id}" ${b.id === activeBranchId() ? 'selected' : ''}>${b.name}</option>`).join('')
+        + `<option value="__sep__">Las dos (archivos separados)</option>`
       : branches.filter(b => b.id === activeBranchId()).map(b => `<option value="${b.id}">${b.name}</option>`).join('');
     const parts = [];
     const now = new Date();
@@ -507,6 +561,12 @@ function pickFilters(fields = [], title = 'Filtros del reporte') {
       <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Origen</span>
         <select id="rf-source" class="ing-input w-full mt-1">
           <option value="">Todos</option><option value="pos">POS (local)</option><option value="tn">Tienda Nube</option><option value="ml">Mercado Libre</option>
+        </select></label>`);
+    if (has('supplier')) parts.push(`
+      <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Proveedor</span>
+        <select id="rf-supplier" class="ing-input w-full mt-1">
+          <option value="">Todos</option>
+          ${suppliers.map(s => `<option value="${escHtml(s.id)}">${escHtml(s.name)}</option>`).join('')}
         </select></label>`);
     if (has('customer')) parts.push(`
       <label class="block col-span-2"><span class="text-xs font-bold text-[#7d6c5c]">Cliente (nombre o documento, opcional)</span>
@@ -543,10 +603,14 @@ function pickFilters(fields = [], title = 'Filtros del reporte') {
         el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
         el.querySelector('[data-act="ok"]').addEventListener('click', () => {
           const pr = has('period') ? periodRange() : {};
+          const brVal = has('branch') ? (admin ? g('#rf-branch').value : activeBranchId()) : undefined;
+          const branchesSeparate = brVal === '__sep__';
           close({
             from: has('period') ? pr.from : (has('date') ? (g('#rf-from').value || undefined) : undefined),
             to: has('period') ? pr.to : (has('date') ? (g('#rf-to').value || undefined) : undefined),
-            branchId: has('branch') ? (admin ? (g('#rf-branch').value || undefined) : activeBranchId()) : undefined,
+            branchId: branchesSeparate ? undefined : (brVal || undefined),
+            branchesSeparate,
+            supplierId: has('supplier') ? (g('#rf-supplier').value || undefined) : undefined,
             source: has('source') ? (g('#rf-source').value || undefined) : undefined,
             term: has('customer') ? g('#rf-term').value.trim().toLowerCase() : '',
             onlyWithCustomer: has('customer') ? g('#rf-onlycust').checked : false,
