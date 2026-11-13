@@ -19,7 +19,7 @@ import { openModal } from '../components/modal.js';
 
 const REPORTS = [
   { id: 'by-customer', name: 'Compras por cliente', desc: 'Agrupado por cliente: sus compras, detalle de productos e importes. Elegís los filtros al generar.', icon: 'shopping_cart', filters: ['date', 'branch', 'source', 'customer'] },
-  { id: 'sales', name: 'Ventas', desc: 'Todas las ventas con detalle', icon: 'trending_up', filters: ['date', 'branch', 'source'] },
+  { id: 'sales', name: 'Ventas', desc: 'Todas las ventas con costo, ganancia y margen; detalle por ítem. Filtrable por proveedor.', icon: 'trending_up', filters: ['date', 'branch', 'source', 'supplier'] },
   { id: 'by-seller', name: 'Ventas por vendedor', desc: 'Agrupado por vendedor. Período mensual o anual.', icon: 'badge', filters: ['period', 'branch', 'source'] },
   { id: 'by-supplier', name: 'Ventas por proveedor', desc: 'Por proveedor: ventas, unidades, importe, costo, ganancia, margen y participación. Filtrable por proveedor. Mensual o anual.', icon: 'local_shipping', filters: ['period', 'branch', 'source', 'supplier'] },
   { id: 'by-category', name: 'Ventas por rubro', desc: 'Unidades e importe por rubro (categoría), filtrable por proveedor. Mensual o anual.', icon: 'category', filters: ['period', 'branch', 'source', 'supplier'] },
@@ -31,7 +31,7 @@ const REPORTS = [
   { id: 'cash', name: 'Caja', desc: 'Movimientos de efectivo de la sucursal', icon: 'account_balance_wallet', filters: ['date', 'branch'] },
   { id: 'expenses', name: 'Gastos', desc: 'Gastos por categoría', icon: 'shopping_bag', filters: ['date', 'branch'] },
   { id: 'pnl', name: 'P&L mensuales', desc: 'Todos los snapshots guardados', icon: 'paid' },
-  { id: 'inventory', name: 'Inventario', desc: 'Productos + stock valorizado', icon: 'inventory_2' },
+  { id: 'inventory', name: 'Inventario', desc: 'Productos + stock valorizado, ganancia unit./potencial y % del valorizado. Filtrable por proveedor.', icon: 'inventory_2', filters: ['supplier'] },
   { id: 'transfers', name: 'Transferencias', desc: 'Movimientos entre sucursales', icon: 'swap_horiz', filters: ['date', 'branch'] },
   { id: 'stock-by-cat', name: 'Stock por categoría', desc: 'Resumen agrupado', icon: 'category' },
   { id: 'checks', name: 'Cheques', desc: 'Todos los cheques con estado', icon: 'receipt_long', filters: ['date'] },
@@ -268,27 +268,40 @@ async function repSales(f = {}) {
   const vMap = {};
   for (const p of (products || [])) {
     for (const v of (p.variants || [])) {
-      vMap[v.id] = { code: v.code || p.code || '', category: catMap[p.category_id] || '' };
+      vMap[v.id] = { code: v.code || p.code || '', category: catMap[p.category_id] || '', supplierId: p.supplier_id || null };
     }
   }
-  const header = (sales || []).map(s => ({
-    Numero: s.number, Fecha: fmtDateTime(s.datetime), Sucursal: brMap[s.branchId] || s.branchId,
-    Cliente: s.customer?.name || '', Vendedor: emMap[s.sellerId] || '',
-    Origen: s.source === 'tn' ? 'Tienda Nube' : s.source === 'ml' ? 'Mercado Libre' : 'POS',
-    Items: s.items?.length || 0, Total: s.total,
-    Pagos: (s.payments || []).map(p => `${p.methodName || p.methodId}: ${p.amount}`).join(' · '),
-  }));
+  const match = (it) => !f.supplierId || String(vMap[it.variantId]?.supplierId) === String(f.supplierId);
+  const header = [];
   const details = [];
   for (const s of (sales || [])) {
-    for (const it of (s.items || [])) {
+    const items = (s.items || []).filter(match);
+    if (f.supplierId && !items.length) continue; // con filtro de proveedor, sólo ventas que lo incluyan
+    const importe = round2(items.reduce((n, it) => n + (it.subtotal || 0), 0));
+    const costo = round2(items.reduce((n, it) => n + (it.costSnapshot || 0) * (it.qty || 0), 0));
+    header.push({
+      Numero: s.number, Fecha: fmtDateTime(s.datetime), Sucursal: brMap[s.branchId] || s.branchId,
+      Cliente: s.customer?.name || '', Vendedor: emMap[s.sellerId] || '',
+      Origen: s.source === 'tn' ? 'Tienda Nube' : s.source === 'ml' ? 'Mercado Libre' : 'POS',
+      Items: items.length, Importe: importe, Costo: costo, Ganancia: round2(importe - costo),
+      'Margen %': importe ? round2(((importe - costo) / importe) * 100) : 0, Total: s.total,
+      Pagos: (s.payments || []).map(p => `${p.methodName || p.methodId}: ${p.amount}`).join(' · '),
+    });
+    for (const it of items) {
       const info = vMap[it.variantId] || {};
       const variante = it.variantNameSnap && it.variantNameSnap !== 'default' ? ` (${it.variantNameSnap})` : '';
+      const sub = it.subtotal || 0, cost = round2((it.costSnapshot || 0) * (it.qty || 0));
       details.push({
         Numero: s.number, Fecha: fmtDate(s.datetime), Producto: `${it.productNameSnap}${variante}`,
         Codigo: info.code || '', Categoria: info.category || '', Cantidad: it.qty,
-        Precio: it.unitPrice, Costo: it.costSnapshot, Subtotal: it.subtotal,
+        Precio: it.unitPrice, Costo: it.costSnapshot, Subtotal: sub,
+        Ganancia: round2(sub - cost), 'Margen %': sub ? round2(((sub - cost) / sub) * 100) : 0,
       });
     }
+  }
+  if (header.length) {
+    const t = header.reduce((a, r) => { a.Items += r.Items; a.Importe = round2(a.Importe + r.Importe); a.Costo = round2(a.Costo + r.Costo); a.Ganancia = round2(a.Ganancia + r.Ganancia); a.Total = round2(a.Total + (Number(r.Total) || 0)); return a; }, { Items: 0, Importe: 0, Costo: 0, Ganancia: 0, Total: 0 });
+    header.push({ Numero: 'TOTAL', Fecha: '', Sucursal: '', Cliente: '', Vendedor: '', Origen: '', Items: t.Items, Importe: t.Importe, Costo: t.Costo, Ganancia: t.Ganancia, 'Margen %': t.Importe ? round2((t.Ganancia / t.Importe) * 100) : 0, Total: t.Total, Pagos: '' });
   }
   return saveXLSX('reporte_ventas.xlsx', [
     { name: 'Ventas', rows: header }, { name: 'Detalle items', rows: details },
@@ -298,6 +311,8 @@ async function repSales(f = {}) {
 // ---------- Reportes agrupados de ventas (período mensual/anual) ----------
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 const unidadesDe = (s) => (s.items || []).reduce((n, it) => n + (it.qty || 0), 0);
+// Costo de mercadería de una venta (snapshot de cada ítem × cantidad).
+const saleCost = (s) => round2((s.items || []).reduce((n, it) => n + (it.costSnapshot || 0) * (it.qty || 0), 0));
 
 // Trae ventas (con filtros) + mapas de variante→producto/rubro/proveedor y de cliente/sucursal.
 async function salesContext(f = {}) {
@@ -326,27 +341,61 @@ async function salesContext(f = {}) {
 async function repBySeller(f = {}) {
   const { sales } = await salesContext(f);
   const g = new Map();
+  let gran = 0;
   for (const s of sales) {
     const k = s.sellerName || 'Sin vendedor';
-    const e = g.get(k) || { Vendedor: k, Ventas: 0, Unidades: 0, Total: 0 };
-    e.Ventas += 1; e.Unidades += unidadesDe(s); e.Total = round2(e.Total + (s.total || 0));
+    const e = g.get(k) || { Vendedor: k, Ventas: 0, Unidades: 0, Importe: 0, Costo: 0 };
+    e.Ventas += 1; e.Unidades += unidadesDe(s);
+    e.Importe = round2(e.Importe + (s.total || 0));
+    e.Costo = round2(e.Costo + saleCost(s));
+    gran += s.total || 0;
     g.set(k, e);
   }
-  const rows = [...g.values()].sort((a, b) => b.Total - a.Total);
+  gran = round2(gran);
+  const rows = [...g.values()].map(e => {
+    const gan = round2(e.Importe - e.Costo);
+    return {
+      Vendedor: e.Vendedor, Ventas: e.Ventas, Unidades: e.Unidades, Importe: e.Importe,
+      'Ticket prom.': e.Ventas ? round2(e.Importe / e.Ventas) : 0, Costo: e.Costo, Ganancia: gan,
+      'Margen %': e.Importe ? round2((gan / e.Importe) * 100) : 0, 'Part. %': gran ? round2((e.Importe / gran) * 100) : 0,
+    };
+  }).sort((a, b) => b.Importe - a.Importe);
+  if (rows.length) {
+    const t = rows.reduce((a, r) => { a.Ventas += r.Ventas; a.Unidades += r.Unidades; a.Importe = round2(a.Importe + r.Importe); a.Costo = round2(a.Costo + r.Costo); a.Ganancia = round2(a.Ganancia + r.Ganancia); return a; }, { Ventas: 0, Unidades: 0, Importe: 0, Costo: 0, Ganancia: 0 });
+    rows.push({ Vendedor: 'TOTAL', Ventas: t.Ventas, Unidades: t.Unidades, Importe: t.Importe, 'Ticket prom.': '', Costo: t.Costo, Ganancia: t.Ganancia, 'Margen %': t.Importe ? round2((t.Ganancia / t.Importe) * 100) : 0, 'Part. %': 100 });
+  }
   return saveXLSX('ventas_por_vendedor.xlsx', [{ name: 'Por vendedor', rows }]);
 }
 
 async function repByCustomerSum(f = {}) {
   const { sales, cuMap } = await salesContext(f);
   const g = new Map();
+  let gran = 0;
   for (const s of sales) {
     const c = s.customerId ? cuMap[s.customerId] : null;
     const k = s.customerId || '__sin__';
-    const e = g.get(k) || { Cliente: c ? nameOf(c) : 'Sin cliente', Documento: c ? docOf(c) : '', Ventas: 0, Unidades: 0, Total: 0 };
-    e.Ventas += 1; e.Unidades += unidadesDe(s); e.Total = round2(e.Total + (s.total || 0));
+    const e = g.get(k) || { Cliente: c ? nameOf(c) : 'Sin cliente', Documento: c ? docOf(c) : '', Ventas: 0, Unidades: 0, Importe: 0, Costo: 0, _last: '' };
+    e.Ventas += 1; e.Unidades += unidadesDe(s);
+    e.Importe = round2(e.Importe + (s.total || 0));
+    e.Costo = round2(e.Costo + saleCost(s));
+    if (String(s.datetime) > e._last) e._last = String(s.datetime);
+    gran += s.total || 0;
     g.set(k, e);
   }
-  const rows = [...g.values()].sort((a, b) => b.Total - a.Total);
+  gran = round2(gran);
+  const rows = [...g.values()].map(e => {
+    const gan = round2(e.Importe - e.Costo);
+    return {
+      Cliente: e.Cliente, Documento: e.Documento, Ventas: e.Ventas, Unidades: e.Unidades, Importe: e.Importe,
+      'Ticket prom.': e.Ventas ? round2(e.Importe / e.Ventas) : 0, Ganancia: gan,
+      'Margen %': e.Importe ? round2((gan / e.Importe) * 100) : 0, 'Part. %': gran ? round2((e.Importe / gran) * 100) : 0,
+      'Última compra': e._last ? fmtDate(e._last) : '',
+    };
+  }).sort((a, b) => b.Importe - a.Importe);
+  if (rows.length) {
+    const t = rows.reduce((a, r) => { a.Ventas += r.Ventas; a.Unidades += r.Unidades; a.Importe = round2(a.Importe + r.Importe); a.Ganancia = round2(a.Ganancia + r.Ganancia); return a; }, { Ventas: 0, Unidades: 0, Importe: 0, Ganancia: 0 });
+    rows.push({ Cliente: 'TOTAL', Documento: '', Ventas: t.Ventas, Unidades: t.Unidades, Importe: t.Importe, 'Ticket prom.': '', Ganancia: t.Ganancia, 'Margen %': t.Importe ? round2((t.Ganancia / t.Importe) * 100) : 0, 'Part. %': 100, 'Última compra': '' });
+  }
   return saveXLSX('ventas_por_cliente.xlsx', [{ name: 'Por cliente', rows }]);
 }
 
@@ -464,7 +513,11 @@ async function repByPayment(f = {}) {
     r.Pagos += 1; r.Total = round2(r.Total + (p.amount || 0));
     resumen.set(k, r);
   }
-  const sheets = [{ name: 'Resumen', rows: [...resumen.values()].sort((a, b) => b.Total - a.Total) }];
+  const resOrd = [...resumen.values()].sort((a, b) => b.Total - a.Total);
+  const gran = round2(resOrd.reduce((n, r) => n + (r.Total || 0), 0));
+  const resumenRows = resOrd.map(r => ({ Medio: r.Medio, Pagos: r.Pagos, Total: r.Total, 'Part. %': gran ? round2((r.Total / gran) * 100) : 0 }));
+  if (resumenRows.length) resumenRows.push({ Medio: 'TOTAL', Pagos: resumenRows.reduce((n, r) => n + (Number(r.Pagos) || 0), 0), Total: gran, 'Part. %': 100 });
+  const sheets = [{ name: 'Resumen', rows: resumenRows }];
   for (const [k, rows] of perMethod) sheets.push({ name: sheetSafe(k), rows });
   return saveXLSX('ventas_por_medio_pago.xlsx', sheets);
 }
@@ -767,6 +820,7 @@ async function repReturns(f = {}) {
     Devuelve: r.returnedTotal, Lleva: r.takenTotal, 'Diferencia (+cobrado / -devuelto)': -Number(r.difference || 0),
     Vale: cnMap[r.creditNoteId] || '', Motivo: r.reason || '',
   }));
+  if (rows.length) rows.push({ Numero: 'TOTAL', Fecha: '', Cliente: '', Devuelve: round2(rows.reduce((n, r) => n + (Number(r.Devuelve) || 0), 0)), Lleva: round2(rows.reduce((n, r) => n + (Number(r.Lleva) || 0), 0)), 'Diferencia (+cobrado / -devuelto)': round2(rows.reduce((n, r) => n + (Number(r['Diferencia (+cobrado / -devuelto)']) || 0), 0)), Vale: '', Motivo: '' });
   const vales = (creditNotes || []).filter(v => dtInRange(v.issuedAt, f.from, f.to)).map(v => ({
     Codigo: v.code, Cliente: cuMap[v.customerId] || '', Monto: v.amount,
     Emitido: fmtDate(v.issuedAt), Vence: fmtDate(v.expiresAt),
@@ -799,6 +853,7 @@ async function repCash(f = {}) {
       Fecha: fmtDateTime(m.datetime), Sucursal: brMap[m.__branch] || m.__branch, Tipo: m.type,
       Descripcion: m.description, Entra: m.amount_in || 0, Sale: m.amount_out || 0, Saldo: m.balance_after,
     }));
+  if (rows.length) rows.push({ Fecha: 'TOTAL', Sucursal: '', Tipo: '', Descripcion: '', Entra: round2(rows.reduce((n, r) => n + (Number(r.Entra) || 0), 0)), Sale: round2(rows.reduce((n, r) => n + (Number(r.Sale) || 0), 0)), Saldo: '' });
   return saveXLSX('reporte_caja.xlsx', [{ name: 'Caja', rows }]);
 }
 
@@ -816,6 +871,7 @@ async function repExpenses(f = {}) {
       Fecha: fmtDateTime(e.datetime), Sucursal: brMap[e.__branch] || e.__branch, Categoria: e.category,
       Descripcion: e.description, Medio: e.payment_method_id, Monto: e.amount,
     }));
+  if (rows.length) rows.push({ Fecha: 'TOTAL', Sucursal: '', Categoria: '', Descripcion: '', Medio: '', Monto: round2(rows.reduce((n, r) => n + (Number(r.Monto) || 0), 0)) });
   return saveXLSX('reporte_gastos.xlsx', [{ name: 'Gastos', rows }]);
 }
 
@@ -829,17 +885,21 @@ async function repPnl() {
   return saveXLSX('reporte_pnl.xlsx', [{ name: 'P&L mensual', rows }]);
 }
 
-async function repInventory() {
+async function repInventory(f = {}) {
   const [products, stocks, categories, brands, suppliers, branches] = await Promise.all([
     Products.list(), Products.listStock(), getAll('categories'), getAll('brands'), getAll('suppliers'), getBranches(),
   ]);
   const catMap = Object.fromEntries((categories || []).map(c => [c.id, c.name]));
   const brMap = Object.fromEntries((brands || []).map(b => [b.id, b.name]));
   const spMap = Object.fromEntries((suppliers || []).map(s => [s.id, s.name]));
-  const rows = (products || []).map(p => {
+  let prods = (products || []);
+  if (f.supplierId) prods = prods.filter(p => String(p.supplier_id) === String(f.supplierId));
+  const rows = prods.map(p => {
     const row = {
       Codigo: p.code, Nombre: p.name, Categoria: catMap[p.category_id] || '', Marca: brMap[p.brand_id] || '',
-      Proveedor: spMap[p.supplier_id] || '', Costo: p.cost, Margen: p.margin_pct, Precio: p.price, MELI: p.published_meli ? 'Sí' : 'No',
+      Proveedor: spMap[p.supplier_id] || '', Costo: p.cost,
+      'Gan. unit.': round2((Number(p.price) || 0) - (Number(p.cost) || 0)), 'Margen %': p.margin_pct,
+      Precio: p.price, MELI: p.published_meli ? 'Sí' : 'No',
     };
     let total = 0;
     for (const b of (branches || [])) {
@@ -848,10 +908,22 @@ async function repInventory() {
       total += s?.qty || 0;
     }
     row.StockTotal = total;
-    row.ValorizacionCosto = total * (Number(p.cost) || 0);
-    row.ValorizacionVenta = total * (Number(p.price) || 0);
+    row.ValorizacionCosto = round2(total * (Number(p.cost) || 0));
+    row.ValorizacionVenta = round2(total * (Number(p.price) || 0));
+    row['Gan. potencial'] = round2(row.ValorizacionVenta - row.ValorizacionCosto);
     return row;
   });
+  const granCosto = round2(rows.reduce((n, r) => n + (Number(r.ValorizacionCosto) || 0), 0));
+  for (const r of rows) r['Part. % valorizado'] = granCosto ? round2((r.ValorizacionCosto / granCosto) * 100) : 0;
+  rows.sort((a, b) => b.ValorizacionCosto - a.ValorizacionCosto);
+  if (rows.length) {
+    const t = rows.reduce((a, r) => { a.StockTotal += r.StockTotal; a.VC = round2(a.VC + (Number(r.ValorizacionCosto) || 0)); a.VV = round2(a.VV + (Number(r.ValorizacionVenta) || 0)); a.GP = round2(a.GP + (Number(r['Gan. potencial']) || 0)); return a; }, { StockTotal: 0, VC: 0, VV: 0, GP: 0 });
+    const totalRow = { Codigo: '', Nombre: 'TOTAL', Categoria: '', Marca: '', Proveedor: '', Costo: '', 'Gan. unit.': '', 'Margen %': '', Precio: '', MELI: '' };
+    for (const b of (branches || [])) totalRow[b.name] = '';
+    totalRow.StockTotal = t.StockTotal; totalRow.ValorizacionCosto = t.VC; totalRow.ValorizacionVenta = t.VV;
+    totalRow['Gan. potencial'] = t.GP; totalRow['Part. % valorizado'] = 100;
+    rows.push(totalRow);
+  }
   return saveXLSX('reporte_inventario.xlsx', [{ name: 'Inventario', rows }]);
 }
 
@@ -906,9 +978,15 @@ async function repStockByCat() {
     byCat[cid].price += total * (Number(p.price) || 0);
     byCat[cid].items += 1;
   }
+  const granCosto = round2(Object.values(byCat).reduce((n, v) => n + (v.cost || 0), 0));
   const rows = Object.entries(byCat).map(([c, v]) => ({
-    Categoria: catMap[c] || c, SKUs: v.items, Unidades: v.qty, ValorCosto: v.cost, ValorVenta: v.price, MargenPot: v.price - v.cost,
-  }));
+    Categoria: catMap[c] || c, SKUs: v.items, Unidades: v.qty, ValorCosto: round2(v.cost), ValorVenta: round2(v.price),
+    MargenPot: round2(v.price - v.cost), 'Part. % valorizado': granCosto ? round2((v.cost / granCosto) * 100) : 0,
+  })).sort((a, b) => b.ValorCosto - a.ValorCosto);
+  if (rows.length) {
+    const t = rows.reduce((a, r) => { a.SKUs += r.SKUs; a.Unidades += r.Unidades; a.VC = round2(a.VC + r.ValorCosto); a.VV = round2(a.VV + r.ValorVenta); return a; }, { SKUs: 0, Unidades: 0, VC: 0, VV: 0 });
+    rows.push({ Categoria: 'TOTAL', SKUs: t.SKUs, Unidades: t.Unidades, ValorCosto: t.VC, ValorVenta: t.VV, MargenPot: round2(t.VV - t.VC), 'Part. % valorizado': 100 });
+  }
   return saveXLSX('reporte_stock_por_categoria.xlsx', [{ name: 'Stock por categoría', rows }]);
 }
 
@@ -920,6 +998,7 @@ async function repChecks(f = {}) {
     Numero: c.number, Proveedor: spMap[c.supplier_id] || '', Banco: c.bank || '',
     Emision: fmtDate(c.issued_at), Vence: fmtDate(c.due_at), Monto: c.amount, Estado: c.status, Nota: c.note || '',
   }));
+  if (rows.length) rows.push({ Numero: 'TOTAL', Proveedor: '', Banco: '', Emision: '', Vence: '', Monto: round2(rows.reduce((n, r) => n + (Number(r.Monto) || 0), 0)), Estado: '', Nota: '' });
   return saveXLSX('reporte_cheques.xlsx', [{ name: 'Cheques', rows }]);
 }
 
@@ -939,6 +1018,7 @@ async function repEmployees() {
       PagoEstimado: Number((horas * (e.hourlyRate || 0)).toFixed(2)),
     };
   });
+  if (rows.length) rows.push({ Nombre: 'TOTAL', Sucursal: '', Rol: '', Activo: '', HsMes: round2(rows.reduce((n, r) => n + (Number(r.HsMes) || 0), 0)), RateHora: '', PagoEstimado: round2(rows.reduce((n, r) => n + (Number(r.PagoEstimado) || 0), 0)) });
   return saveXLSX(`reporte_empleados_${month}.xlsx`, [{ name: month, rows }]);
 }
 
