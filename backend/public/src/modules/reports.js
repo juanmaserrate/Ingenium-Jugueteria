@@ -81,6 +81,7 @@ async function runReport(id, btn) {
     if (!filters) return; // canceló
   }
   if (btn) btn.classList.add('opacity-60', 'pointer-events-none');
+  wantColumnFilter = !!filters?.columnFilter;
   try {
     if (filters?.branchesSeparate) {
       // "Las dos sucursales" → una exportación por sucursal, en archivos separados.
@@ -108,16 +109,20 @@ async function runReport(id, btn) {
   } finally {
     if (btn) btn.classList.remove('opacity-60', 'pointer-events-none');
     batchExport = null;
+    wantColumnFilter = false;
   }
 }
 
 // Cuando se exporta UNA sucursal dentro de un lote (elegiste "las dos" → un archivo por
 // sucursal), esto lleva el sufijo del nombre; en ese modo NO se abre el diálogo de columnas.
 let batchExport = null;
+// Sólo si el usuario tildó "Filtrar por columnas antes de bajar" se abre ese diálogo.
+// Por defecto FALSE → la descarga es directa (no se frena con un diálogo extra).
+let wantColumnFilter = false;
 
-// Exporta sólo si hay filas. En modo normal ofrece FILTRAR POR COLUMNA (opcional) antes de
-// bajar el XLSX. En modo lote (batchExport) baja directo con el sufijo de la sucursal.
-// Devuelve el total exportado, 0 si no quedaron filas, o null si canceló.
+// Exporta sólo si hay filas. Por defecto baja directo. Si wantColumnFilter, ofrece filtrar por
+// columna antes. En modo lote (batchExport) baja directo con el sufijo de la sucursal.
+// Devuelve el total exportado, 0 si no quedaron filas, o null si canceló el diálogo.
 async function saveXLSX(filename, sheets) {
   const total = sheets.reduce((n, s) => n + (s.rows?.length || 0), 0);
   if (total === 0) return 0;
@@ -126,6 +131,7 @@ async function saveXLSX(filename, sheets) {
     exportToXLSX({ filename: fname, sheets });
     return total;
   }
+  if (!wantColumnFilter) { exportToXLSX({ filename, sheets }); return total; }
   const filters = await pickColumnFilters(sheets, filename);
   if (filters === null) return null; // canceló
   const filtered = applyColumnFilters(sheets, filters);
@@ -574,6 +580,11 @@ function pickFilters(fields = [], title = 'Filtros del reporte') {
       <label class="col-span-2 flex items-center gap-2 mt-1 text-sm">
         <input id="rf-onlycust" type="checkbox" checked class="w-4 h-4" />
         <span>Solo compras con cliente identificado</span></label>`);
+    // Filtro por columnas: OPCIONAL. Por defecto desactivado → al tocar Generar baja directo.
+    parts.push(`
+      <label class="col-span-2 flex items-center gap-2 mt-1 text-sm border-t border-[#fff1e6] pt-3">
+        <input id="rf-colfilter" type="checkbox" class="w-4 h-4" />
+        <span>Filtrar por columnas antes de bajar (opcional)</span></label>`);
     openModal({
       title, size: 'md',
       bodyHTML: `<div class="grid grid-cols-2 gap-3">${parts.join('')}</div>
@@ -614,6 +625,7 @@ function pickFilters(fields = [], title = 'Filtros del reporte') {
             source: has('source') ? (g('#rf-source').value || undefined) : undefined,
             term: has('customer') ? g('#rf-term').value.trim().toLowerCase() : '',
             onlyWithCustomer: has('customer') ? g('#rf-onlycust').checked : false,
+            columnFilter: !!(g('#rf-colfilter') && g('#rf-colfilter').checked),
           });
         });
       },
