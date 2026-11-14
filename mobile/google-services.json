@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1024813679515",
+    "project_id": "notificaciones-ingenium",
+    "storage_bucket": "notificaciones-ingenium.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1024813679515:android:fbc1697b9a68160923173e",
+        "android_client_info": {
+          "package_name": "com.ingenium.ventas"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD1kKhi3EgM7ycTPb7ka6ksT47oodYZ2kk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

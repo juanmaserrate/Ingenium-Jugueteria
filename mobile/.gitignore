@@ -10,3 +10,7 @@ npm-debug.*
 *.orig.*
 web-build/
 .DS_Store
+
+# Clave privada de servicio FCM (SECRETA - nunca commitear)
+fcm/
+service-account*.json
