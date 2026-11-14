@@ -11,11 +11,14 @@
     ],
     "android": {
       "package": "com.ingenium.ventas",
-      "versionCode": 2,
+      "versionCode": 3,
       "googleServicesFile": "./google-services.json",
       "permissions": [
         "POST_NOTIFICATIONS"
-      ]
+      ],
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
     },
     "plugins": [
       "expo-notifications"
@@ -26,6 +29,10 @@
         "projectId": "433c4af1-d22d-47b9-b02c-da859908ff69"
       }
     },
-    "owner": "juanmaserrate1"
+    "owner": "juanmaserrate1",
+    "updates": {
+      "url": "https://u.expo.dev/433c4af1-d22d-47b9-b02c-da859908ff69"
+    },
+    "ios": {}
   }
 }
