@@ -6,18 +6,25 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "scheme": "ingenium",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "android": {
       "package": "com.ingenium.ventas",
       "versionCode": 1,
-      "permissions": ["POST_NOTIFICATIONS"]
+      "permissions": [
+        "POST_NOTIFICATIONS"
+      ]
     },
-    "plugins": ["expo-notifications"],
+    "plugins": [
+      "expo-notifications"
+    ],
     "extra": {
       "apiBase": "https://ingenium-jugueteria-production-0632.up.railway.app",
       "eas": {
-        "projectId": "REEMPLAZAR_CON_EAS_INIT"
+        "projectId": "433c4af1-d22d-47b9-b02c-da859908ff69"
       }
-    }
+    },
+    "owner": "juanmaserrate1"
   }
 }
