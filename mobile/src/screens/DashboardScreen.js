@@ -5,7 +5,7 @@ import { COLORS } from '../config';
 
 const money = (n) => '$' + Number(n || 0).toLocaleString('es-AR');
 
-export default function DashboardScreen({ session, onLogout, onOpenSales }) {
+export default function DashboardScreen({ session, onLogout, onOpenSales, onOpenHistory }) {
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -63,6 +63,11 @@ export default function DashboardScreen({ session, onLogout, onOpenSales }) {
 
       {err ? <Text style={s.err}>{err}</Text> : null}
 
+      <TouchableOpacity activeOpacity={0.85} onPress={() => onOpenHistory && onOpenHistory()} style={s.histBtn}>
+        <Text style={s.histTxt}>📊  Ver historial · por día y por mes</Text>
+        <Text style={s.histArrow}>›</Text>
+      </TouchableOpacity>
+
       {cards.map((c) => {
         const hoy = c.d?.today || { total: 0, count: 0 };
         const mes = c.d?.month || { total: 0, count: 0 };
@@ -101,6 +106,9 @@ const s = StyleSheet.create({
   muted: { color: COLORS.muted, fontSize: 12 },
   logout: { color: COLORS.red, fontWeight: '800' },
   err: { color: COLORS.red, fontWeight: '700', marginBottom: 12 },
+  histBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: COLORS.card, borderRadius: 14, borderWidth: 1, borderColor: COLORS.line, paddingVertical: 14, paddingHorizontal: 16, marginBottom: 14 },
+  histTxt: { color: COLORS.dark, fontWeight: '800' },
+  histArrow: { color: COLORS.red, fontWeight: '900', fontSize: 18 },
   card: { backgroundColor: COLORS.card, borderRadius: 18, padding: 18, marginBottom: 14, borderWidth: 1, borderColor: COLORS.line },
   cardTotal: { backgroundColor: COLORS.red, borderColor: COLORS.red },
   cardTitle: { fontSize: 18, fontWeight: '900', color: COLORS.dark, marginBottom: 8 },

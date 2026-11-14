@@ -49,6 +49,14 @@ export const getSalesToday = (token, branchId) => {
   return req(`/api/sales?${qs.toString()}`, { token });
 };
 
+// Series de ventas por día (30) y por mes (12), opcionalmente de una sucursal.
+export const getSeries = (token, branchId) => {
+  const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  const qs = new URLSearchParams({ today, days: '30', months: '12' });
+  if (branchId) qs.set('branchId', branchId);
+  return req(`/api/metrics/series?${qs.toString()}`, { token });
+};
+
 // --- Push ---
 export const registerPush = (token, pushToken) =>
   req('/api/push/register', { method: 'POST', token, body: { token: pushToken, platform: 'android' } });

@@ -43,6 +43,71 @@ function branchWhere(branchId?: string): Prisma.SaleWhereInput {
 
 const confirmed = { status: 'confirmed' as const };
 
+// fecha AR (UTC-3) a 'YYYY-MM-DD' / 'YYYY-MM'
+const arKey = (d: Date, len: 7 | 10) => new Date(d.getTime() - 3 * 3600 * 1000).toISOString().slice(0, len);
+
+// ---------- SERIES (ventas por día y por mes) ----------
+// Liviano: se usa SOLO cuando la app móvil abre la pantalla de historial.
+// Resta señas por bucket para coincidir con las tarjetas del panel.
+export async function getSeries(params: { branchId?: string; today: string; days?: number; months?: number }) {
+  const { branchId, today } = params;
+  const days = Math.min(Math.max(params.days ?? 30, 1), 120);
+  const months = Math.min(Math.max(params.months ?? 12, 1), 24);
+  const bw = branchWhere(branchId);
+  const tr = dayRange(today);
+
+  // inicio de la ventana diaria y mensual; tomamos el más temprano
+  const dayFrom = new Date(tr.lt.getTime() - days * 24 * 3600 * 1000);
+  const [y, m] = today.slice(0, 7).split('-').map(Number);
+  let sy = y, sm = m - (months - 1);
+  while (sm <= 0) { sm += 12; sy--; }
+  const monthFrom = new Date(`${sy}-${String(sm).padStart(2, '0')}-01T00:00:00.000${AR}`);
+  const from = dayFrom < monthFrom ? dayFrom : monthFrom;
+
+  const [sales, senas] = await Promise.all([
+    prisma.sale.findMany({
+      where: { ...bw, ...confirmed, datetime: { gte: from, lt: tr.lt } },
+      select: { datetime: true, total: true },
+    }),
+    prisma.salePayment.findMany({
+      where: { methodId: 'sena', sale: { ...bw, ...confirmed, datetime: { gte: from, lt: tr.lt } } },
+      select: { amount: true, sale: { select: { datetime: true } } },
+    }),
+  ]);
+
+  const add = (map: Record<string, { total: number; count: number }>, key: string, total: number, countInc: number) => {
+    const b = (map[key] ||= { total: 0, count: 0 });
+    b.total += total; b.count += countInc;
+  };
+  const dMap: Record<string, { total: number; count: number }> = {};
+  const mMap: Record<string, { total: number; count: number }> = {};
+  for (const s of sales) {
+    add(dMap, arKey(s.datetime, 10), s.total || 0, 1);
+    add(mMap, arKey(s.datetime, 7), s.total || 0, 1);
+  }
+  for (const p of senas) {
+    const dt = p.sale?.datetime; if (!dt) continue;
+    add(dMap, arKey(dt, 10), -(p.amount || 0), 0);
+    add(mMap, arKey(dt, 7), -(p.amount || 0), 0);
+  }
+
+  // armar listas completas (con ceros) de más viejo a más nuevo
+  const daily = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const key = arKey(new Date(tr.gte.getTime() - i * 24 * 3600 * 1000), 10);
+    const b = dMap[key] || { total: 0, count: 0 };
+    daily.push({ day: key, total: Number(b.total.toFixed(2)), count: b.count });
+  }
+  const monthly = [];
+  for (let i = months - 1; i >= 0; i--) {
+    let yy = y, mm = m - i; while (mm <= 0) { mm += 12; yy--; }
+    const key = `${yy}-${String(mm).padStart(2, '0')}`;
+    const b = mMap[key] || { total: 0, count: 0 };
+    monthly.push({ month: key, total: Number(b.total.toFixed(2)), count: b.count });
+  }
+  return { daily, monthly };
+}
+
 // ---------- DASHBOARD ----------
 export async function getDashboard(params: { branchId?: string; month: string; today: string }) {
   const { branchId, month, today } = params;

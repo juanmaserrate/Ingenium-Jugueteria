@@ -5,6 +5,7 @@ import * as Notifications from 'expo-notifications';
 import LoginScreen from './src/screens/LoginScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
 import SalesScreen from './src/screens/SalesScreen';
+import HistoryScreen from './src/screens/HistoryScreen';
 import { loadSession, saveSession, clearSession } from './src/storage';
 import { registerForPush } from './src/push';
 import { registerPush } from './src/api';
@@ -66,11 +67,17 @@ export default function App() {
           name={view.name}
           onBack={() => setView({ screen: 'dash' })}
         />
+      ) : view.screen === 'history' ? (
+        <HistoryScreen
+          session={session}
+          onBack={() => setView({ screen: 'dash' })}
+        />
       ) : (
         <DashboardScreen
           session={session}
           onLogout={handleLogout}
           onOpenSales={(branchId, name) => setView({ screen: 'sales', branchId, name })}
+          onOpenHistory={() => setView({ screen: 'history' })}
         />
       )}
     </>

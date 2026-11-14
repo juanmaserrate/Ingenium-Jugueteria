@@ -1,18 +1,23 @@
 {
   "expo": {
-    "name": "Ingenium Ventas",
+    "name": "Ingenium",
     "slug": "ingenium-ventas",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "scheme": "ingenium",
+    "icon": "./assets/icon.png",
     "assetBundlePatterns": [
       "**/*"
     ],
     "android": {
       "package": "com.ingenium.ventas",
-      "versionCode": 3,
+      "versionCode": 4,
       "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#E3CEBA"
+      },
       "permissions": [
         "POST_NOTIFICATIONS"
       ],

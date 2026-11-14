@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { getDashboard, getBalance, getProfits, getContribution, getAudit } from '../services/metrics.js';
+import { getDashboard, getSeries, getBalance, getProfits, getContribution, getAudit } from '../services/metrics.js';
 import { getStockSnapshot, listStockSnapshots } from '../services/stockSnapshot.js';
 import { ValidationError } from '../utils/errors.js';
 import { requireRole } from '../auth/jwt.js';
@@ -19,6 +19,18 @@ export async function metricsRoutes(app: FastifyInstance) {
     const today = q.today || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
     const month = q.month || today.slice(0, 7);
     return getDashboard({ branchId: scopedBranch(req, q), month, today });
+  });
+
+  // Series de ventas por día y por mes (para el historial de la app móvil).
+  app.get('/metrics/series', async (req) => {
+    const q = req.query as { branchId?: string; today?: string; days?: string; months?: string };
+    const today = q.today || new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    return getSeries({
+      branchId: scopedBranch(req, q),
+      today,
+      days: q.days ? Number(q.days) : undefined,
+      months: q.months ? Number(q.months) : undefined,
+    });
   });
 
   // Stock inicial (al comienzo del período) vs final (al cierre), por variante+sucursal.
