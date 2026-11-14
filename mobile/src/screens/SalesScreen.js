@@ -33,7 +33,10 @@ export default function SalesScreen({ session, branchId, name, onBack }) {
 
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
 
-  const totalDia = sales.reduce((n, s) => n + (s.total || 0), 0);
+  // Las señas usadas como pago NO cuentan como facturado (la plata ya entró al
+  // crear la seña). Se descuentan, igual que en las tarjetas del panel.
+  const senaOf = (s) => (s.payments || []).filter((p) => p.methodId === 'sena').reduce((n, p) => n + (p.amount || 0), 0);
+  const totalDia = sales.reduce((n, s) => n + (s.total || 0) - senaOf(s), 0);
 
   if (loading) return <View style={s.center}><ActivityIndicator size="large" color={COLORS.red} /></View>;
 

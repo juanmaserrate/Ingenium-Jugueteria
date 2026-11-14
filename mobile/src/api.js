@@ -31,9 +31,20 @@ export const getDashboard = (token, branchId) =>
   req(`/api/metrics/dashboard${branchId ? `?branchId=${encodeURIComponent(branchId)}` : ''}`, { token });
 
 // Ventas confirmadas de HOY (con sus ítems), opcionalmente de una sucursal.
+// IMPORTANTE: los límites del día se mandan CON offset de Argentina (-03:00) para
+// que el backend tome exactamente el mismo rango que el panel (00:00 a 24:00 AR).
+// Sin el offset, new Date() del servidor (UTC) corría la ventana 3 hs y los totales
+// no coincidían con las tarjetas del panel.
 export const getSalesToday = (token, branchId) => {
-  const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10); // día en AR (UTC-3)
-  const qs = new URLSearchParams({ status: 'confirmed', from: `${today}T00:00:00`, to: `${today}T23:59:59`, limit: '300' });
+  const arNow = new Date(Date.now() - 3 * 3600 * 1000);
+  const today = arNow.toISOString().slice(0, 10);                               // hoy en AR
+  const tomorrow = new Date(arNow.getTime() + 24 * 3600 * 1000).toISOString().slice(0, 10); // mañana en AR
+  const qs = new URLSearchParams({
+    status: 'confirmed',
+    from: `${today}T00:00:00.000-03:00`,
+    to: `${tomorrow}T00:00:00.000-03:00`, // exclusivo (lt), = fin del día AR
+    limit: '300',
+  });
   if (branchId) qs.set('branchId', branchId);
   return req(`/api/sales?${qs.toString()}`, { token });
 };
