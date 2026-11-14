@@ -6,6 +6,9 @@ import { Platform } from 'react-native';
 // Mostrar la notificación aunque la app esté abierta.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
+    // claves nuevas (SDK 53+) y las viejas, para funcionar en cualquier versión
+    shouldShowBanner: true,
+    shouldShowList: true,
     shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
