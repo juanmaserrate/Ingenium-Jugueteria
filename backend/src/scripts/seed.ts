@@ -177,6 +177,28 @@ export async function runSeed() {
   } catch (err) {
     console.warn('[seed] no se pudo asegurar stock_snapshot:', err);
   }
+  // Tabla de tokens push de la app móvil (Expo). Idempotente; coincide con el modelo PushToken.
+  try {
+    await prisma.$executeRawUnsafe(
+      `CREATE TABLE IF NOT EXISTS "push_tokens" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "token" TEXT NOT NULL,
+        "user_id" TEXT,
+        "branch_id" TEXT,
+        "platform" TEXT,
+        "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "last_seen_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "push_tokens_token_key" ON "push_tokens" ("token")`,
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "push_tokens_branch_id_idx" ON "push_tokens" ("branch_id")`,
+    );
+  } catch (err) {
+    console.warn('[seed] no se pudo asegurar push_tokens:', err);
+  }
 
   for (const b of BRANCHES) {
     await prisma.branch.upsert({

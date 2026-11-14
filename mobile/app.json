@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "Ingenium Ventas",
+    "slug": "ingenium-ventas",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "ingenium",
+    "assetBundlePatterns": ["**/*"],
+    "android": {
+      "package": "com.ingenium.ventas",
+      "versionCode": 1,
+      "permissions": ["POST_NOTIFICATIONS"]
+    },
+    "plugins": ["expo-notifications"],
+    "extra": {
+      "apiBase": "https://ingenium-jugueteria-production-0632.up.railway.app",
+      "eas": {
+        "projectId": "REEMPLAZAR_CON_EAS_INIT"
+      }
+    }
+  }
+}

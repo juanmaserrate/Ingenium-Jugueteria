@@ -289,7 +289,19 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
     await enqueueSync('pack_tn_order', { tnOrderId: input.tnOrderId, saleId: sale });
   }
 
-  return getSale(sale);
+  const saved = await getSale(sale);
+
+  // Aviso push a la app móvil (best-effort, no frena la venta ni espera a Expo).
+  try {
+    const { notifySalePush } = await import('./push.js');
+    const br = await prisma.branch.findUnique({ where: { id: input.branchId } }).catch(() => null);
+    void notifySalePush({
+      number: (saved as any)?.number ?? '', branchName: br?.name || input.branchId,
+      total: (saved as any)?.total ?? total, source: input.source, itemsCount: input.items.length,
+    });
+  } catch { /* no fatal */ }
+
+  return saved;
 }
 
 export async function cancelSale(

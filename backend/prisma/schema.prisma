@@ -954,3 +954,18 @@ model KvItem {
   @@index([collection])
   @@map("kv_items")
 }
+
+// Tokens de notificaciones push (Expo) de la app móvil. Cada dispositivo que inicia
+// sesión registra su ExponentPushToken; al confirmarse una venta se le envía un aviso.
+model PushToken {
+  id         String   @id
+  token      String   @unique
+  userId     String?  @map("user_id")
+  branchId   String?  @map("branch_id")
+  platform   String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  lastSeenAt DateTime @updatedAt @map("last_seen_at")
+
+  @@index([branchId])
+  @@map("push_tokens")
+}
