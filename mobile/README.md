@@ -5,6 +5,7 @@ App nativa (React Native + Expo) para ver las ventas de **Lomas**, **Banfield** 
 ## Qué hace
 - **Login** con sucursal + usuario + PIN (el mismo del sistema).
 - **Panel**: tarjeta "Las dos (juntas)" + una por sucursal (admin). Muestra ventas de **hoy** (monto y cantidad) y del **mes**. Se refresca solo cada 30 s y deslizando.
+- **Detalle**: tocá una tarjeta y ves las **ventas de hoy con sus ítems** (producto, cantidad, importe, hora, canal y cliente).
 - **Push**: al confirmarse una venta en cualquier sucursal, llega una notificación (`Venta #123 · Banfield · $X · N ítems`).
 
 > El encargado (no admin) ve solo su sucursal. El dueño (admin) ve las dos y el consolidado.

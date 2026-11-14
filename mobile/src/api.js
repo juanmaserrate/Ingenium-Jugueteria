@@ -30,6 +30,14 @@ export const loginPin = ({ branchId, userId, pin }) =>
 export const getDashboard = (token, branchId) =>
   req(`/api/metrics/dashboard${branchId ? `?branchId=${encodeURIComponent(branchId)}` : ''}`, { token });
 
+// Ventas confirmadas de HOY (con sus ítems), opcionalmente de una sucursal.
+export const getSalesToday = (token, branchId) => {
+  const today = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10); // día en AR (UTC-3)
+  const qs = new URLSearchParams({ status: 'confirmed', from: `${today}T00:00:00`, to: `${today}T23:59:59`, limit: '300' });
+  if (branchId) qs.set('branchId', branchId);
+  return req(`/api/sales?${qs.toString()}`, { token });
+};
+
 // --- Push ---
 export const registerPush = (token, pushToken) =>
   req('/api/push/register', { method: 'POST', token, body: { token: pushToken, platform: 'android' } });

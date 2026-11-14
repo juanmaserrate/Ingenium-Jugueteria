@@ -5,7 +5,7 @@ import { COLORS } from '../config';
 
 const money = (n) => '$' + Number(n || 0).toLocaleString('es-AR');
 
-export default function DashboardScreen({ session, onLogout }) {
+export default function DashboardScreen({ session, onLogout, onOpenSales }) {
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -67,7 +67,12 @@ export default function DashboardScreen({ session, onLogout }) {
         const hoy = c.d?.today || { total: 0, count: 0 };
         const mes = c.d?.month || { total: 0, count: 0 };
         return (
-          <View key={c.key} style={[s.card, c.total && s.cardTotal]}>
+          <TouchableOpacity
+            key={c.key}
+            activeOpacity={0.85}
+            onPress={() => onOpenSales && onOpenSales(c.total ? '' : c.key, c.name)}
+            style={[s.card, c.total && s.cardTotal]}
+          >
             <Text style={[s.cardTitle, c.total && { color: '#fff' }]}>{c.name}</Text>
             <View style={s.line}>
               <Text style={[s.lblHoy, c.total && { color: '#ffd9d3' }]}>HOY</Text>
@@ -78,11 +83,12 @@ export default function DashboardScreen({ session, onLogout }) {
               <Text style={[s.muted, c.total && { color: '#ffd9d3' }]}>Mes</Text>
               <Text style={[s.monthVal, c.total && { color: '#fff' }]}>{money(mes.total)} · {mes.count} vta.</Text>
             </View>
-          </View>
+            <Text style={[s.tapHint, c.total && { color: '#ffd9d3' }]}>Ver ventas de hoy ›</Text>
+          </TouchableOpacity>
         );
       })}
 
-      <Text style={s.foot}>Deslizá para actualizar · se refresca solo cada 30 s</Text>
+      <Text style={s.foot}>Tocá una tarjeta para ver los ítems vendidos · se refresca solo cada 30 s</Text>
     </ScrollView>
   );
 }
@@ -104,5 +110,6 @@ const s = StyleSheet.create({
   sub: { color: COLORS.muted, marginTop: 2 },
   monthRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: COLORS.line },
   monthVal: { fontWeight: '800', color: COLORS.dark },
+  tapHint: { marginTop: 10, color: COLORS.red, fontWeight: '800', fontSize: 12, textAlign: 'right' },
   foot: { textAlign: 'center', color: COLORS.muted, fontSize: 12, marginTop: 8 },
 });

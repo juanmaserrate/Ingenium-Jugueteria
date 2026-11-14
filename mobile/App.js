@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
 import LoginScreen from './src/screens/LoginScreen';
 import DashboardScreen from './src/screens/DashboardScreen';
+import SalesScreen from './src/screens/SalesScreen';
 import { loadSession, saveSession, clearSession } from './src/storage';
 import { registerForPush } from './src/push';
 import { registerPush } from './src/api';
@@ -12,6 +13,7 @@ import { COLORS } from './src/config';
 export default function App() {
   const [session, setSession] = useState(null);
   const [booting, setBooting] = useState(true);
+  const [view, setView] = useState({ screen: 'dash' });
   const notifSub = useRef(null);
 
   useEffect(() => {
@@ -40,6 +42,7 @@ export default function App() {
 
   const handleLogout = async () => {
     await clearSession();
+    setView({ screen: 'dash' });
     setSession(null);
   };
 
@@ -54,9 +57,22 @@ export default function App() {
   return (
     <>
       <StatusBar style="dark" />
-      {session
-        ? <DashboardScreen session={session} onLogout={handleLogout} />
-        : <LoginScreen onLogin={handleLogin} />}
+      {!session ? (
+        <LoginScreen onLogin={handleLogin} />
+      ) : view.screen === 'sales' ? (
+        <SalesScreen
+          session={session}
+          branchId={view.branchId}
+          name={view.name}
+          onBack={() => setView({ screen: 'dash' })}
+        />
+      ) : (
+        <DashboardScreen
+          session={session}
+          onLogout={handleLogout}
+          onOpenSales={(branchId, name) => setView({ screen: 'sales', branchId, name })}
+        />
+      )}
     </>
   );
 }
