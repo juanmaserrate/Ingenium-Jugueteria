@@ -64,16 +64,12 @@ export async function getSeries(params: { branchId?: string; today: string; days
   const monthFrom = new Date(`${sy}-${String(sm).padStart(2, '0')}-01T00:00:00.000${AR}`);
   const from = dayFrom < monthFrom ? dayFrom : monthFrom;
 
-  const [sales, senas] = await Promise.all([
-    prisma.sale.findMany({
-      where: { ...bw, ...confirmed, datetime: { gte: from, lt: tr.lt } },
-      select: { datetime: true, total: true },
-    }),
-    prisma.salePayment.findMany({
-      where: { methodId: 'sena', sale: { ...bw, ...confirmed, datetime: { gte: from, lt: tr.lt } } },
-      select: { amount: true, sale: { select: { datetime: true } } },
-    }),
-  ]);
+  // Total facturado bruto (suma de total de ventas, SIN descontar señas), igual que
+  // el box "Total facturado" del módulo Ventas y que las tarjetas de la app.
+  const sales = await prisma.sale.findMany({
+    where: { ...bw, ...confirmed, datetime: { gte: from, lt: tr.lt } },
+    select: { datetime: true, total: true },
+  });
 
   const add = (map: Record<string, { total: number; count: number }>, key: string, total: number, countInc: number) => {
     const b = (map[key] ||= { total: 0, count: 0 });
@@ -84,11 +80,6 @@ export async function getSeries(params: { branchId?: string; today: string; days
   for (const s of sales) {
     add(dMap, arKey(s.datetime, 10), s.total || 0, 1);
     add(mMap, arKey(s.datetime, 7), s.total || 0, 1);
-  }
-  for (const p of senas) {
-    const dt = p.sale?.datetime; if (!dt) continue;
-    add(dMap, arKey(dt, 10), -(p.amount || 0), 0);
-    add(mMap, arKey(dt, 7), -(p.amount || 0), 0);
   }
 
   // armar listas completas (con ceros) de más viejo a más nuevo
@@ -247,9 +238,12 @@ export async function getDashboard(params: { branchId?: string; month: string; t
   const monthTotal = (monthAggR._sum.total ?? 0) - monthSena;
   const monthCount = monthAggR._count ?? 0;
   return {
-    today: { total: (todayAgg._sum.total ?? 0) - todaySena, count: todayAgg._count ?? 0 },
+    // `total` = neto de señas (lo que usa el panel web). `facturado` = total facturado
+    // bruto (suma de total de ventas, SIN descontar señas), igual que el box "Total
+    // facturado" del módulo Ventas; es lo que consume la app móvil.
+    today: { total: (todayAgg._sum.total ?? 0) - todaySena, facturado: todayAgg._sum.total ?? 0, count: todayAgg._count ?? 0 },
     yesterday: { total: yesterdayAgg._sum.total ?? 0 },
-    month: { total: monthTotal, count: monthCount, avgTicket: monthCount ? monthTotal / monthCount : 0 },
+    month: { total: monthTotal, facturado: monthAggR._sum.total ?? 0, count: monthCount, avgTicket: monthCount ? monthTotal / monthCount : 0 },
     prevMonth: { total: prevMonthAggR._sum.total ?? 0, count: prevMonthAggR._count ?? 0 },
     cash: { balance: cashBalance, movements: cashAgg._count ?? 0 },
     inventory: { valueCost: invValueCost, valueSale: invValueSale, units: invUnits, outOfStock, lowStock },

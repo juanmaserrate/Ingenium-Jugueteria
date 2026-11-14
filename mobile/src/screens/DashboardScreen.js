@@ -69,8 +69,12 @@ export default function DashboardScreen({ session, onLogout, onOpenSales, onOpen
       </TouchableOpacity>
 
       {cards.map((c) => {
-        const hoy = c.d?.today || { total: 0, count: 0 };
-        const mes = c.d?.month || { total: 0, count: 0 };
+        // `facturado` = total facturado bruto (sin descontar señas), igual que el
+        // box "Total facturado" del sistema. Fallback a `total` por compatibilidad.
+        const hoyD = c.d?.today || {};
+        const mesD = c.d?.month || {};
+        const hoy = { total: hoyD.facturado ?? hoyD.total ?? 0, count: hoyD.count ?? 0 };
+        const mes = { total: mesD.facturado ?? mesD.total ?? 0, count: mesD.count ?? 0 };
         return (
           <TouchableOpacity
             key={c.key}

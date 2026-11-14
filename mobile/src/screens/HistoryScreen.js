@@ -116,7 +116,7 @@ export default function HistoryScreen({ session, onBack }) {
           );
         })
       )}
-      <Text style={s.foot}>Se descuentan las señas, igual que en el panel · deslizá para refrescar</Text>
+      <Text style={s.foot}>Total facturado (igual que el panel) · deslizá para refrescar</Text>
     </ScrollView>
   );
 }
