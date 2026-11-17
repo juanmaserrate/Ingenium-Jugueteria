@@ -97,6 +97,11 @@ export class MlClient {
   getItem(itemId: string) { return this.req({ method: 'get', url: `/items/${itemId}` }); }
   updateItem(itemId: string, data: any) { return this.req({ method: 'put', url: `/items/${itemId}`, data }); }
   createItem(data: any) { return this.req({ method: 'post', url: '/items', data }); }
+  // Actualiza UNA variación sin tocar las demás (PUT /items/{id} con `variations` parcial
+  // BORRA las variaciones que no se mandan; este endpoint no).
+  updateItemVariation(itemId: string, variationId: string, data: any) {
+    return this.req({ method: 'put', url: `/items/${itemId}/variations/${variationId}`, data });
+  }
   // Publicaciones del vendedor (para detectar las que ya existen). Admite scan scroll.
   searchSellerItems(sellerId: string, params: Record<string, any> = {}) {
     return this.req({ method: 'get', url: `/users/${sellerId}/items/search`, params });

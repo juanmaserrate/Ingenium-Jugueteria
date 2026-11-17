@@ -10,7 +10,7 @@ import { confirmSale } from '../services/sales.js';
 import { buildCostMetaForMl } from '../services/paymentCost.js';
 import { maybeReconcileMl } from '../mercadolibre/webhooks.js';
 import { predictCategory, publishProduct } from '../mercadolibre/publish.js';
-import { buildBulkPlan } from '../mercadolibre/bulk.js';
+import { buildSyncPlan, applyLinks, ensureProductMapping, unlinkProduct, productMlStatus } from '../mercadolibre/syncExisting.js';
 import { ValidationError } from '../utils/errors.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -97,7 +97,8 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
     // --- Vinculación de publicaciones (Fase 1: stock) ---
     // Lista los mapeos actuales con nombre de producto/variante + stock publicado.
     r.get('/integrations/ml/mappings', adminOnly, async () => {
-      const maps = await prisma.variantMeliMapping.findMany({ orderBy: { createdAt: 'desc' } });
+      // Tope: tras sincronizar puede haber cientos; el detalle por producto está en Inventario.
+      const maps = await prisma.variantMeliMapping.findMany({ orderBy: { createdAt: 'desc' }, take: 150 });
       const out = [];
       for (const m of maps) {
         const v = await prisma.variant.findUnique({ where: { id: m.variantId }, include: { product: true } });
@@ -134,11 +135,7 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
         update: { mlItemId, mlVariationId: b.mlVariationId ?? null },
         create: { variantId, mlItemId, mlVariationId: b.mlVariationId ?? null },
       });
-      await prisma.productMeliMapping.upsert({
-        where: { productId: variant.productId },
-        update: { mlItemId },
-        create: { productId: variant.productId, mlItemId },
-      }).catch(() => { /* ml_item_id ya usado por otro producto → ignorar el mapeo a nivel producto */ });
+      await ensureProductMapping(variant.productId, mlItemId);
       await enqueueSync('ml_push_stock', { variantId }); // empuja el stock ya mismo
       return { ok: true, variantId, mlItemId };
     });
@@ -146,7 +143,13 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
     r.post('/integrations/ml/unlink', adminOnly, async (req, reply) => {
       const b = (req.body ?? {}) as { variantId?: string };
       if (!b.variantId) return reply.status(400).send({ error: 'Falta variantId' });
+      const variant = await prisma.variant.findUnique({ where: { id: b.variantId }, select: { productId: true } });
       await prisma.variantMeliMapping.deleteMany({ where: { variantId: b.variantId } });
+      if (variant) {
+        const sibs = await prisma.variant.findMany({ where: { productId: variant.productId }, select: { id: true } });
+        const left = await prisma.variantMeliMapping.count({ where: { variantId: { in: sibs.map((v) => v.id) } } });
+        if (left === 0) await unlinkProduct(variant.productId);
+      }
       return { ok: true };
     });
 
@@ -211,21 +214,42 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       return { ok: true, items: results, closed: results.filter((r2) => r2.closed).length, total: results.length };
     });
 
-    // Plan de publicación en LOTE por categoría (dry-run). No publica nada: arma el plan
-    // (ya vinculadas / a vincular por SKU o título / nuevas / salteadas) escaneando ML.
-    r.post('/integrations/ml/bulk-plan', adminOnly, async (req, reply) => {
-      const b = z.object({
-        categoryIds: z.array(z.string()).optional(),
-        subcategoryIds: z.array(z.string()).optional(),
-        includeZeroStock: z.boolean().optional(),
-      }).parse(req.body ?? {});
-      if (!b.categoryIds?.length && !b.subcategoryIds?.length) {
-        return reply.status(400).send({ error: 'Elegí al menos una categoría' });
-      }
+    // --- Sincronizar las publicaciones que YA existen en ML con el inventario ---
+    // Plan (no escribe nada): trae las publicaciones vigentes y propone el emparejamiento.
+    r.post('/integrations/ml/sync-plan', adminOnly, async (_req, reply) => {
       try {
-        return await buildBulkPlan(b);
+        return await buildSyncPlan();
       } catch (err: any) {
-        return reply.status(502).send({ error: 'plan_failed', details: err?.response?.data ?? err?.message });
+        return reply.status(502).send({ error: 'No se pudo leer Mercado Libre', details: err?.response?.data ?? err?.message });
+      }
+    });
+
+    // Aplica los vínculos confirmados (variante ↔ publicación/variación) y empuja el stock.
+    r.post('/integrations/ml/sync-apply', adminOnly, async (req) => {
+      const b = z.object({
+        links: z.array(z.object({
+          variantId: z.string(),
+          mlItemId: z.string(),
+          mlVariationId: z.string().nullable().optional(),
+        })).max(2000),
+      }).parse(req.body);
+      return applyLinks(b.links);
+    });
+
+    // Desvincula un producto de ML sin cerrar la publicación (deja de sincronizar stock).
+    r.post('/integrations/ml/unlink-product', adminOnly, async (req, reply) => {
+      const b = (req.body ?? {}) as { productId?: string };
+      if (!b.productId) return reply.status(400).send({ error: 'Falta productId' });
+      return unlinkProduct(b.productId);
+    });
+
+    // Estado en vivo de las publicaciones de un producto (stock sistema vs stock real en ML).
+    r.get('/integrations/ml/product-status/:productId', adminOnly, async (req, reply) => {
+      const { productId } = req.params as { productId: string };
+      try {
+        return await productMlStatus(productId);
+      } catch (err: any) {
+        return reply.status(502).send({ error: 'No se pudo consultar ML', details: err?.response?.data ?? err?.message });
       }
     });
 
@@ -261,6 +285,7 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
     });
 
     r.get('/ml-orders/pending-count', async () => {
+      maybeReconcileMl(); // respaldo: el poll del menú también recupera webhooks perdidos
       const count = await prisma.mlOrderPending.count({ where: { status: 'pending' } });
       return { count };
     });
@@ -325,6 +350,11 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
         where: { id },
         data: { status: 'assigned', assignedBranchId: body.branchId, assignedSaleId: sale.id, assignedAt: new Date() },
       });
+      // La reserva de la pendiente se libera recién ahora: re-publicar el stock ya final.
+      try {
+        const { repushStockForOrderItems } = await import('../services/pendingReserve.js');
+        await repushStockForOrderItems('ml', pending.items);
+      } catch { /* best-effort */ }
       return { ok: true, saleId: sale.id };
     });
   });

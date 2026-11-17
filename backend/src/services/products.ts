@@ -84,6 +84,7 @@ export async function listProducts() {
         },
       },
       tnMapping: { select: { tnProductId: true } },
+      mlMapping: { select: { mlItemId: true } },
     },
     orderBy: { name: 'asc' },
   });
@@ -231,7 +232,7 @@ export async function bulkRenameProducts(items: Array<{ code: string; name: stri
 export async function getProduct(id: string) {
   const p = await prisma.product.findUnique({
     where: { id },
-    include: { variants: { include: { stocks: true, tnMapping: true } }, images: true, tnMapping: true },
+    include: { variants: { include: { stocks: true, tnMapping: true } }, images: true, tnMapping: true, mlMapping: true },
   });
   if (!p) throw new NotFoundError('Product', id);
   return p;

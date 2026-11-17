@@ -1,4 +1,5 @@
 import { prisma } from '../db.js';
+import { repushStockForOrderItems } from '../services/pendingReserve.js';
 import { Prisma } from '@prisma/client';
 import { getTnClient } from './client.js';
 import { findOrCreateByEmail } from '../services/customers.js';
@@ -80,6 +81,10 @@ export async function ingestPaidOrder(order: any) {
   }
 
   // Notificaci\u00f3n
+  // La venta ya ocurrió en TN: se descuenta YA del stock publicado (ML incluido) aunque
+  // todavía no se haya asignado a una sucursal (ver services/pendingReserve.ts).
+  await repushStockForOrderItems('tn', mapTnItems(order));
+
   await prisma.notification.create({
     data: {
       id: randomId(),
@@ -106,6 +111,9 @@ export async function handleOrderCancelled(event: any) {
     data: { status: 'cancelled' },
   });
   if (flip.count !== 1) return { skipped: 'already cancelled' };
+
+  // Cancelada antes de asignarse: se libera la reserva → el stock vuelve a publicarse.
+  if (pending.status !== 'assigned') await repushStockForOrderItems('tn', pending.items);
 
   if (pending.status === 'assigned' && pending.assignedSaleId) {
     const sale = await prisma.sale.findUnique({
@@ -178,6 +186,8 @@ export async function refreshPendingOrderSnapshot(order: any, { updateRaw = true
       ...(updateRaw ? { rawPayload: order } : {}),
     },
   });
+  // Cambiaron los ítems de una pendiente → re-publicar stock de los de antes y los de ahora.
+  await repushStockForOrderItems('tn', [...(Array.isArray(pending.items) ? (pending.items as any[]) : []), ...items]);
   return { ok: true, changed: true, tnOrderId };
 }
 

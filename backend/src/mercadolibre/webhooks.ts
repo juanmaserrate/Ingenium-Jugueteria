@@ -1,4 +1,5 @@
 import { prisma } from '../db.js';
+import { repushStockForOrderItems } from '../services/pendingReserve.js';
 import { Prisma } from '@prisma/client';
 import { requireMlClient, getMlClient } from './client.js';
 import { processReturn } from '../services/returns.js';
@@ -73,6 +74,10 @@ export async function ingestPaidMlOrder(order: any) {
     throw e;
   }
 
+  // La venta ya ocurrió en ML: se descuenta YA del stock publicado (TN y ML) aunque todavía
+  // no se haya asignado a una sucursal (ver services/pendingReserve.ts).
+  await repushStockForOrderItems('ml', items);
+
   await prisma.notification.create({
     data: {
       id: randomId(),
@@ -98,6 +103,9 @@ export async function handleMlOrderCancelled(order: any) {
     data: { status: 'cancelled' },
   });
   if (flip.count !== 1) return { skipped: 'already cancelled' };
+
+  // Cancelada antes de asignarse: se libera la reserva → el stock vuelve a publicarse.
+  if (pending.status !== 'assigned') await repushStockForOrderItems('ml', pending.items);
 
   if (pending.status === 'assigned' && pending.assignedSaleId) {
     const sale = await prisma.sale.findUnique({ where: { id: pending.assignedSaleId }, include: { items: true } });

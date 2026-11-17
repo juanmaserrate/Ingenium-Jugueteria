@@ -98,6 +98,8 @@ function toFront(bp) {
     variant_type: variantType,
     linked_tn: !!bp.tnMapping,
     tn_product_id: bp.tnMapping?.tnProductId ?? null,
+    linked_ml: !!bp.mlMapping,
+    ml_item_id: bp.mlMapping?.mlItemId ?? null,
     _stocks: stocks,
   };
 }
@@ -409,6 +411,57 @@ export async function relinkTn(productId, tnProductId, tnVariantId, dataSource) 
 }
 
 // Sugerencias para autocompletar tipo y valores de variante, juntando lo del catálogo en cache.
+// ---------- Mercado Libre ----------
+// Marca local (cache) del vínculo con ML para que la grilla lo refleje sin recargar todo.
+function setMlLinked(productId, mlItemId) {
+  const p = _cache.byId.get(productId);
+  if (p) { p.linked_ml = !!mlItemId; p.ml_item_id = mlItemId || null; p.published_meli = !!mlItemId; }
+  emit(EV.PRODUCT_UPDATED, { id: productId });
+}
+
+// Publica un producto en ML (crea la publicación real). Idempotente: si ya está vinculado
+// devuelve { alreadyLinked:true }. opts: { listingTypeId, condition, categoryId, attributes }.
+export async function publishMl(productId, opts = {}) {
+  const res = await api('/api/integrations/ml/publish', { method: 'POST', body: { productId, listingTypeId: 'gold_special', ...opts } });
+  if (res?.itemId) setMlLinked(productId, res.itemId);
+  return res;
+}
+
+// Cierra la(s) publicación(es) del producto en ML y borra el vínculo.
+export async function unpublishMl(productId) {
+  const res = await api('/api/integrations/ml/unpublish', { method: 'POST', body: { productId } });
+  setMlLinked(productId, null);
+  return res;
+}
+
+// Quita el vínculo SIN tocar la publicación (sigue en ML, deja de sincronizar stock).
+export async function unlinkMl(productId) {
+  const res = await api('/api/integrations/ml/unlink-product', { method: 'POST', body: { productId } });
+  setMlLinked(productId, null);
+  return res;
+}
+
+// Estado en vivo: stock del sistema vs stock real en ML, por variante.
+export function mlStatus(productId) {
+  return api('/api/integrations/ml/product-status/' + encodeURIComponent(productId));
+}
+
+// Trae las publicaciones vigentes de ML y propone con qué producto va cada una.
+export function mlSyncPlan() {
+  return api('/api/integrations/ml/sync-plan', { method: 'POST', body: {} });
+}
+
+// Aplica vínculos confirmados: [{ variantId, mlItemId, mlVariationId, productId }].
+export async function mlSyncApply(links) {
+  const res = await api('/api/integrations/ml/sync-apply', {
+    method: 'POST',
+    body: { links: links.map((l) => ({ variantId: l.variantId, mlItemId: l.mlItemId, mlVariationId: l.mlVariationId ?? null })) },
+  });
+  const failed = new Set((res?.errors || []).map((e) => e.variantId));
+  for (const l of links) if (l.productId && !failed.has(l.variantId)) setMlLinked(l.productId, l.mlItemId);
+  return res;
+}
+
 export function variantSuggestions() {
   const types = new Set();
   const values = new Set();

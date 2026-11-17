@@ -617,6 +617,11 @@ export async function integrationsRoutes(app: FastifyInstance) {
           assignedAt: new Date(),
         },
       });
+      // La reserva de la pendiente se libera recién ahora: re-publicar el stock ya final.
+      try {
+        const { repushStockForOrderItems } = await import('../services/pendingReserve.js');
+        await repushStockForOrderItems('tn', pending.items);
+      } catch { /* best-effort */ }
 
       return { ok: true, saleId: sale.id };
     });

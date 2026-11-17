@@ -13,7 +13,7 @@ export const mlSyncHandlers = {
     const qty = await computeMlStockForVariant(payload.variantId);
     const ml = await requireMlClient();
     if (mapping.mlVariationId) {
-      await ml.updateItem(mapping.mlItemId, { variations: [{ id: Number(mapping.mlVariationId), available_quantity: qty }] });
+      await ml.updateItemVariation(mapping.mlItemId, mapping.mlVariationId, { available_quantity: qty });
     } else {
       await ml.updateItem(mapping.mlItemId, { available_quantity: qty });
     }

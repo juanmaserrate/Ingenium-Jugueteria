@@ -7,10 +7,13 @@ import { toast } from '../core/notifications.js';
 
 // Conteo de ventas web pendientes de asignación (badge en el ítem "Ventas Web").
 let webPendingCount = 0;
+// Ídem para las ventas de Mercado Libre (badge en "Ventas Mercado Libre").
+let mlPendingCount = 0;
 
 function badgeFor(item, active) {
-  if (item.path !== '/ventas-web' || webPendingCount <= 0) return '';
-  const n = webPendingCount > 99 ? '99+' : webPendingCount;
+  const count = item.path === '/ventas-web' ? webPendingCount : item.path === '/ventas-ml' ? mlPendingCount : 0;
+  if (count <= 0) return '';
+  const n = count > 99 ? '99+' : count;
   const cls = active
     ? 'bg-white text-[#d82f1e]'
     : 'bg-[#d82f1e] text-white';
@@ -36,6 +39,7 @@ const NAV = [
   { path: '/conflictos',          label: 'Conflictos de sync',icon: 'sync_problem', admin: true },
 
   { section: 'Mercado Libre' },
+  { path: '/ventas-ml',           label: 'Ventas Mercado Libre', icon: 'local_mall' },
   { path: '/mercadolibre',        label: 'Mercado Libre',     icon: 'storefront', admin: true },
 
   { section: 'Comercial' },
@@ -141,4 +145,20 @@ export function mountSidebar(el, { onLogout }) {
   };
   pollWeb();
   setInterval(pollWeb, 60_000);
+
+  // Mismo poll para las ventas de Mercado Libre.
+  let prevMl = null;
+  const pollMl = async () => {
+    try {
+      const { count } = await api('/api/ml-orders/pending-count');
+      if (typeof count !== 'number') return;
+      if (prevMl !== null && count > prevMl) {
+        toast(`Nueva venta de Mercado Libre — asigná sucursal (${count} pendiente${count > 1 ? 's' : ''})`, 'info');
+      }
+      prevMl = count;
+      if (count !== mlPendingCount) { mlPendingCount = count; render(); }
+    } catch { /* sin conexión / sin ML: no molestar */ }
+  };
+  pollMl();
+  setInterval(pollMl, 60_000);
 }

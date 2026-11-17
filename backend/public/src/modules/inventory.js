@@ -13,6 +13,7 @@ import { activeBranchId, currentSession, isAdmin } from '../core/auth.js';
 import * as Audit from '../core/audit.js';
 import { exportSimple, exportToXLSX } from '../core/xlsx.js';
 import { printHTML } from '../core/pdf.js';
+import { openMlPublishModal, openMlProductModal, openMlSyncModal, bulkUnpublishMl, mlUrl } from './inventory-ml.js';
 
 // Escapa caracteres reservados para incrustar contenido en value="..." de un input.
 function escapeAttr(s) {
@@ -338,7 +339,7 @@ async function renderProducts(container, forceReload = false) {
     if (f.category && p.category_id !== f.category) return false;
     if (f.brand && p.brand_id !== f.brand) return false;
     if (f.supplier && p.supplier_id !== f.supplier) return false;
-    if (f.onlyMeli && !p.published_meli) return false;
+    if (f.onlyMeli && !p.linked_ml) return false;
     if (f.variant) {
       const vq = f.variant.toLowerCase();
       const hit = (p.variants || []).some(v =>
@@ -381,7 +382,9 @@ async function renderProducts(container, forceReload = false) {
     { id: 'stock_lomas', label: `Stock ${lomas?.name || 'Lomas'}`, render: p => stockCell(stockOf(p.id, 'br_lomas')), align: 'center' },
     { id: 'stock_banfield', label: `Stock ${banf?.name || 'Banfield'}`, render: p => stockCell(stockOf(p.id, 'br_banfield')), align: 'center' },
     { id: 'total', label: 'Total', render: p => (stockOf(p.id,'br_lomas').qty + stockOf(p.id,'br_banfield').qty), align: 'center' },
-    { id: 'meli', label: 'MELI', render: p => p.published_meli ? '<span class="material-symbols-outlined text-[#d82f1e] text-base">check_circle</span>' : '-', align: 'center' },
+    { id: 'meli', label: 'Mercado Libre', align: 'center', render: p => p.linked_ml
+      ? `<a href="${mlUrl(p.ml_item_id)}" target="_blank" rel="noopener" title="Ver la publicación en Mercado Libre" class="px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 text-[11px] font-bold whitespace-nowrap hover:underline">Vinculado</a>`
+      : '<span class="px-2 py-0.5 rounded-full bg-[#fff1e6] text-[#7d6c5c] text-[11px] font-bold whitespace-nowrap">No vinculado</span>' },
     { id: 'tn', label: 'Tienda Nube', align: 'center', render: p => p.linked_tn
       ? '<span class="px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-[11px] font-bold whitespace-nowrap">Vinculado</span>'
       : '<span class="px-2 py-0.5 rounded-full bg-[#fff1e6] text-[#7d6c5c] text-[11px] font-bold whitespace-nowrap">No vinculado</span>' },
@@ -441,6 +444,9 @@ async function renderProducts(container, forceReload = false) {
         ${canEdit ? `<button id="btn-bulkcost" class="ing-btn-secondary text-sm" title="Actualizar costos masivamente desde un Excel">
           <span class="material-symbols-outlined align-middle text-base">upload_file</span> Costos Excel
         </button>` : ''}
+        ${canEdit ? `<button id="btn-mlsync" class="ing-btn-secondary text-sm" title="Vincular lo que ya tenés publicado en Mercado Libre con el inventario">
+          <span class="material-symbols-outlined align-middle text-base">storefront</span> Sincronizar ML
+        </button>` : ''}
         <button id="btn-refresh" class="ing-btn-secondary text-sm" title="Actualizar datos desde el servidor">
           <span class="material-symbols-outlined align-middle text-base">sync</span>
         </button>
@@ -471,7 +477,7 @@ async function renderProducts(container, forceReload = false) {
         </select>
         <input id="f-stock-max" type="number" min="0" inputmode="numeric" class="ing-filter w-28" placeholder="Stock ≤" title="Mostrar productos con stock total menor o igual a esta cantidad" value="${f.stockMax != null ? f.stockMax : ''}" />
         <label class="flex items-center gap-2 text-sm font-bold cursor-pointer">
-          <input id="f-meli" type="checkbox" ${f.onlyMeli?'checked':''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" /> Sólo MELI
+          <input id="f-meli" type="checkbox" ${f.onlyMeli?'checked':''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" /> Sólo en Mercado Libre
         </label>
         <button id="f-clear" class="text-xs text-[#d82f1e] font-bold hover:underline">Limpiar</button>
       </div>
@@ -480,8 +486,8 @@ async function renderProducts(container, forceReload = false) {
       ${canEdit ? `<div id="bulk-bar" class="hidden mt-4 p-3 bg-[#fff1e6] rounded-2xl flex items-center gap-3 border border-[#e3ceba]">
         <span id="bulk-count" class="text-sm font-black text-[#d82f1e]"></span>
         <button id="bulk-edit" class="text-xs ing-btn-primary !py-1.5 !px-3"><span class="material-symbols-outlined align-middle text-sm">edit_note</span> Editar campos</button>
-        <button id="bulk-meli-on" class="text-xs ing-btn-secondary !py-1.5 !px-3">Publicar en MELI</button>
-        <button id="bulk-meli-off" class="text-xs ing-btn-secondary !py-1.5 !px-3">Despublicar MELI</button>
+        <button id="bulk-meli-on" class="text-xs ing-btn-secondary !py-1.5 !px-3"><span class="material-symbols-outlined align-middle text-sm">storefront</span> Publicar en Mercado Libre</button>
+        <button id="bulk-meli-off" class="text-xs ing-btn-secondary !py-1.5 !px-3">Cerrar en Mercado Libre</button>
         <button id="bulk-price-pct" class="text-xs ing-btn-secondary !py-1.5 !px-3">Ajuste % precio</button>
         <button id="bulk-promo-pct" class="text-xs ing-btn-secondary !py-1.5 !px-3">Promo −% del precio</button>
         <button id="bulk-delete" class="text-xs px-3 py-1.5 rounded-full bg-red-50 text-red-600 font-bold hover:bg-red-100">Eliminar</button>
@@ -506,6 +512,7 @@ async function renderProducts(container, forceReload = false) {
               <td class="whitespace-nowrap">${canEdit ? `<input type="checkbox" class="row-check rounded text-[#d82f1e] focus:ring-[#d82f1e]" ${state.selected.has(p.id)?'checked':''} />` : ''}${p.has_variants ? `<button data-vexp="${p.id}" title="Ver variantes" class="ml-1 align-middle"><span class="material-symbols-outlined text-base text-[#7d6c5c] hover:text-[#d82f1e] transition-transform ${state.expandedVariants.has(p.id)?'rotate-90':''}" data-vchev="${p.id}">chevron_right</span></button>` : ''}</td>
               ${visibleCols.map(c => `<td class="${c.align==='right'?'text-right':c.align==='center'?'text-center':''}" ${c.editable && canEdit?`data-editable="${c.editable}" data-field="${c.field||c.id}"`:''}>${c.render(p)}</td>`).join('')}
               <td class="text-right">
+                ${canEdit ? `<button data-mllink="${p.id}" title="${p.linked_ml ? 'Vinculado a Mercado Libre (ver estado)' : 'Publicar o vincular en Mercado Libre'}" class="p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base ${p.linked_ml ? 'text-yellow-600' : 'text-[#7d6c5c]'}">storefront</span></button>` : ''}
                 ${canEdit ? `<button data-tnlink="${p.id}" title="${p.linked_tn ? 'Vinculado a Tienda Nube (click para desvincular)' : 'Vincular con Tienda Nube'}" class="p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base ${p.linked_tn ? 'text-green-600' : 'text-[#7d6c5c]'}">${p.linked_tn ? 'link' : 'add_link'}</span></button>` : ''}
                 <button data-hist="${p.id}" title="Historial de movimientos" class="p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base text-[#7d6c5c]">history</span></button>
                 ${canEdit ? `<button data-edit="${p.id}" title="Editar" class="p-1.5 hover:bg-[#fff1e6] rounded-full transition-all"><span class="material-symbols-outlined text-base text-[#7d6c5c]">edit</span></button>
@@ -557,6 +564,10 @@ async function renderProducts(container, forceReload = false) {
 
   container.querySelector('#btn-new')?.addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-bulkcost')?.addEventListener('click', () => openBulkCostModal(container));
+  container.querySelector('#btn-mlsync')?.addEventListener('click', async () => {
+    const changed = await openMlSyncModal();
+    if (changed) renderProducts(container);
+  });
   container.querySelector('#btn-cols').addEventListener('click', () => openColumnsModal(cols, container));
   container.querySelector('#btn-refresh').addEventListener('click', async () => {
     state.cache = null; // Invalida caché para forzar recarga desde el servidor
@@ -573,7 +584,7 @@ async function renderProducts(container, forceReload = false) {
       Reservado_Lomas: stockOf(p.id,'br_lomas').reserved_qty,
       Stock_Banfield: stockOf(p.id,'br_banfield').qty,
       Reservado_Banfield: stockOf(p.id,'br_banfield').reserved_qty,
-      MELI: p.published_meli ? 'Sí' : 'No',
+      MercadoLibre: p.linked_ml ? 'Vinculado' : 'No vinculado',
       TiendaNube: p.linked_tn ? 'Vinculado' : 'No vinculado',
     }));
     exportSimple(`productos_${new Date().toISOString().slice(0,10)}.xlsx`, rows, 'Productos');
@@ -667,6 +678,14 @@ async function renderProducts(container, forceReload = false) {
       console.warn('delete falló', e);
       toast('No se pudo eliminar', 'error');
     }
+  }));
+
+  // Mercado Libre: publicar / vincular / ver estado del vínculo
+  container.querySelectorAll('[data-mllink]').forEach(b => b.addEventListener('click', async () => {
+    const p = list.find(x => x.id === b.dataset.mllink);
+    if (!p) return;
+    const changed = await openMlProductModal(p);
+    if (changed) renderProducts(container);
   }));
 
   // Vincular / desvincular con Tienda Nube
@@ -910,7 +929,7 @@ async function openProductForm(p, container) {
       </div>
       <div class="col-span-3 flex gap-6 items-center">
         <label class="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" name="published_meli" ${p?.published_meli ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+          <input type="checkbox" name="published_meli" ${(p?.published_meli || p?.linked_ml) ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
           <span class="text-sm font-bold">Publicar en MercadoLibre</span>
         </label>
         <label class="flex items-center gap-2 cursor-pointer">
@@ -1967,13 +1986,14 @@ function openColumnsModal(cols, container) {
   });
 }
 
+// Publica (flag=true) o cierra (flag=false) en Mercado Libre los productos seleccionados.
+// Publicar abre la ventana con el progreso uno por uno; ambas piden confirmación.
 async function bulkSetMeli(flag, container) {
-  for (const id of state.selected) {
-    const p = await P.byId(id);
-    if (p) { p.published_meli = flag; await P.save(p); }
-  }
-  toast(`${state.selected.size} producto(s) ${flag?'publicado(s)':'despublicado(s)'}`, 'success');
-  state.selected.clear();
+  const picked = [];
+  for (const id of state.selected) { const p = await P.byId(id); if (p) picked.push(p); }
+  if (!picked.length) return;
+  const changed = flag ? await openMlPublishModal(picked) : await bulkUnpublishMl(picked);
+  if (changed) state.selected.clear();
   renderProducts(container);
 }
 

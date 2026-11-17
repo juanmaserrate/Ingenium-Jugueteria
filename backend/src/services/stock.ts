@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { StockInsufficientError } from '../utils/errors.js';
 import { logAudit, AUDIT_ACTIONS } from '../utils/audit.js';
 import { enqueueSync } from '../sync/queue.js';
+import { pendingWebQtyForVariant } from './pendingReserve.js';
 
 /**
  * Stock publicado en TN: suma de (qty - reservedQty) de todas las sucursales
@@ -13,22 +14,26 @@ export async function computeTnStockForVariant(variantId: string): Promise<numbe
   const mode = integration?.stockMode ?? 'sum';
   const stocks = await prisma.stock.findMany({ where: { variantId } });
   if (stocks.length === 0) return 0;
+  // Unidades ya vendidas online (ML/TN) que todavía no se asignaron a una sucursal.
+  const pending = await pendingWebQtyForVariant(variantId);
 
   if (mode === 'sum') {
-    return stocks.reduce((sum, s) => sum + Math.max(0, s.qty - s.reservedQty), 0);
+    return Math.max(0, stocks.reduce((sum, s) => sum + Math.max(0, s.qty - s.reservedQty), 0) - pending);
   }
   // modo 'lomas' o 'banfield' → solo esa sucursal
   const target = stocks.find((s) => s.branchId === mode);
-  return target ? Math.max(0, target.qty - target.reservedQty) : 0;
+  return target ? Math.max(0, target.qty - target.reservedQty - pending) : 0;
 }
 
 /**
- * Stock publicado en Mercado Libre: suma de (qty - reservedQty) de todas las sucursales.
+ * Stock publicado en Mercado Libre: suma de (qty - reservedQty) de todas las sucursales,
+ * menos lo vendido online que todavía está pendiente de asignar a una sucursal.
  * (Modo 'sum' fijo por ahora; ML no tiene aún un stockMode configurable como TN.)
  */
 export async function computeMlStockForVariant(variantId: string): Promise<number> {
   const stocks = await prisma.stock.findMany({ where: { variantId } });
-  return stocks.reduce((sum, s) => sum + Math.max(0, s.qty - s.reservedQty), 0);
+  const pending = await pendingWebQtyForVariant(variantId);
+  return Math.max(0, stocks.reduce((sum, s) => sum + Math.max(0, s.qty - s.reservedQty), 0) - pending);
 }
 
 export async function getStock(variantId: string, branchId: string) {
