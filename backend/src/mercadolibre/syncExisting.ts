@@ -23,15 +23,13 @@ const attrSkus = (attrs: any[]) =>
     .filter((a) => a && (a.id === 'SELLER_SKU' || a.id === 'GTIN'))
     .map((a) => a.value_name));
 
-export async function scanSellerListings(): Promise<{ listings: MlListing[]; available: boolean }> {
-  const ml = await getMlClient();
-  const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
-  const sellerId = integ?.mlUserId;
-  if (!ml || !sellerId) return { listings: [], available: false };
+const mlErr = (e: any) => e?.response?.data?.message ?? e?.response?.data?.error ?? e?.message ?? 'error';
 
-  // 1) ids de publicaciones vigentes (scan scroll: soporta cualquier cantidad).
-  const ids = new Set<string>();
-  for (const status of ['active', 'paused']) {
+// ids de las publicaciones de un estado. ML fue dando de baja variantes de este listado para
+// apps nuevas, así que se prueban dos caminos: scan scroll y, si falla, paginado por offset.
+async function listItemIds(ml: any, sellerId: string, status: string, via: string[]): Promise<string[]> {
+  const ids: string[] = [];
+  try {
     let scrollId: string | undefined;
     for (let page = 0; page < 80; page++) { // tope de seguridad: 8000 por estado
       const params: Record<string, any> = { search_type: 'scan', limit: 100, status };
@@ -39,46 +37,95 @@ export async function scanSellerListings(): Promise<{ listings: MlListing[]; ava
       const res: any = await ml.searchSellerItems(sellerId, params);
       const batch: string[] = res?.results || [];
       if (!batch.length) break;
-      for (const id of batch) ids.add(String(id));
+      ids.push(...batch.map(String));
       scrollId = res?.scroll_id;
       if (!scrollId) break;
     }
-  }
-
-  // 2) detalle en lotes de 20 (multiget).
-  const all = [...ids];
-  const listings: MlListing[] = [];
-  for (let i = 0; i < all.length; i += 20) {
-    const chunk = all.slice(i, i + 20);
-    const res: any = await ml.getItemsMulti(chunk, 'id,title,permalink,status,available_quantity,seller_custom_field,attributes,variations');
-    for (const row of Array.isArray(res) ? res : []) {
-      const b = row?.body || row;
-      if (!b?.id) continue;
-      listings.push({
-        id: String(b.id),
-        title: String(b.title ?? ''),
-        permalink: b.permalink ?? null,
-        status: String(b.status ?? ''),
-        qty: Number(b.available_quantity) || 0,
-        skus: [...skuList(b.seller_custom_field), ...attrSkus(b.attributes)],
-        variations: (Array.isArray(b.variations) ? b.variations : []).map((v: any) => ({
-          id: String(v.id),
-          skus: [...skuList(v.seller_custom_field), ...attrSkus(v.attributes)],
-          values: (Array.isArray(v.attribute_combinations) ? v.attribute_combinations : [])
-            .map((c: any) => String(c?.value_name ?? '').trim()).filter(Boolean),
-          qty: Number(v.available_quantity) || 0,
-        })),
-      });
+    via.push(`ids:${status}:scan`);
+    return ids;
+  } catch (scanErr) {
+    ids.length = 0;
+    try {
+      for (let offset = 0; offset < 1000; offset += 50) { // el paginado clásico llega hasta 1000
+        const res: any = await ml.searchSellerItems(sellerId, { status, limit: 50, offset });
+        const batch: string[] = res?.results || [];
+        ids.push(...batch.map(String));
+        const total = Number(res?.paging?.total ?? 0);
+        if (!batch.length || offset + 50 >= total) break;
+      }
+      via.push(`ids:${status}:offset`);
+      return ids;
+    } catch (offErr) {
+      throw new Error(`No se pudo listar las publicaciones (${status}): ${mlErr(offErr)} [scan: ${mlErr(scanErr)}]`);
     }
   }
-  return { listings, available: true };
+}
+
+// Detalle de las publicaciones: multiget de a 20 y, si ML lo rechaza, de a una (en tandas).
+async function fetchItems(ml: any, ids: string[], via: string[]): Promise<any[]> {
+  const out: any[] = [];
+  let multigetOk = true;
+  for (let i = 0; i < ids.length && multigetOk; i += 20) {
+    const chunk = ids.slice(i, i + 20);
+    try {
+      const res: any = await ml.getItemsMulti(chunk, 'id,title,permalink,status,available_quantity,seller_custom_field,attributes,variations');
+      for (const row of Array.isArray(res) ? res : []) { const b = row?.body || row; if (b?.id) out.push(b); }
+    } catch {
+      multigetOk = false;
+    }
+  }
+  if (multigetOk) { via.push('detalle:multiget'); return out; }
+
+  const have = new Set(out.map((b) => String(b.id)));
+  const rest = ids.filter((id) => !have.has(id));
+  let firstErr: any = null;
+  for (let i = 0; i < rest.length; i += 6) {
+    const got = await Promise.all(rest.slice(i, i + 6).map((id) => ml.getItem(id).catch((e: any) => { firstErr = firstErr ?? e; return null; })));
+    for (const b of got) if (b?.id) out.push(b);
+  }
+  if (!out.length && firstErr) throw new Error(`No se pudo leer el detalle de las publicaciones: ${mlErr(firstErr)}`);
+  via.push('detalle:uno-a-uno');
+  return out;
+}
+
+export async function scanSellerListings(): Promise<{ listings: MlListing[]; available: boolean; via: string[] }> {
+  const via: string[] = [];
+  const ml = await getMlClient();
+  const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
+  const sellerId = integ?.mlUserId;
+  if (!ml || !sellerId) return { listings: [], available: false, via };
+
+  // 1) ids de publicaciones vigentes (activas + pausadas).
+  const ids = new Set<string>();
+  for (const status of ['active', 'paused']) {
+    for (const id of await listItemIds(ml, sellerId, status, via)) ids.add(id);
+  }
+
+  // 2) detalle.
+  const bodies = await fetchItems(ml, [...ids], via);
+  const listings: MlListing[] = bodies.map((b: any) => ({
+    id: String(b.id),
+    title: String(b.title ?? ''),
+    permalink: b.permalink ?? null,
+    status: String(b.status ?? ''),
+    qty: Number(b.available_quantity) || 0,
+    skus: [...skuList(b.seller_custom_field), ...attrSkus(b.attributes)],
+    variations: (Array.isArray(b.variations) ? b.variations : []).map((v: any) => ({
+      id: String(v.id),
+      skus: [...skuList(v.seller_custom_field), ...attrSkus(v.attributes)],
+      values: (Array.isArray(v.attribute_combinations) ? v.attribute_combinations : [])
+        .map((c: any) => String(c?.value_name ?? '').trim()).filter(Boolean),
+      qty: Number(v.available_quantity) || 0,
+    })),
+  }));
+  return { listings, available: true, via };
 }
 
 export type SyncPlanRow = MatchRow & { systemStock?: number };
 
 export async function buildSyncPlan() {
-  const { listings, available } = await scanSellerListings();
-  if (!available) return { available: false, scanned: 0, rows: [] as SyncPlanRow[], counts: { linked: 0, match: 0, unmatched: 0 } };
+  const { listings, available, via } = await scanSellerListings();
+  if (!available) return { available: false, scanned: 0, via, rows: [] as SyncPlanRow[], counts: { linked: 0, match: 0, unmatched: 0 } };
 
   const [products, existing] = await Promise.all([
     prisma.product.findMany({
@@ -104,7 +151,7 @@ export async function buildSyncPlan() {
 
   const counts = { linked: 0, match: 0, unmatched: 0 };
   for (const r of rows) counts[r.state]++;
-  return { available: true, scanned: listings.length, rows, counts };
+  return { available: true, scanned: listings.length, via, rows, counts };
 }
 
 // Guarda vínculos variante ↔ publicación (o variación) y empuja el stock del sistema a ML.
