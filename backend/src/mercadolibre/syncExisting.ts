@@ -155,7 +155,8 @@ export async function buildSyncPlan() {
 }
 
 // Guarda vínculos variante ↔ publicación (o variación) y empuja el stock del sistema a ML.
-export async function applyLinks(links: Array<{ variantId: string; mlItemId: string; mlVariationId?: string | null }>) {
+// push:false = el stock ya coincide con el de ML → se vincula sin gastar una llamada a ML.
+export async function applyLinks(links: Array<{ variantId: string; mlItemId: string; mlVariationId?: string | null; push?: boolean }>) {
   let linked = 0;
   const errors: Array<{ variantId: string; mlItemId: string; error: string }> = [];
   for (const l of links) {
@@ -177,7 +178,7 @@ export async function applyLinks(links: Array<{ variantId: string; mlItemId: str
         create: { variantId: variant.id, mlItemId, mlVariationId },
       });
       await ensureProductMapping(variant.productId, mlItemId);
-      await enqueueSync('ml_push_stock', { variantId: variant.id }); // manda el sistema
+      if (l.push !== false) await enqueueSync('ml_push_stock', { variantId: variant.id }); // manda el sistema
       linked++;
     } catch (e: any) {
       errors.push({ variantId: l.variantId, mlItemId, error: e?.message ?? 'error' });

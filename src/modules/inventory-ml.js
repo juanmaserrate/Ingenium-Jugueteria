@@ -450,7 +450,8 @@ export function openMlSyncModal() {
         if (!ok) return;
         applyBtn.disabled = true; applyBtn.textContent = 'Vinculando…';
         try {
-          const res = await P.mlSyncApply(picked.map((r) => ({ variantId: r.variantId, mlItemId: r.mlItemId, mlVariationId: r.mlVariationId, productId: r.productId })));
+          // Si el stock ya coincide no hace falta reenviarlo a ML.
+          const res = await P.mlSyncApply(picked.map((r) => ({ variantId: r.variantId, mlItemId: r.mlItemId, mlVariationId: r.mlVariationId, productId: r.productId, push: Number(r.systemStock) !== Number(r.mlQty) })));
           const failed = new Map((res?.errors || []).map((e) => [e.variantId, e.error]));
           for (const r of picked) {
             if (failed.has(r.variantId)) { r.state = 'unmatched'; r.note = failed.get(r.variantId); r._sel = false; }

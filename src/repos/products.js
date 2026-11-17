@@ -455,7 +455,7 @@ export function mlSyncPlan() {
 export async function mlSyncApply(links) {
   const res = await api('/api/integrations/ml/sync-apply', {
     method: 'POST',
-    body: { links: links.map((l) => ({ variantId: l.variantId, mlItemId: l.mlItemId, mlVariationId: l.mlVariationId ?? null })) },
+    body: { links: links.map((l) => ({ variantId: l.variantId, mlItemId: l.mlItemId, mlVariationId: l.mlVariationId ?? null, ...(l.push === false ? { push: false } : {}) })) },
   });
   const failed = new Set((res?.errors || []).map((e) => e.variantId));
   for (const l of links) if (l.productId && !failed.has(l.variantId)) setMlLinked(l.productId, l.mlItemId);

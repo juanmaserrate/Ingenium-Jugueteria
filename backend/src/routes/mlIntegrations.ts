@@ -232,6 +232,7 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
           variantId: z.string(),
           mlItemId: z.string(),
           mlVariationId: z.string().nullable().optional(),
+          push: z.boolean().optional(),
         })).max(2000),
       }).parse(req.body);
       return applyLinks(b.links);
