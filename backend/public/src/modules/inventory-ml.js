@@ -313,7 +313,8 @@ export function openMlSyncModal() {
         const [plan, list] = await Promise.all([P.mlSyncPlan(), P.list()]);
         products = list || [];
         if (!plan?.available) { body.innerHTML = '<span class="text-red-600">Mercado Libre no está conectado.</span>'; return; }
-        rows = (plan.rows || []).map((r, i) => ({ ...r, _i: i, _sel: r.state === 'match' }));
+        // Por defecto solo las ACTIVAS: vincular una pausada puede reactivarla (con el precio viejo de ML).
+        rows = (plan.rows || []).map((r, i) => ({ ...r, _i: i, _sel: r.state === 'match' && r.mlStatus === 'active' }));
         foot.textContent = `${plan.scanned} publicaciones vigentes leídas`;
       } catch (err) { body.innerHTML = `<span class="text-red-600">${esc(errText(err))}</span>`; return; }
 
@@ -331,6 +332,7 @@ export function openMlSyncModal() {
 
         const matchRows = match.map((r) => {
           const warn = Number(r.systemStock) === 0 && Number(r.mlQty) > 0;
+          const react = r.mlStatus === 'paused' && Number(r.mlQty) === 0 && Number(r.systemStock) > 0;
           return `<tr class="border-t border-[#fff1e6]">
             <td class="py-1.5 px-2"><input type="checkbox" data-sel="${r._i}" ${r._sel ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" /></td>
             <td class="py-1.5 px-2">${pubCell(r)}</td>
@@ -338,7 +340,7 @@ export function openMlSyncModal() {
               ${r._manual ? ' <span class="text-[11px] text-[#7d6c5c]">(elegido a mano)</span>' : ''}</td>
             <td class="py-1.5 px-2"><span class="px-2 py-0.5 rounded-full text-[11px] font-bold ${r.by === 'sku' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}">${r._manual ? 'manual' : r.by === 'sku' ? 'por código' : 'por título'}</span></td>
             <td class="py-1.5 px-2 text-right font-bold">${r.systemStock ?? 0}</td>
-            <td class="py-1.5 px-2 text-right">${r.mlQty}${warn ? ' <span class="text-[11px] text-amber-700 block">quedará en 0 (pausada)</span>' : ''}</td>
+            <td class="py-1.5 px-2 text-right">${r.mlQty}${warn ? ' <span class="text-[11px] text-amber-700 block">quedará en 0 (pausada)</span>' : ''}${react ? ' <span class="text-[11px] text-amber-700 block">se reactiva en ML</span>' : ''}</td>
           </tr>`;
         }).join('');
 
@@ -363,7 +365,13 @@ export function openMlSyncModal() {
           <p class="text-xs text-[#7d6c5c] mb-3">Al vincular, <b>el stock del sistema pisa el de Mercado Libre</b> y desde ahí quedan iguales. El precio de la publicación no se toca.</p>
 
           ${match.length ? `
-          <h3 class="font-bold text-[#241a0d] mb-1">Coincidencias encontradas</h3>
+          <div class="flex flex-wrap items-center gap-2 mb-2">
+            <h3 class="font-bold text-[#241a0d] mr-2">Coincidencias encontradas</h3>
+            <button type="button" data-pickset="active" class="text-xs ing-btn-secondary !py-1 !px-3">Solo activas (${match.filter((r) => r.mlStatus === 'active').length})</button>
+            <button type="button" data-pickset="all" class="text-xs ing-btn-secondary !py-1 !px-3">Activas + pausadas (${match.length})</button>
+            <button type="button" data-pickset="none" class="text-xs ing-btn-secondary !py-1 !px-3">Ninguna</button>
+          </div>
+          <p class="text-[11px] text-amber-700 mb-2">Ojo con las <b>pausadas</b>: al vincularlas, cuando el sistema tenga stock Mercado Libre las vuelve a poner a la venta con el precio que tenían. Revisá esos precios antes de incluirlas.</p>
           <div class="overflow-auto max-h-72 border border-[#fff1e6] rounded-xl mb-4">
             <table class="w-full text-sm">
               <thead class="sticky top-0 bg-white"><tr class="text-left text-[10px] text-[#7d6c5c] uppercase">
@@ -392,6 +400,11 @@ export function openMlSyncModal() {
           rows[Number(cb.dataset.sel)]._sel = cb.checked;
           const n = rows.filter((r) => r.state === 'match' && r._sel).length;
           applyBtn.disabled = n === 0; applyBtn.textContent = `Vincular seleccionadas (${n})`;
+        }));
+        body.querySelectorAll('[data-pickset]').forEach((b) => b.addEventListener('click', () => {
+          const mode = b.dataset.pickset;
+          rows.forEach((r) => { if (r.state === 'match') r._sel = mode === 'all' ? true : mode === 'active' ? r.mlStatus === 'active' : false; });
+          render();
         }));
         body.querySelector('#mlx-all')?.addEventListener('change', (e) => {
           rows.forEach((r) => { if (r.state === 'match') r._sel = e.target.checked; });
