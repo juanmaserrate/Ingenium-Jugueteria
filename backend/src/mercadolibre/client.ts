@@ -97,6 +97,14 @@ export class MlClient {
   getItem(itemId: string) { return this.req({ method: 'get', url: `/items/${itemId}` }); }
   updateItem(itemId: string, data: any) { return this.req({ method: 'put', url: `/items/${itemId}`, data }); }
   createItem(data: any) { return this.req({ method: 'post', url: '/items', data }); }
+  // Publicaciones del vendedor (para detectar las que ya existen). Admite scan scroll.
+  searchSellerItems(sellerId: string, params: Record<string, any> = {}) {
+    return this.req({ method: 'get', url: `/users/${sellerId}/items/search`, params });
+  }
+  // Multiget de items (hasta 20 ids) con atributos acotados.
+  getItemsMulti(ids: string[], attributes?: string) {
+    return this.req({ method: 'get', url: `/items`, params: { ids: ids.join(','), ...(attributes ? { attributes } : {}) } });
+  }
 
   // --- Catálogo / categorías (para publicar) ---
   // Predice categoría a partir del título (domain discovery). site: MLA/MLM/MLB/...

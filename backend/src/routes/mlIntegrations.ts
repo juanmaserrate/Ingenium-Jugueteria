@@ -10,6 +10,7 @@ import { confirmSale } from '../services/sales.js';
 import { buildCostMetaForMl } from '../services/paymentCost.js';
 import { maybeReconcileMl } from '../mercadolibre/webhooks.js';
 import { predictCategory, publishProduct } from '../mercadolibre/publish.js';
+import { buildBulkPlan } from '../mercadolibre/bulk.js';
 import { ValidationError } from '../utils/errors.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -208,6 +209,24 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
         }
       }
       return { ok: true, items: results, closed: results.filter((r2) => r2.closed).length, total: results.length };
+    });
+
+    // Plan de publicación en LOTE por categoría (dry-run). No publica nada: arma el plan
+    // (ya vinculadas / a vincular por SKU o título / nuevas / salteadas) escaneando ML.
+    r.post('/integrations/ml/bulk-plan', adminOnly, async (req, reply) => {
+      const b = z.object({
+        categoryIds: z.array(z.string()).optional(),
+        subcategoryIds: z.array(z.string()).optional(),
+        includeZeroStock: z.boolean().optional(),
+      }).parse(req.body ?? {});
+      if (!b.categoryIds?.length && !b.subcategoryIds?.length) {
+        return reply.status(400).send({ error: 'Elegí al menos una categoría' });
+      }
+      try {
+        return await buildBulkPlan(b);
+      } catch (err: any) {
+        return reply.status(502).send({ error: 'plan_failed', details: err?.response?.data ?? err?.message });
+      }
     });
 
     r.post('/integrations/ml/publish', adminOnly, async (req, reply) => {

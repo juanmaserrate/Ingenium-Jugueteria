@@ -60,7 +60,8 @@ export async function mount(el) {
       el.querySelector('#ml-link-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-orders-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-publish-box').classList.toggle('hidden', !s.connected);
-      if (s.connected) { await loadOrders(); await loadMappings(); }
+      el.querySelector('#ml-bulk-box').classList.toggle('hidden', !s.connected);
+      if (s.connected) { await loadOrders(); await loadMappings(); await loadBulkCats(); }
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) {
         el.querySelector('#status-badge').innerHTML = '<span class="px-2 py-0.5 rounded-full bg-red-100 text-red-800 text-xs font-bold">Backend offline</span>';
@@ -181,6 +182,126 @@ export async function mount(el) {
     }
   });
 
+  // ---- Publicar por categoría (lote) ----
+  let bulkItems = [];
+  async function loadBulkCats() {
+    const box = el.querySelector('#bulk-cats');
+    if (!box || box.dataset.loaded) return;
+    let cats = [];
+    try { cats = await api('/api/categories'); } catch { cats = []; }
+    box.innerHTML = (cats || []).length
+      ? cats.map((c) => `<label class="flex items-center gap-2"><input type="checkbox" class="bulk-cat" value="${esc(c.id)}" /> ${esc(c.name)}</label>`).join('')
+      : '<span class="text-xs text-[#7d6c5c]">No hay categorías cargadas</span>';
+    box.dataset.loaded = '1';
+  }
+
+  const CHIP = {
+    linked: '<span class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-xs font-bold">✓ ya vinculada</span>',
+    match: '<span class="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs font-bold">🔗 a vincular</span>',
+    new: '<span class="px-2 py-0.5 rounded-full bg-green-100 text-green-800 text-xs font-bold">🆕 nueva</span>',
+    skip: '<span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-bold">⚠ salteada</span>',
+  };
+  const money = (n) => '$' + Number(n || 0).toLocaleString('es-AR');
+
+  function renderBulkPlan(plan) {
+    bulkItems = plan.items || [];
+    const out = el.querySelector('#bulk-plan-out');
+    const n = { linked: 0, match: 0, new: 0, skip: 0 };
+    for (const it of bulkItems) n[it.status]++;
+    const scanWarn = plan.scan && !plan.scan.available
+      ? '<div class="text-xs text-amber-700 mb-2">⚠ No pude escanear tus publicaciones de ML (¿conexión?). Reviso solo lo que el sistema ya sabe; podrían duplicarse las que ya existan.</div>'
+      : `<div class="text-xs text-[#7d6c5c] mb-2">Escaneé ${plan.scan?.scanned ?? 0} publicaciones tuyas de ML para detectar las que ya existen.</div>`;
+    if (!bulkItems.length) { out.innerHTML = 'No hay productos en esas categorías.'; return; }
+    const rows = bulkItems.map((it, i) => {
+      const actionable = it.status === 'new' || (it.status === 'match' && !!it.mlItemId && (it.status !== 'match' || !!it.linkBarcode));
+      const canLink = it.status === 'match' && !!it.linkBarcode;
+      const checked = it.status === 'new' || (it.status === 'match' && it.matchBy === 'sku' && canLink);
+      const cb = (it.status === 'new' || canLink)
+        ? `<input type="checkbox" class="bulk-row" data-idx="${i}" ${checked ? 'checked' : ''} />`
+        : (it.status === 'match' && !canLink ? '<span class="text-[11px] text-amber-700">sin código → vinc. a mano</span>' : '');
+      const extra = it.status === 'match'
+        ? `<a href="https://articulo.mercadolibre.com.ar/${esc(it.mlItemId)}" target="_blank" class="underline text-[#d82f1e]">${esc(it.mlItemId)}</a> <span class="text-[11px] text-[#7d6c5c]">(${it.matchBy === 'sku' ? 'por código' : 'por título'})</span>`
+        : it.status === 'skip' ? `<span class="text-[11px] text-amber-700">${esc(it.reason || '')}</span>`
+        : it.status === 'linked' ? `<span class="text-[11px] text-[#7d6c5c]">${esc(it.mlItemId || '')}</span>` : '';
+      return `<tr class="border-t border-[#fff1e6]">
+        <td class="py-1 px-2">${cb}</td>
+        <td class="py-1 px-2">${CHIP[it.status] || ''}</td>
+        <td class="py-1 px-2">${esc(it.name)}${it.variantsCount > 1 ? ` <span class="text-[11px] text-[#7d6c5c]">(${it.variantsCount} var.)</span>` : ''}</td>
+        <td class="py-1 px-2 text-right">${it.stock}</td>
+        <td class="py-1 px-2 text-right">${money(it.price)}</td>
+        <td class="py-1 px-2">${extra}</td>
+      </tr>`;
+    }).join('');
+    out.innerHTML = `
+      ${scanWarn}
+      <div class="flex flex-wrap gap-2 text-xs mb-2">
+        <span>Total: <b>${bulkItems.length}</b></span> · <span>${CHIP.new} ${n.new}</span> · <span>${CHIP.match} ${n.match}</span> · <span>${CHIP.linked} ${n.linked}</span> · <span>${CHIP.skip} ${n.skip}</span>
+      </div>
+      <div class="overflow-auto max-h-96 border border-[#fff1e6] rounded-xl">
+      <table class="w-full text-sm">
+        <thead class="sticky top-0 bg-white"><tr class="text-left text-xs text-[#7d6c5c] uppercase">
+          <th class="py-2 px-2"><input type="checkbox" id="bulk-all" /></th><th class="py-2 px-2">Estado</th><th class="py-2 px-2">Producto</th><th class="py-2 px-2 text-right">Stock</th><th class="py-2 px-2 text-right">Precio</th><th class="py-2 px-2">Ítem ML / motivo</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <div class="flex items-center gap-3 mt-3">
+        <button id="btn-bulk-run" class="px-4 py-2 bg-[#d82f1e] text-white rounded-xl font-bold">Ejecutar seleccionadas</button>
+        <span class="text-xs text-[#7d6c5c]">Crea/vincula publicaciones reales en tu cuenta.</span>
+      </div>
+      <div id="bulk-run-log" class="mt-3 space-y-1 text-sm max-h-72 overflow-auto"></div>`;
+
+    const allCb = el.querySelector('#bulk-all');
+    if (allCb) allCb.addEventListener('change', () => { el.querySelectorAll('.bulk-row').forEach((c) => { c.checked = allCb.checked; }); });
+    el.querySelector('#btn-bulk-run').addEventListener('click', runBulk);
+  }
+
+  async function runBulk() {
+    const picked = [...el.querySelectorAll('.bulk-row:checked')].map((c) => bulkItems[Number(c.dataset.idx)]).filter(Boolean);
+    if (!picked.length) { toast('No seleccionaste ninguna', 'warn'); return; }
+    const listingTypeId = el.querySelector('#bulk-listing').value;
+    if (!confirm(`Esto va a CREAR/VINCULAR ${picked.length} publicaciones reales en tu cuenta de Mercado Libre. ¿Confirmás?`)) return;
+    const log = el.querySelector('#bulk-run-log');
+    const runBtn = el.querySelector('#btn-bulk-run');
+    runBtn.disabled = true; runBtn.textContent = 'Ejecutando…';
+    let ok = 0, fail = 0;
+    for (const it of picked) {
+      const line = document.createElement('div');
+      line.innerHTML = `⏳ ${esc(it.name)}…`;
+      log.prepend(line);
+      try {
+        if (it.status === 'match' && it.mlItemId && it.linkBarcode) {
+          await api('/api/integrations/ml/link', { method: 'POST', body: { barcode: it.linkBarcode, mlItemId: it.mlItemId } });
+          line.innerHTML = `🔗 ${esc(it.name)} — vinculada a ${esc(it.mlItemId)}`;
+        } else {
+          const res = await api('/api/integrations/ml/publish', { method: 'POST', body: { productId: it.productId, listingTypeId } });
+          line.innerHTML = res.alreadyLinked ? `✓ ${esc(it.name)} — ya estaba publicada` : `🆕 ${esc(it.name)} — ${esc(res.itemId)}${res.permalink ? ` · <a href="${esc(res.permalink)}" target="_blank" class="underline text-[#d82f1e]">ver</a>` : ''}`;
+        }
+        ok++;
+      } catch (err) {
+        const det = err?.body?.details ? (typeof err.body.details === 'string' ? err.body.details : JSON.stringify(err.body.details)) : (err?.body?.message || err.message);
+        line.innerHTML = `✗ ${esc(it.name)} — ${esc(det)}`;
+        fail++;
+      }
+    }
+    runBtn.disabled = false; runBtn.textContent = 'Ejecutar seleccionadas';
+    toast(`Lote terminado: ${ok} ok, ${fail} con error`, fail ? 'warn' : 'success');
+    loadMappings();
+  }
+
+  el.querySelector('#btn-bulk-plan').addEventListener('click', async () => {
+    const categoryIds = [...el.querySelectorAll('.bulk-cat:checked')].map((c) => c.value);
+    if (!categoryIds.length) { toast('Elegí al menos una categoría', 'warn'); return; }
+    const includeZeroStock = el.querySelector('#bulk-zero').checked;
+    const out = el.querySelector('#bulk-plan-out');
+    out.innerHTML = '<span class="text-[#7d6c5c]">Analizando productos y escaneando tus publicaciones de ML… (puede tardar unos segundos)</span>';
+    try {
+      const plan = await api('/api/integrations/ml/bulk-plan', { method: 'POST', body: { categoryIds, includeZeroStock } });
+      renderBulkPlan(plan);
+    } catch (err) {
+      out.innerHTML = `<span class="text-red-600 font-bold">✗ ${esc(err?.body?.error || err.message)}</span>`;
+    }
+  });
+
   if (!getToken()) toast('Necesitás iniciar sesión para usar esta sección', 'warning');
   await refresh();
 }
@@ -275,6 +396,31 @@ function renderShell() {
           <button id="btn-publish" class="px-4 py-2 bg-[#d82f1e] text-white rounded-xl font-bold">Publicar</button>
           <div id="publish-out" class="text-sm"></div>
         </div>
+      </section>
+
+      <section id="ml-bulk-box" class="hidden bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 space-y-3">
+        <div>
+          <h2 class="text-lg font-bold">Publicar por categoría (lote)</h2>
+          <p class="text-xs text-[#7d6c5c]">Elegí una o más categorías y tocá <b>Previsualizar</b>. Te muestro el plan: <b>ya vinculadas</b>, <b>a vincular</b> (ya existen en ML, por código o título — no se duplican), <b>nuevas a publicar</b> y <b>salteadas</b> (sin precio/foto/stock). <b>Nada se publica hasta que confirmes.</b> Precio y stock salen del sistema.</p>
+        </div>
+        <div class="flex flex-wrap gap-4 items-start">
+          <div>
+            <label class="text-xs font-bold text-[#7d6c5c] uppercase block mb-1">Categorías</label>
+            <div id="bulk-cats" class="max-h-52 overflow-auto border border-[#fff1e6] rounded-xl p-2 w-72 space-y-1 text-sm"></div>
+          </div>
+          <div class="space-y-3">
+            <div>
+              <label class="text-xs font-bold text-[#7d6c5c] uppercase block mb-1">Tipo (para las nuevas)</label>
+              <select id="bulk-listing" class="px-3 py-2 rounded-xl border border-[#fff1e6] w-56">
+                <option value="free">Gratuita</option><option value="gold_special" selected>Clásica</option><option value="gold_pro">Premium</option>
+              </select>
+              <p class="text-[11px] text-[#7d6c5c] mt-1">Después podés subirla a Premium desde ML.</p>
+            </div>
+            <label class="text-sm flex items-center gap-2"><input type="checkbox" id="bulk-zero" /> Incluir productos sin stock</label>
+            <button id="btn-bulk-plan" class="px-4 py-2 bg-[#241a0d] text-white rounded-xl font-bold">Previsualizar</button>
+          </div>
+        </div>
+        <div id="bulk-plan-out" class="text-sm"></div>
       </section>
 
       <section class="bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 text-sm text-[#7d6c5c]">
