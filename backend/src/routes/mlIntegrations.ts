@@ -12,6 +12,7 @@ import { maybeReconcileMl } from '../mercadolibre/webhooks.js';
 import { predictCategory, publishProduct } from '../mercadolibre/publish.js';
 import { buildSyncPlan, applyLinks, ensureProductMapping, unlinkProduct, productMlStatus } from '../mercadolibre/syncExisting.js';
 import { ValidationError } from '../utils/errors.js';
+import { isHistoricalOrder } from '../services/pendingMath.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -281,7 +282,42 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
     r.get('/ml-orders', async (req) => {
       maybeReconcileMl(); // respaldo: trae las que se hayan perdido por un webhook
       const status = (req.query as any).status ?? 'pending';
-      return prisma.mlOrderPending.findMany({ where: { status }, orderBy: { receivedAt: 'desc' }, take: 100 });
+      const rows = await prisma.mlOrderPending.findMany({ where: { status }, orderBy: { receivedAt: 'desc' }, take: 300 });
+      const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
+      // Sin rawPayload (pesado). orderDate = fecha real de la compra; historical = anterior a
+      // la conexión de la cuenta. Las más nuevas primero.
+      return rows
+        .map(({ rawPayload, ...o }) => {
+          const orderDate = (rawPayload as any)?.date_created ?? null;
+          return { ...o, orderDate, historical: isHistoricalOrder(orderDate, integ?.connectedAt) };
+        })
+        .sort((a, b) => String(b.orderDate ?? b.receivedAt).localeCompare(String(a.orderDate ?? a.receivedAt)));
+    });
+
+    // Descarta una orden pendiente (no es una venta a registrar: ya se cargó por otro lado,
+    // es historial, etc.). No toca stock físico; libera la reserva si la tenía.
+    r.post('/ml-orders/:id/dismiss', adminOnly, async (req) => {
+      const { id } = req.params as { id: string };
+      const pending = await prisma.mlOrderPending.findUnique({ where: { id } });
+      if (!pending) throw new ValidationError('Orden no encontrada');
+      const upd = await prisma.mlOrderPending.updateMany({ where: { id, status: 'pending' }, data: { status: 'dismissed' } });
+      if (upd.count !== 1) throw new ValidationError('La orden ya fue procesada');
+      try {
+        const { repushStockForOrderItems } = await import('../services/pendingReserve.js');
+        await repushStockForOrderItems('ml', pending.items);
+      } catch { /* best-effort */ }
+      return { ok: true };
+    });
+
+    // Descarta de una vez todo el HISTORIAL (compras anteriores a la conexión de la cuenta)
+    // que el respaldo importó como pendiente.
+    r.post('/ml-orders/dismiss-historical', adminOnly, async () => {
+      const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
+      const rows = await prisma.mlOrderPending.findMany({ where: { status: 'pending' }, select: { id: true, rawPayload: true } });
+      const ids = rows.filter((o) => isHistoricalOrder((o.rawPayload as any)?.date_created, integ?.connectedAt)).map((o) => o.id);
+      if (!ids.length) return { ok: true, dismissed: 0 };
+      const upd = await prisma.mlOrderPending.updateMany({ where: { id: { in: ids }, status: 'pending' }, data: { status: 'dismissed' } });
+      return { ok: true, dismissed: upd.count };
     });
 
     r.get('/ml-orders/pending-count', async () => {

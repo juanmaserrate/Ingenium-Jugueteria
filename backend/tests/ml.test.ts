@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { matchListings, normSku, normTitle, type InvProduct, type MlListing } from '../src/mercadolibre/match.js';
-import { sumPendingForVariant } from '../src/services/pendingMath.js';
+import { sumPendingForVariant, isHistoricalOrder } from '../src/services/pendingMath.js';
 
 const listing = (o: Partial<MlListing> & { id: string; title: string }): MlListing => ({
   permalink: null, status: 'active', qty: 5, skus: [], variations: [], ...o,
@@ -177,4 +177,15 @@ test('reserva: cantidades inválidas o negativas no rompen ni restan', () => {
     mlOrders: [{ items: [{ mlItemId: 'MLA1', qty: -2 }, { mlItemId: 'MLA1', qty: Number.NaN }, { mlItemId: 'MLA1', qty: 2 }] }, { items: null as any }],
   });
   assert.equal(n, 2);
+});
+
+test('historial: compra anterior a la conexión de la cuenta no entra como pendiente', () => {
+  const connectedAt = new Date('2026-11-01T21:00:00Z');
+  assert.equal(isHistoricalOrder('2026-02-10T14:22:11.000-04:00', connectedAt), true);
+  assert.equal(isHistoricalOrder('2026-11-03T10:00:00.000-04:00', connectedAt), false);
+  // el mismo día de la conexión queda dentro del margen (no se pierde una venta real)
+  assert.equal(isHistoricalOrder('2026-11-01T09:00:00.000-04:00', connectedAt), false);
+  assert.equal(isHistoricalOrder(null, connectedAt), false);
+  assert.equal(isHistoricalOrder('2026-02-10T00:00:00Z', null), false);
+  assert.equal(isHistoricalOrder('no-es-fecha', connectedAt), false);
 });

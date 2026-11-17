@@ -14,7 +14,15 @@ import { sumPendingForVariant, type MlPendingItem, type TnPendingItem } from './
 // stock para siempre.
 export const PENDING_WINDOW_DAYS = 30;
 
-const windowStart = () => new Date(Date.now() - PENDING_WINDOW_DAYS * 24 * 3600 * 1000);
+// La reserva arranca con el deploy que la introdujo: las pendientes recibidas ANTES (backlog
+// e historial importado al conectar ML) nunca reservan — su stock se descuenta, como siempre,
+// recién al asignarlas.
+export const RESERVE_FROM = new Date('2026-11-17T16:40:00Z');
+
+const windowStart = () => {
+  const w = Date.now() - PENDING_WINDOW_DAYS * 24 * 3600 * 1000;
+  return new Date(Math.max(w, RESERVE_FROM.getTime()));
+};
 
 // Unidades de la variante comprometidas en ventas online todavía sin asignar.
 export async function pendingWebQtyForVariant(variantId: string): Promise<number> {

@@ -5,7 +5,7 @@
 
 import { api, ApiError } from '../core/api.js';
 import { toast } from '../core/notifications.js';
-import { activeBranchId } from '../core/auth.js';
+import { activeBranchId, isAdmin } from '../core/auth.js';
 
 // Nombres/títulos vienen de Mercado Libre (comprador externo): tratarlos como no confiables.
 function esc(s) {
@@ -31,7 +31,29 @@ export async function mount(el) {
           </div>`;
         return;
       }
-      listEl.innerHTML = orders.map((o) => renderOrder(o, branches)).join('');
+      // Historial = compras anteriores a conectar la cuenta (ya entregadas): se ofrecen descartar.
+      const hist = orders.filter((o) => o.historical);
+      const banner = hist.length && isAdmin() ? `
+        <div class="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap">
+          <div class="text-sm text-[#241a0d]"><b>${hist.length} venta${hist.length === 1 ? '' : 's'} vieja${hist.length === 1 ? '' : 's'}</b> (compras anteriores a conectar Mercado Libre, ya entregadas). No hace falta cobrarlas: podés descartarlas todas juntas.</div>
+          <button id="btn-dismiss-hist" class="px-4 py-2 bg-[#241a0d] text-white rounded-xl font-bold text-sm whitespace-nowrap">Descartar las ${hist.length} viejas</button>
+        </div>` : '';
+      listEl.innerHTML = banner + orders.map((o) => renderOrder(o, branches)).join('');
+      listEl.querySelector('#btn-dismiss-hist')?.addEventListener('click', async () => {
+        if (!confirm(`¿Descartar las ${hist.length} ventas viejas? No se registran como venta ni tocan el stock.`)) return;
+        try {
+          const r = await api('/api/ml-orders/dismiss-historical', { method: 'POST', body: {} });
+          toast(`${r.dismissed} venta(s) vieja(s) descartada(s)`, 'success');
+          refresh();
+        } catch (err) { toast(err.message, 'error'); }
+      });
+      listEl.querySelectorAll('.btn-dismiss').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('¿Descartar esta venta? No se registra como venta ni toca el stock.')) return;
+          try { await api(`/api/ml-orders/${btn.dataset.id}/dismiss`, { method: 'POST', body: {} }); toast('Venta descartada', 'success'); refresh(); }
+          catch (err) { toast(err.message, 'error'); }
+        });
+      });
       listEl.querySelectorAll('.btn-assign').forEach((btn) => {
         btn.addEventListener('click', async () => {
           const id = btn.dataset.id;
@@ -93,7 +115,7 @@ function renderOrder(o, branches) {
         <div>
           <p class="font-bold text-lg">Orden ML #${esc(o.number ?? o.mlOrderId)}</p>
           <p class="text-sm text-[#7d6c5c]">${esc(o.customerName)}</p>
-          <p class="text-xs text-[#7d6c5c]">Recibida: ${new Date(o.receivedAt).toLocaleString('es-AR')}</p>
+          <p class="text-xs text-[#7d6c5c]">Compra: ${new Date(o.orderDate || o.receivedAt).toLocaleString('es-AR')}${o.historical ? ' · <span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-bold">anterior a la conexión</span>' : ''}</p>
         </div>
         <div class="text-right">
           <p class="text-2xl font-black">${money(o.total)}</p>
@@ -114,6 +136,7 @@ function renderOrder(o, branches) {
         <label class="text-sm font-bold">Asignar a sucursal:</label>
         <select id="branch-${esc(o.id)}" class="px-3 py-2 rounded-xl border border-[#fff1e6] flex-1">${branchOpts}</select>
         <button data-id="${esc(o.id)}" class="btn-assign px-4 py-2 bg-[#d82f1e] text-white rounded-xl font-bold">Confirmar</button>
+        ${isAdmin() ? `<button data-id="${esc(o.id)}" class="btn-dismiss px-3 py-2 bg-gray-100 text-[#241a0d] rounded-xl font-bold text-sm" title="No es una venta a registrar">Descartar</button>` : ''}
       </div>
     </div>`;
 }

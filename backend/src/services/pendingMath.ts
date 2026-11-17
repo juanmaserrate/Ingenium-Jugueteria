@@ -43,3 +43,12 @@ export function sumPendingForVariant(input: {
   }
   return total;
 }
+
+// ¿La orden es HISTORIAL (comprada antes de conectar la cuenta)? Esas ya se entregaron:
+// no deben entrar como venta pendiente ni reservar stock. Margen de 1 día por husos horarios.
+export function isHistoricalOrder(orderDate: unknown, connectedAt: Date | null | undefined, marginMs = 24 * 3600 * 1000): boolean {
+  if (!orderDate || !connectedAt) return false;
+  const t = new Date(String(orderDate)).getTime();
+  if (!Number.isFinite(t)) return false;
+  return t < connectedAt.getTime() - marginMs;
+}

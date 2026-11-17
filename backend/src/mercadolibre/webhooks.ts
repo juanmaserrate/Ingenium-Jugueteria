@@ -1,5 +1,6 @@
 import { prisma } from '../db.js';
 import { repushStockForOrderItems } from '../services/pendingReserve.js';
+import { isHistoricalOrder } from '../services/pendingMath.js';
 import { Prisma } from '@prisma/client';
 import { requireMlClient, getMlClient } from './client.js';
 import { processReturn } from '../services/returns.js';
@@ -39,6 +40,10 @@ export async function ingestPaidMlOrder(order: any) {
   const mlOrderId = String(order.id);
   const existing = await prisma.mlOrderPending.findUnique({ where: { mlOrderId } });
   if (existing) return { skipped: 'already received' };
+
+  // Compras anteriores a la conexión de la cuenta = historial ya entregado: no entran.
+  const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
+  if (isHistoricalOrder(order?.date_created, integ?.connectedAt)) return { skipped: 'historical' };
 
   const buyer = order.buyer ?? {};
   const customerName = [buyer.first_name, buyer.last_name].filter(Boolean).join(' ') || buyer.nickname || 'Sin nombre';
@@ -142,14 +147,17 @@ export async function reconcileMlOrders(): Promise<{ scanned: number; ingested: 
     } catch { break; }
     const results = res?.results ?? [];
     if (!results.length) break;
+    let reachedHistory = false;
     for (const order of results) {
+      // Vienen de la más nueva a la más vieja: al llegar al historial previo a la conexión, cortar.
+      if (isHistoricalOrder(order?.date_created, integ.connectedAt)) { reachedHistory = true; break; }
       scanned++;
       const mlOrderId = String(order.id);
       const existing = await prisma.mlOrderPending.findUnique({ where: { mlOrderId } });
       if (existing) continue;
       try { await ingestPaidMlOrder(order); ingested++; } catch { /* seguir */ }
     }
-    if (results.length < 50) break;
+    if (reachedHistory || results.length < 50) break;
   }
   return { scanned, ingested };
 }
