@@ -285,7 +285,8 @@ export async function mount(el) {
       try {
         const r = await api(`/api/integrations/ml/category-map/${encodeURIComponent(c.id)}/suggest`, { method: 'POST', body: {} });
         const top = (r.candidates || [])[0];
-        if (top && top.share >= 0.6) {
+        // Con menos de 5 productos probados una coincidencia no prueba nada: queda para elegir.
+        if (top && top.share >= 0.6 && (r.sampled || 0) >= 5) {
           const w = await api(`/api/integrations/ml/category-map/${encodeURIComponent(c.id)}`, { method: 'PUT', body: { mlCategoryId: top.categoryId } });
           c.mlCategoryId = w.mlCategoryId; c.mlCategoryName = w.mlCategoryName; saved++;
         } else { catSuggest[c.id] = r.candidates || []; doubt++; }
