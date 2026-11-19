@@ -238,7 +238,21 @@ async function publishProductCore(input: PublishInput): Promise<any> {
       await ml.validateItem(payload);
       return { ok: true, dryRun: true, categoryId, saleTerms: payload.sale_terms };
     } catch (err: any) {
-      return { error: 'ml_rejected', dryRun: true, categoryId, details: err?.response?.data ?? err?.message };
+      // /items/validate responde 400 también cuando solo hay ADVERTENCIAS (que al publicar de
+      // verdad no frenan). Se distingue: solo advertencias = publicable. Y se compara contra
+      // el mismo item SIN la garantía para saber si el problema son las condiciones de venta.
+      const data = err?.response?.data;
+      const causes: any[] = Array.isArray(data?.cause) ? data.cause : [];
+      const onlyWarnings = (list: any[]) => list.length > 0 && list.every((c) => c?.type === 'warning');
+      let withoutTerms = 'ok';
+      try { const { sale_terms: _omit, ...rest } = payload; await ml.validateItem(rest); }
+      catch (e2: any) {
+        const c2: any[] = Array.isArray(e2?.response?.data?.cause) ? e2.response.data.cause : [];
+        withoutTerms = onlyWarnings(c2) ? 'solo advertencias' : 'rechazado';
+      }
+      const warnings = causes.filter((c) => c?.type === 'warning').map((c) => c?.message || c?.code);
+      if (onlyWarnings(causes)) return { ok: true, dryRun: true, categoryId, saleTerms: payload.sale_terms, warnings, withoutTerms };
+      return { error: 'ml_rejected', dryRun: true, categoryId, withoutTerms, warnings, details: data ?? err?.message };
     }
   }
 
