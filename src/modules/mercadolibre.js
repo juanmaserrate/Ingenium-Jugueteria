@@ -244,8 +244,8 @@ export async function mount(el) {
     catch (err) { el.querySelector('#catmap-body').innerHTML = `<tr><td colspan="4" class="py-6 text-center text-red-600">${esc(err.message)}</td></tr>`; }
   }
   // Aprende de las publicaciones que ya existen en ML: para cada categoría del sistema mira en
-  // qué categoría de ML están publicados sus productos. Guarda sola cuando es clara (≥60% y al
-  // menos 3 publicaciones); el resto queda con las opciones a la vista para elegir.
+  // qué categoría de ML están publicados sus productos. Guarda sola cuando es clara (≥60%, al
+  // menos 3 publicaciones y que cubran ≥15% de la categoría); el resto queda con opciones para elegir.
   el.querySelector('#btn-catmap-listings').addEventListener('click', async () => {
     const btn = el.querySelector('#btn-catmap-listings');
     if (btn.disabled) return;
@@ -257,7 +257,10 @@ export async function mount(el) {
         const row = catRows.find((x) => x.id === c.categoryId);
         if (!row || row.mlCategoryId) continue;
         const top = c.candidates[0];
-        if (top && top.share >= 0.6 && c.publicaciones >= 3) {
+        // Además tienen que ser representativas: al menos el 15% de los productos de la categoría.
+        // (Si de 1.000 productos solo hay 30 publicados y son todos de un tipo, eso no define la categoría.)
+        const coverage = row.products ? c.publicaciones / row.products : 0;
+        if (top && top.share >= 0.6 && c.publicaciones >= 3 && coverage >= 0.15) {
           try {
             const w = await api(`/api/integrations/ml/category-map/${encodeURIComponent(c.categoryId)}`, { method: 'PUT', body: { mlCategoryId: top.categoryId } });
             row.mlCategoryId = w.mlCategoryId; row.mlCategoryName = w.mlCategoryName; saved++;
