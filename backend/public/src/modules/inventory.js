@@ -821,6 +821,16 @@ async function editInline(td, list, container) {
   });
 }
 
+// "Mantener todos los datos": al guardar un producto con la casilla tildada se recuerda
+// todo lo cargado (menos código, códigos de barras y fotos) y el próximo alta —de a uno o en
+// lote— arranca con esos datos. La casilla y los datos persisten entre aperturas del formulario.
+const KEEP_ALL_KEY = 'inv_keep_all';
+const KEEP_DRAFT_KEY = 'inv_last_draft';
+function keepAllOn() { try { return localStorage.getItem(KEEP_ALL_KEY) === '1'; } catch { return false; } }
+function loadKeptDraft() {
+  try { return keepAllOn() ? JSON.parse(localStorage.getItem(KEEP_DRAFT_KEY) || 'null') : null; } catch { return null; }
+}
+
 async function openProductForm(p, container) {
   // El listado es liviano (sin descripción / SEO / medidas / video para no congelar al
   // abrir Inventario). Al EDITAR un producto existente traemos la ficha completa para
@@ -843,6 +853,11 @@ async function openProductForm(p, container) {
         <button type="button" data-mode="single" class="mode-btn px-4 py-2 text-sm font-bold rounded-xl bg-white text-[#d82f1e] shadow-sm">Un producto</button>
         <button type="button" data-mode="batch"  class="mode-btn px-4 py-2 text-sm font-bold rounded-xl text-[#7d6c5c]">Varios (lote)</button>
       </div>
+      <div class="flex flex-col gap-1">
+        <label id="keep-all-label" class="flex items-center gap-2 cursor-pointer text-sm font-bold text-[#241a0d] bg-[#eef6ff] border border-[#bcd7f5] rounded-2xl px-3 py-2" title="El próximo producto arranca con todos estos datos (menos código, códigos de barras y fotos)">
+          <input type="checkbox" id="keep-all" class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+          <span>Mantener todos los datos para el próximo producto</span>
+        </label>
       <div id="keep-fields-wrapper" class="hidden flex-col gap-1">
         <label id="keep-fields-label" class="flex items-center gap-2 cursor-pointer text-sm font-bold text-[#241a0d] bg-[#fff8f0] border border-[#e3ceba] rounded-2xl px-3 py-2">
           <input type="checkbox" id="keep-fields" checked class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
@@ -853,6 +868,7 @@ async function openProductForm(p, container) {
           <img src="assets/img/tiendanube.png" alt="" class="h-4 w-4 object-contain" />
           <span>Mantener categorías de Tienda Nube</span>
         </label>
+      </div>
       </div>
     </div>`}
     <form id="prod-form" class="grid grid-cols-3 gap-3">
@@ -1064,6 +1080,16 @@ async function openProductForm(p, container) {
     closeOnBackdrop: false,
     onOpen: (el, close) => {
       const form = el.querySelector('#prod-form');
+
+      // Datos del producto anterior (si quedó tildado "Mantener todos los datos"). Los ids de
+      // los combos se ponen ANTES de montarlos para que muestren el nombre correcto.
+      const keptDraft = isEdit ? null : loadKeptDraft();
+      if (keptDraft?.values) {
+        for (const k of ['category_id', 'subcategory_id', 'brand_id', 'supplier_id']) {
+          const h = form.elements[k];
+          if (h && keptDraft.values[k] != null) h.value = keptDraft.values[k];
+        }
+      }
 
       // Comboboxes escribibles para Categoría/Subcategoría/Marca/Proveedor (mismo UX que
       // los filtros: se escribe, se acota, alfabético, y se puede crear al vuelo).
@@ -1631,6 +1657,88 @@ async function openProductForm(p, container) {
           </div>`;
       };
 
+      // ----- Mantener todos los datos -----
+      const keepAllChk = el.querySelector('#keep-all');
+      const blankVariantRow = () => ({ valor: '', code: '', barcode: '', price: '', lomas: 0, banf: 0 });
+      // Foto de lo cargado en el formulario (sin código, códigos de barras ni fotos).
+      const snapshotForm = () => {
+        const values = Object.fromEntries(new FormData(form).entries());
+        delete values.code; delete values.published_meli; delete values.published_tn;
+        return {
+          values,
+          published_meli: form.elements.published_meli.checked,
+          published_tn: form.elements.published_tn.checked,
+          hasVariants: !!hasVarChk?.checked,
+          variantType: variantTypeIn?.value || '',
+          variantRows: variantRows.filter((r) => String(r.valor).trim())
+            .map((r) => ({ valor: r.valor, price: r.price ?? '', lomas: r.lomas || 0, banf: r.banf || 0 })),
+          tnCats: Array.from(el.querySelectorAll('#tn-cats-box input[data-tn-cat]:checked')).map((cb) => Number(cb.dataset.tnCat)),
+          ml: {
+            listing: el.querySelector('#ml-listing')?.value || '',
+            condition: el.querySelector('#ml-condition')?.value || '',
+            category: el.querySelector('#ml-category')?.value || '',
+          },
+        };
+      };
+      const rememberDraft = (snap) => {
+        try {
+          if (keepAllChk?.checked) localStorage.setItem(KEEP_DRAFT_KEY, JSON.stringify(snap));
+          else localStorage.removeItem(KEEP_DRAFT_KEY);
+        } catch { /* sin storage: no se recuerda */ }
+      };
+      const setChk = (chk, on) => {
+        if (chk && chk.checked !== !!on) { chk.checked = !!on; chk.dispatchEvent(new Event('change', { bubbles: true })); }
+      };
+      const applyKeptDraft = (d) => {
+        for (const [k, v] of Object.entries(d.values || {})) {
+          const e = form.elements[k];
+          if (e && e.type !== 'checkbox' && 'value' in e) e.value = v;
+        }
+        form.elements.code.value = ''; // el código es único: siempre nuevo
+        for (const id of (d.tnCats || [])) selectedTnCats.add(Number(id));
+        setChk(form.elements.published_tn, d.published_tn);
+        setChk(form.elements.published_meli, d.published_meli);
+        el.querySelectorAll('#tn-cats-box input[data-tn-cat]').forEach((cb) => { cb.checked = selectedTnCats.has(Number(cb.dataset.tnCat)); });
+        const setVal = (sel, v) => { const n = el.querySelector(sel); if (n && v) n.value = v; };
+        setVal('#ml-listing', d.ml?.listing); setVal('#ml-condition', d.ml?.condition); setVal('#ml-category', d.ml?.category);
+        if (hasVarChk && d.hasVariants) {
+          setChk(hasVarChk, true);
+          if (variantTypeIn) variantTypeIn.value = d.variantType || '';
+          variantRows.length = 0;
+          for (const r of (d.variantRows || [])) variantRows.push({ ...blankVariantRow(), valor: r.valor, price: r.price ?? '', lomas: r.lomas || 0, banf: r.banf || 0 });
+          if (!variantRows.length) variantRows.push(blankVariantRow());
+          drawVariantRows();
+        }
+        setTimeout(() => { form.elements.name.focus(); form.elements.name.select?.(); }, 60);
+      };
+      // En lote, con "mantener todo": queda TODO como está y solo se limpia lo que no se puede
+      // repetir (código, códigos de barras de variantes y fotos).
+      const resetKeepingAll = () => {
+        form.elements.code.value = '';
+        const kept = variantRows.map((r) => ({ ...blankVariantRow(), valor: r.valor, price: r.price ?? '', lomas: r.lomas || 0, banf: r.banf || 0 }));
+        variantRows.length = 0; variantRows.push(...kept);
+        drawVariantRows();
+        savedImages.length = 0;
+        for (const u of objectUrls.values()) URL.revokeObjectURL(u);
+        objectUrls.clear();
+        pendingFiles.length = 0;
+        renderImageThumbs();
+        setTimeout(() => { form.elements.name.focus(); form.elements.name.select?.(); }, 30);
+      };
+      if (keepAllChk) {
+        keepAllChk.checked = keepAllOn();
+        keepAllChk.addEventListener('change', () => {
+          try {
+            localStorage.setItem(KEEP_ALL_KEY, keepAllChk.checked ? '1' : '0');
+            if (!keepAllChk.checked) localStorage.removeItem(KEEP_DRAFT_KEY);
+          } catch { /* sin storage */ }
+        });
+      }
+      if (keptDraft) {
+        applyKeptDraft(keptDraft);
+        toast('Se cargaron los datos del producto anterior', 'info');
+      }
+
       // Acciones modo "single"
       el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
       el.querySelector('[data-act="save"]').addEventListener('click', async (ev) => {
@@ -1639,8 +1747,10 @@ async function openProductForm(p, container) {
         btn.disabled = true;
         try {
           const payload = readForm();
+          const snap = isEdit ? null : snapshotForm();
           const saved = await persistOne(payload);
           if (!saved) return;
+          if (snap) rememberDraft(snap);
           toast(isEdit ? 'Actualizado' : 'Creado', 'success');
           close(saved);
           renderProducts(container);
@@ -1664,8 +1774,10 @@ async function openProductForm(p, container) {
           btn.disabled = true;
           try {
             const payload = readForm();
+            const snap = snapshotForm();
             const saved = await persistOne(payload);
             if (!saved) return;
+            rememberDraft(snap);
             batch.push({
               id: saved.id, name: saved.name, code: saved.code,
               cost: saved.cost, price: saved.price,
@@ -1674,8 +1786,12 @@ async function openProductForm(p, container) {
             });
             toast(`Agregado al lote (${batch.length})`, 'success');
             renderBatchList();
-            const keep = el.querySelector('#keep-fields')?.checked ?? true;
-            resetForBatch(keep);
+            if (keepAllChk?.checked) {
+              resetKeepingAll();
+            } else {
+              const keep = el.querySelector('#keep-fields')?.checked ?? true;
+              resetForBatch(keep);
+            }
           } catch (e) {
             // Sin esto, un error del backend (p. ej. código duplicado) dejaba la UI
             // "trabada" sin feedback. Mostramos el motivo y liberamos el botón.
@@ -1692,8 +1808,10 @@ async function openProductForm(p, container) {
             // Si el formulario tiene un nombre cargado, intentamos guardarlo también antes de cerrar.
             if (form.elements.name.value.trim()) {
               const payload = readForm();
+              const snap = snapshotForm();
               const saved = await persistOne(payload);
               if (saved) {
+                rememberDraft(snap);
                 batch.push({
                   id: saved.id, name: saved.name, code: saved.code, price: saved.price,
                   stockLomas: payload.qtyLomas, stockBanf: payload.qtyBanf,

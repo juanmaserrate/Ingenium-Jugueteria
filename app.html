@@ -103,6 +103,7 @@
     // Mercado Libre
     registerRoute('/mercadolibre',         () => import('./src/modules/mercadolibre.js'));
     registerRoute('/ventas-ml',            () => import('./src/modules/ventas-ml.js'));
+    registerRoute('/senas',                () => import('./src/modules/senas.js'));
 
     // Arrancar cola de sync local para modo offline
     import('./src/core/sync-queue.js');

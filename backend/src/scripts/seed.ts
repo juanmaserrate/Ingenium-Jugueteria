@@ -52,6 +52,23 @@ export async function runSeed() {
   } catch (err) {
     console.warn('[seed] no se pudo asegurar employees.branch_ids:', err);
   }
+  // Señas: uso parcial + devolución (sobrante o cancelación). Categorías: mapeo a Mercado Libre.
+  for (const ddl of [
+    `ALTER TABLE "senas" ADD COLUMN IF NOT EXISTS "used_amount" DOUBLE PRECISION`,
+    `ALTER TABLE "senas" ADD COLUMN IF NOT EXISTS "refund_amount" DOUBLE PRECISION`,
+    `ALTER TABLE "senas" ADD COLUMN IF NOT EXISTS "refund_method_id" TEXT`,
+    `ALTER TABLE "senas" ADD COLUMN IF NOT EXISTS "refund_method_name" TEXT`,
+    `ALTER TABLE "senas" ADD COLUMN IF NOT EXISTS "refund_affects_cash" BOOLEAN`,
+    `ALTER TABLE "senas" ADD COLUMN IF NOT EXISTS "refund_branch_id" TEXT`,
+    `ALTER TABLE "senas" ADD COLUMN IF NOT EXISTS "cancelled_at" TIMESTAMP(3)`,
+    `ALTER TABLE "categories" ADD COLUMN IF NOT EXISTS "ml_category_id" TEXT`,
+    `ALTER TABLE "categories" ADD COLUMN IF NOT EXISTS "ml_category_name" TEXT`,
+    `ALTER TABLE "subcategories" ADD COLUMN IF NOT EXISTS "ml_category_id" TEXT`,
+    `ALTER TABLE "subcategories" ADD COLUMN IF NOT EXISTS "ml_category_name" TEXT`,
+  ]) {
+    try { await prisma.$executeRawUnsafe(ddl); }
+    catch (err) { console.warn('[seed] DDL no aplicado:', ddl, err); }
+  }
   // Snapshot del vendedor en la venta (el POS lo manda como nombre; ver sales.ts).
   try {
     await prisma.$executeRawUnsafe(

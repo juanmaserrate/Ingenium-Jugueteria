@@ -60,7 +60,9 @@ export async function mount(el) {
       el.querySelector('#ml-link-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-publish-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-howto-box').classList.toggle('hidden', !s.connected);
-      if (s.connected) { await loadMappings(); }
+      el.querySelector('#ml-terms-box').classList.toggle('hidden', !s.connected);
+      el.querySelector('#ml-catmap-box').classList.toggle('hidden', !s.connected);
+      if (s.connected) { await loadMappings(); loadTermsCount(); loadCatMap(); }
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) {
         el.querySelector('#status-badge').innerHTML = '<span class="px-2 py-0.5 rounded-full bg-red-100 text-red-800 text-xs font-bold">Backend offline</span>';
@@ -136,6 +138,135 @@ export async function mount(el) {
       const det = err?.body?.details ? (typeof err.body.details === 'string' ? err.body.details : JSON.stringify(err.body.details)) : err.message;
       out.innerHTML = `<span class="text-red-600 font-bold">✗ ${esc(err?.body?.message || err.message)}</span><br/><span class="text-xs text-[#7d6c5c]">${esc(det)}</span>`;
     }
+  });
+
+  // ---- Condiciones de la tienda: garantía 30 días + retiro en persona ----
+  let linkedIds = [];
+  async function loadTermsCount() {
+    try {
+      linkedIds = (await api('/api/integrations/ml/linked-items')).itemIds || [];
+      el.querySelector('#terms-count').textContent = `${linkedIds.length} publicaciones vinculadas`;
+    } catch { /* se reintenta al tocar el botón */ }
+  }
+  el.querySelector('#btn-terms-apply').addEventListener('click', async () => {
+    const btn = el.querySelector('#btn-terms-apply');
+    if (btn.disabled) return;
+    await loadTermsCount();
+    if (!linkedIds.length) { toast('No hay publicaciones vinculadas', 'info'); return; }
+    if (!confirm(`Se va a poner garantía de 30 días y retiro en persona en ${linkedIds.length} publicaciones reales de Mercado Libre. ¿Confirmás?`)) return;
+    btn.disabled = true; btn.textContent = 'Aplicando…';
+    el.querySelector('#terms-progress').classList.remove('hidden');
+    const log = el.querySelector('#terms-log'); log.innerHTML = '';
+    const bar = el.querySelector('#terms-bar'); const sum = el.querySelector('#terms-summary');
+    const tot = { done: 0, garantia: 0, retiro: 0, igual: 0, error: 0 };
+    for (let i = 0; i < linkedIds.length; i += 8) {
+      const chunk = linkedIds.slice(i, i + 8);
+      try {
+        const { results } = await api('/api/integrations/ml/apply-terms', { method: 'POST', body: { itemIds: chunk } });
+        for (const r of results) {
+          tot.done++;
+          if (r.warranty === 'aplicada') tot.garantia++;
+          if (r.pickup === 'aplicado') tot.retiro++;
+          if (r.warranty === 'sin cambios' && r.pickup === 'sin cambios') tot.igual++;
+          if (r.error) {
+            tot.error++;
+            const line = document.createElement('div');
+            line.innerHTML = `<span class="text-red-600 font-bold">${esc(r.itemId)}</span> — garantía: ${esc(r.warranty)} · retiro: ${esc(r.pickup)} · <span class="text-[#7d6c5c]">${esc(r.error)}</span>`;
+            log.prepend(line);
+          }
+        }
+      } catch (err) {
+        tot.done += chunk.length; tot.error += chunk.length;
+        const line = document.createElement('div');
+        line.innerHTML = `<span class="text-red-600 font-bold">Tanda con error</span> — ${esc(err.message)}`;
+        log.prepend(line);
+      }
+      bar.style.width = Math.round((tot.done / linkedIds.length) * 100) + '%';
+      sum.textContent = `${tot.done} de ${linkedIds.length} · garantía puesta en ${tot.garantia} · retiro puesto en ${tot.retiro} · ya estaban ${tot.igual} · con error ${tot.error}`;
+    }
+    btn.disabled = false; btn.textContent = 'Aplicar a las publicaciones vinculadas';
+    toast(`Listo: garantía en ${tot.garantia}, retiro en ${tot.retiro}${tot.error ? `, ${tot.error} con error` : ''}`, tot.error ? 'warn' : 'success');
+  });
+
+  // ---- Mapeo de categorías del sistema → Mercado Libre ----
+  let catRows = [];
+  const catSuggest = {}; // id → candidatos de la última sugerencia
+  function drawCatMap() {
+    const body = el.querySelector('#catmap-body');
+    if (!catRows.length) { body.innerHTML = '<tr><td colspan="4" class="py-6 text-center text-[#7d6c5c]">No hay categorías cargadas.</td></tr>'; return; }
+    const mapped = catRows.filter((c) => c.mlCategoryId).length;
+    el.querySelector('#catmap-status').textContent = `${mapped} de ${catRows.length} categorías mapeadas`;
+    body.innerHTML = catRows.map((c) => {
+      const cands = catSuggest[c.id];
+      const candHtml = cands ? (cands.length
+        ? `<div class="mt-1 flex flex-wrap gap-1">${cands.map((k) => `<button type="button" data-pick="${esc(c.id)}" data-cat="${esc(k.categoryId)}" class="px-2 py-0.5 rounded-full border border-[#e3ceba] hover:border-[#d82f1e] text-[11px]" title="${esc(k.categoryId)}">${esc(k.path)} <b>${Math.round(k.share * 100)}%</b></button>`).join('')}</div>`
+        : '<div class="mt-1 text-[11px] text-amber-700">Mercado Libre no sugirió nada para estos productos.</div>') : '';
+      return `<tr class="border-t border-[#fff1e6] align-top">
+        <td class="py-2 px-2 font-bold">${esc(c.name)}</td>
+        <td class="py-2 px-2 text-right">${c.products}</td>
+        <td class="py-2 px-2">
+          ${c.mlCategoryId
+            ? `<div>${esc(c.mlCategoryName || c.mlCategoryId)} <span class="text-[11px] text-[#7d6c5c]">(${esc(c.mlCategoryId)})</span></div>`
+            : '<div class="text-[#7d6c5c] italic">Sin mapear — se elige por el título de cada producto</div>'}
+          ${candHtml}
+        </td>
+        <td class="py-2 px-2 text-right whitespace-nowrap">
+          <button type="button" data-sug="${esc(c.id)}" class="text-xs font-bold text-[#d82f1e] hover:underline">Sugerir</button>
+          <button type="button" data-manual="${esc(c.id)}" class="text-xs text-[#7d6c5c] hover:underline ml-2">Escribir código</button>
+          ${c.mlCategoryId ? `<button type="button" data-clear="${esc(c.id)}" class="text-xs text-[#7d6c5c] hover:underline ml-2">Quitar</button>` : ''}
+        </td>
+      </tr>`;
+    }).join('');
+    body.querySelectorAll('[data-sug]').forEach((b) => b.addEventListener('click', async () => {
+      b.textContent = 'Buscando…';
+      try { catSuggest[b.dataset.sug] = (await api(`/api/integrations/ml/category-map/${encodeURIComponent(b.dataset.sug)}/suggest`, { method: 'POST', body: {} })).candidates || []; }
+      catch (err) { toast(err.message, 'error'); }
+      drawCatMap();
+    }));
+    body.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => saveCat(b.dataset.pick, b.dataset.cat)));
+    body.querySelectorAll('[data-clear]').forEach((b) => b.addEventListener('click', () => saveCat(b.dataset.clear, null)));
+    body.querySelectorAll('[data-manual]').forEach((b) => b.addEventListener('click', () => {
+      const v = prompt('Código de la categoría de Mercado Libre (ej: MLA1234):');
+      if (v && v.trim()) saveCat(b.dataset.manual, v.trim());
+    }));
+  }
+  async function saveCat(id, mlCategoryId) {
+    try {
+      const r = await api(`/api/integrations/ml/category-map/${encodeURIComponent(id)}`, { method: 'PUT', body: { mlCategoryId } });
+      const row = catRows.find((c) => c.id === id);
+      if (row) { row.mlCategoryId = r.mlCategoryId; row.mlCategoryName = r.mlCategoryName; }
+      delete catSuggest[id];
+      drawCatMap();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+  async function loadCatMap() {
+    try { catRows = await api('/api/integrations/ml/category-map'); drawCatMap(); }
+    catch (err) { el.querySelector('#catmap-body').innerHTML = `<tr><td colspan="4" class="py-6 text-center text-red-600">${esc(err.message)}</td></tr>`; }
+  }
+  // Sugiere todas las que faltan: guarda sola la propuesta cuando es clara (≥60% de los
+  // productos probados caen en la misma categoría); las dudosas quedan con opciones para elegir.
+  el.querySelector('#btn-catmap-all').addEventListener('click', async () => {
+    const btn = el.querySelector('#btn-catmap-all');
+    if (btn.disabled) return;
+    const todo = catRows.filter((c) => !c.mlCategoryId && c.products > 0);
+    if (!todo.length) { toast('No quedan categorías con productos sin mapear', 'info'); return; }
+    btn.disabled = true;
+    let saved = 0, doubt = 0, n = 0;
+    for (const c of todo) {
+      n++;
+      btn.textContent = `Sugiriendo ${n}/${todo.length}…`;
+      try {
+        const r = await api(`/api/integrations/ml/category-map/${encodeURIComponent(c.id)}/suggest`, { method: 'POST', body: {} });
+        const top = (r.candidates || [])[0];
+        if (top && top.share >= 0.6) {
+          const w = await api(`/api/integrations/ml/category-map/${encodeURIComponent(c.id)}`, { method: 'PUT', body: { mlCategoryId: top.categoryId } });
+          c.mlCategoryId = w.mlCategoryId; c.mlCategoryName = w.mlCategoryName; saved++;
+        } else { catSuggest[c.id] = r.candidates || []; doubt++; }
+      } catch { catSuggest[c.id] = []; doubt++; }
+      drawCatMap();
+    }
+    btn.disabled = false; btn.textContent = 'Sugerir las que faltan';
+    toast(`Mapeadas ${saved} categorías. ${doubt} quedaron para que elijas.`, doubt ? 'warn' : 'success');
   });
 
   if (!getToken()) toast('Necesitás iniciar sesión para usar esta sección', 'warning');
@@ -237,6 +368,41 @@ function renderShell() {
         <div class="flex items-center gap-3">
           <button id="btn-publish" class="px-4 py-2 bg-[#d82f1e] text-white rounded-xl font-bold">Publicar</button>
           <div id="publish-out" class="text-sm"></div>
+        </div>
+      </section>
+
+      <section id="ml-terms-box" class="hidden bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 space-y-3">
+        <div>
+          <h2 class="text-lg font-bold">Condiciones de venta de la tienda</h2>
+          <p class="text-xs text-[#7d6c5c]">Todo lo que publiques desde el sistema sale con <b>garantía del vendedor de 30 días</b> y <b>retiro en persona</b>. Con este botón se lo aplicás también a las publicaciones que ya están vinculadas al inventario (no cambia precio, stock ni título).</p>
+        </div>
+        <div class="flex items-center gap-3 flex-wrap">
+          <button id="btn-terms-apply" class="px-4 py-2 bg-[#241a0d] text-white rounded-xl font-bold">Aplicar a las publicaciones vinculadas</button>
+          <span id="terms-count" class="text-xs text-[#7d6c5c]"></span>
+        </div>
+        <div id="terms-progress" class="hidden">
+          <div class="h-2 bg-[#fff1e6] rounded-full overflow-hidden"><div id="terms-bar" class="h-2 bg-[#d82f1e] rounded-full transition-all" style="width:0%"></div></div>
+          <div id="terms-summary" class="text-xs text-[#7d6c5c] mt-1"></div>
+        </div>
+        <div id="terms-log" class="space-y-1 text-xs max-h-48 overflow-auto"></div>
+      </section>
+
+      <section id="ml-catmap-box" class="hidden bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 space-y-3">
+        <div class="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h2 class="text-lg font-bold">Categorías: sistema → Mercado Libre</h2>
+            <p class="text-xs text-[#7d6c5c] max-w-2xl">Cada categoría del inventario se publica en la categoría de Mercado Libre que figura acá. "Sugerir" mira los productos de esa categoría y propone la que más coincide. Si una categoría queda sin mapear, Mercado Libre la elige por el título de cada producto.</p>
+          </div>
+          <button id="btn-catmap-all" class="px-4 py-2 bg-[#241a0d] text-white rounded-xl font-bold text-sm">Sugerir las que faltan</button>
+        </div>
+        <div id="catmap-status" class="text-xs text-[#7d6c5c]"></div>
+        <div class="overflow-auto max-h-[28rem] border border-[#fff1e6] rounded-xl">
+          <table class="w-full text-sm">
+            <thead class="sticky top-0 bg-white"><tr class="text-left text-[10px] text-[#7d6c5c] uppercase">
+              <th class="py-2 px-2">Categoría del sistema</th><th class="py-2 px-2 text-right">Productos</th><th class="py-2 px-2">Categoría en Mercado Libre</th><th class="py-2 px-2"></th>
+            </tr></thead>
+            <tbody id="catmap-body"><tr><td colspan="4" class="py-6 text-center text-[#7d6c5c]">Cargando…</td></tr></tbody>
+          </table>
         </div>
       </section>
 

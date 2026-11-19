@@ -18,6 +18,11 @@ const paymentSchema = z.object({
   amount: z.number(),
   affectsCash: z.boolean().optional(),
   senaId: z.string().nullable().optional(),
+  senaRefund: z.object({
+    methodId: z.string().nullable().optional(),
+    methodName: z.string().nullable().optional(),
+    affectsCash: z.boolean().optional(),
+  }).nullable().optional(),
   creditNoteId: z.string().nullable().optional(),
   costMeta: z.any().optional(),
 });

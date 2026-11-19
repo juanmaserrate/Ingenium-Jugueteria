@@ -5,7 +5,7 @@
 
 import { getAll, del } from '../core/db.js';
 import { api } from '../core/api.js';
-import * as Senas from '../repos/senas.js';
+import { openNewSenaModal } from './senas-ui.js';
 import * as Settings from '../repos/settings.js';
 import { activeBranchId } from '../core/auth.js';
 import { money, fmtDate, fmtDateTime } from '../core/format.js';
@@ -311,67 +311,6 @@ async function viewCustomer(root, c) {
 
 // ===== Nueva seña (reserva con anticipo) =====
 async function newSena(el) {
-  const methodsCfg = (await Settings.getConfig('payment_methods', [])) || [];
-  const methods = methodsCfg.length ? methodsCfg : [
-    { id: 'cash', name: 'Efectivo', affects_cash: true },
-    { id: 'transfer', name: 'Transferencia', affects_cash: false },
-    { id: 'card', name: 'Tarjeta', affects_cash: false },
-  ];
-  let customer = null;
-  await openModal({
-    title: 'Nueva seña',
-    size: 'sm',
-    bodyHTML: `
-      <label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1">Cliente (por documento)</label>
-      <div class="flex gap-2">
-        <input id="sena-doc" class="ing-input flex-1" placeholder="N° de documento…" inputmode="numeric" />
-        <button id="sena-find" type="button" class="ing-btn-secondary !px-3">Buscar</button>
-      </div>
-      <div id="sena-cust-info" class="text-xs text-[#7d6c5c] mt-1">Buscá el cliente o, si no existe, se crea al buscar.</div>
-      <label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1 mt-3">Monto de la seña *</label>
-      <input id="sena-amt" type="number" step="0.01" min="0" class="ing-input w-full" placeholder="0" />
-      <label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1 mt-3">Medio de pago</label>
-      <select id="sena-method" class="ing-input w-full">${methods.map(m => `<option value="${m.id}" data-cash="${m.affects_cash ? 1 : 0}">${esc(m.name)}</option>`).join('')}</select>
-      <div class="text-[11px] text-[#7d6c5c] mt-1">Si es en efectivo, la seña entra a la caja al crearla.</div>
-      <label class="block text-xs font-bold text-[#7d6c5c] uppercase mb-1 mt-3">Producto / nota</label>
-      <input id="sena-note" class="ing-input w-full" placeholder="Qué reserva (opcional)" />
-    `,
-    footerHTML: `<button class="ing-btn-secondary" data-act="cancel">Cancelar</button><button class="ing-btn-primary" data-act="ok">Crear seña</button>`,
-    onOpen: (m, close) => {
-      const info = m.querySelector('#sena-cust-info');
-      const setCustomer = (c) => { customer = c; info.textContent = c ? `Cliente: ${c.name}${c.documentNumber ? ' · Doc ' + c.documentNumber : ''}` : 'Buscá el cliente.'; };
-      const doFind = async () => {
-        const v = (m.querySelector('#sena-doc').value || '').trim();
-        if (!v) { toast('Ingresá un documento', 'warn'); return; }
-        try {
-          const found = await api(`/api/customers/by-document/${encodeURIComponent(v)}`);
-          if (found) { setCustomer(found); toast(`Cliente: ${found.name}`, 'success'); return; }
-          const name = window.prompt('Cliente nuevo — nombre y apellido:');
-          if (!name) return;
-          const created = await api('/api/customers', { method: 'POST', body: { name, documentNumber: v, documentType: 'DNI' } });
-          setCustomer(created); toast('Cliente creado', 'success');
-        } catch (e) { toast('Error: ' + (e.message || ''), 'error'); }
-      };
-      m.querySelector('#sena-find').addEventListener('click', doFind);
-      m.querySelector('#sena-doc').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); doFind(); } });
-      m.querySelector('[data-act="cancel"]').addEventListener('click', () => close(false));
-      m.querySelector('[data-act="ok"]').addEventListener('click', async () => {
-        if (!customer) { toast('Elegí (o creá) un cliente por documento', 'warn'); return; }
-        const amount = Number(m.querySelector('#sena-amt').value) || 0;
-        if (amount <= 0) { toast('El monto debe ser mayor a 0', 'warn'); return; }
-        const sel = m.querySelector('#sena-method');
-        const opt = sel.options[sel.selectedIndex];
-        const note = m.querySelector('#sena-note').value.trim() || null;
-        try {
-          const sena = await Senas.create({
-            customerId: customer.id, amount, branchId: activeBranchId(),
-            methodId: sel.value, methodName: opt.text, affectsCash: opt.dataset.cash === '1', note,
-          });
-          close(true);
-          toast(`Seña #${sena.number} creada (${money(amount)})${opt.dataset.cash === '1' ? ' · entró a caja' : ''}`, 'success');
-          render(el);
-        } catch (e) { toast('No se pudo crear: ' + (e.message || ''), 'error'); }
-      });
-    },
-  });
+  const created = await openNewSenaModal();
+  if (created) render(el);
 }

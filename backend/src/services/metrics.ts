@@ -43,6 +43,21 @@ function branchWhere(branchId?: string): Prisma.SaleWhereInput {
 
 const confirmed = { status: 'confirmed' as const };
 
+// Los pagos con seña/vale guardan el nombre con su número ("Seña #12", "Vale ABC"): en los
+// totales por medio de pago se agrupan en una sola fila "Seña" / "Vale".
+type MethodRow = { methodId: string; methodName: string; amount: number };
+export function normalizeMethods(rows: Array<{ methodId: string; methodName: string | null; _sum: { amount: number | null } }>): MethodRow[] {
+  const map = new Map<string, MethodRow>();
+  for (const r of rows) {
+    const fixed = r.methodId === 'sena' ? 'Seña (ya cobrada)' : r.methodId === 'credit_note' ? 'Vale' : null;
+    const key = fixed ? r.methodId : `${r.methodId}|${r.methodName ?? ''}`;
+    const cur = map.get(key) ?? { methodId: r.methodId, methodName: fixed ?? (r.methodName || r.methodId), amount: 0 };
+    cur.amount += r._sum.amount ?? 0;
+    map.set(key, cur);
+  }
+  return [...map.values()].sort((a, b) => b.amount - a.amount);
+}
+
 // fecha AR (UTC-3) a 'YYYY-MM-DD' / 'YYYY-MM'
 const arKey = (d: Date, len: 7 | 10) => new Date(d.getTime() - 3 * 3600 * 1000).toISOString().slice(0, len);
 
@@ -111,22 +126,15 @@ export async function getDashboard(params: { branchId?: string; month: string; t
   const sumTotal = (where: Prisma.SaleWhereInput) =>
     prisma.sale.aggregate({ _sum: { total: true }, _count: true, where: { ...bw, ...confirmed, ...where } });
 
-  // Señas usadas como pago: NO computan en lo facturado. Se restan de los totales.
-  const senaSum = async (where: Prisma.SaleWhereInput) => {
-    const r = await prisma.salePayment.aggregate({
-      _sum: { amount: true },
-      where: { methodId: 'sena', sale: { ...bw, ...confirmed, ...where } },
-    });
-    return r._sum.amount ?? 0;
-  };
-
-  const [todayAgg, yesterdayAgg, monthAggR, prevMonthAggR, todaySena, monthSena] = await Promise.all([
+  // Lo FACTURADO es el total de la venta completo, también cuando parte se pagó con una
+  // seña: la venta se cuenta el día que se hace. (Antes se restaba la parte pagada con seña
+  // y esa plata no figuraba como facturada nunca, ni al señar ni al vender.) La caja no
+  // cambia: el efectivo de la seña entra cuando se cobra la seña, no cuando se usa.
+  const [todayAgg, yesterdayAgg, monthAggR, prevMonthAggR] = await Promise.all([
     sumTotal({ datetime: { gte: tr.gte, lt: tr.lt } }),
     sumTotal({ datetime: { gte: yr.gte, lt: yr.lt } }),
     sumTotal({ datetime: { gte: mr.gte, lt: mr.lt } }),
     sumTotal({ datetime: { gte: pm.gte, lt: pm.lt } }),
-    senaSum({ datetime: { gte: tr.gte, lt: tr.lt } }),
-    senaSum({ datetime: { gte: mr.gte, lt: mr.lt } }),
   ]);
 
   // Caja: saldo acumulado de la caja NORMAL (box='register'). NO incluye la caja
@@ -178,8 +186,7 @@ export async function getDashboard(params: { branchId?: string; month: string; t
     _sum: { amount: true },
     where: { sale: { ...bw, ...confirmed, datetime: { gte: mr.gte, lt: mr.lt } } },
   });
-  const methods = payments.map((p) => ({ methodId: p.methodId, methodName: p.methodName, amount: p._sum.amount ?? 0 }))
-    .sort((a, b) => b.amount - a.amount);
+  const methods = normalizeMethods(payments);
 
   // Top productos del mes (Σ qty por variante → producto)
   const itemsAgg = await prisma.saleItem.groupBy({
@@ -235,13 +242,12 @@ export async function getDashboard(params: { branchId?: string; month: string; t
     select: { number: true, datetime: true, total: true, branchId: true },
   });
 
-  const monthTotal = (monthAggR._sum.total ?? 0) - monthSena;
+  const monthTotal = monthAggR._sum.total ?? 0;
   const monthCount = monthAggR._count ?? 0;
   return {
-    // `total` = neto de señas (lo que usa el panel web). `facturado` = total facturado
-    // bruto (suma de total de ventas, SIN descontar señas), igual que el box "Total
-    // facturado" del módulo Ventas; es lo que consume la app móvil.
-    today: { total: (todayAgg._sum.total ?? 0) - todaySena, facturado: todayAgg._sum.total ?? 0, count: todayAgg._count ?? 0 },
+    // `total` y `facturado` son lo mismo (suma del total de las ventas), igual que el box
+    // "Total facturado" del módulo Ventas. Se mantienen los dos nombres por compatibilidad.
+    today: { total: todayAgg._sum.total ?? 0, facturado: todayAgg._sum.total ?? 0, count: todayAgg._count ?? 0 },
     yesterday: { total: yesterdayAgg._sum.total ?? 0 },
     month: { total: monthTotal, facturado: monthAggR._sum.total ?? 0, count: monthCount, avgTicket: monthCount ? monthTotal / monthCount : 0 },
     prevMonth: { total: prevMonthAggR._sum.total ?? 0, count: prevMonthAggR._count ?? 0 },
@@ -263,7 +269,8 @@ export async function getBalance(params: { branchId?: string; from: string; to: 
   const bw = branchWhere(branchId);
   const where = { ...bw, ...confirmed, datetime: { gte, lt } };
 
-  const [agg, payments, sales, returns] = await Promise.all([
+  const senaWhere = branchId ? { branchId } : {};
+  const [agg, payments, sales, returns, senasNew, senasRefunded] = await Promise.all([
     prisma.sale.aggregate({ _sum: { total: true }, _count: true, where }),
     prisma.salePayment.groupBy({ by: ['methodId', 'methodName'], _sum: { amount: true }, where: { sale: where } }),
     prisma.sale.findMany({ where, orderBy: { datetime: 'desc' }, take: 1000,
@@ -271,20 +278,34 @@ export async function getBalance(params: { branchId?: string; from: string; to: 
     prisma.return.findMany({ where: { ...(branchId ? { branchId } : {}), datetime: { gte, lt } },
       orderBy: { datetime: 'desc' }, take: 1000,
       select: { id: true, number: true, datetime: true, returnedTotal: true, takenTotal: true, difference: true } }),
+    // Señas COBRADAS en el período (plata que entró como anticipo), por medio de pago.
+    prisma.sena.groupBy({ by: ['methodName'], _sum: { amount: true }, _count: true, where: { ...senaWhere, createdAt: { gte, lt } } }),
+    // Plata de señas DEVUELTA en el período (cancelaciones + sobrantes).
+    prisma.sena.findMany({
+      where: { ...senaWhere, refundAmount: { gt: 0 }, OR: [{ cancelledAt: { gte, lt } }, { redeemedAt: { gte, lt } }] },
+      select: { refundAmount: true },
+    }),
   ]);
-  // Las SEÑAS usadas como pago NO computan en lo facturado (la plata ya entró al
-  // crear la seña). Se descuenta del total facturado el monto pagado con seña.
+  // Lo facturado es el total completo de las ventas (ver getDashboard): la parte pagada con
+  // seña también cuenta, el día de la venta. `senaPaid` queda solo como dato informativo.
   const senaPaid = payments.filter((p) => p.methodId === 'sena').reduce((s, p) => s + (p._sum.amount ?? 0), 0);
   // difference = returnedTotal - takenTotal. Positivo = plata reintegrada al cliente (devuelto);
   // negativo = el cliente pagó la diferencia de un canje (entra como facturado adicional).
   const cobradoEnCambios = returns.reduce((s, r) => s + Math.max(0, -(r.difference || 0)), 0);
-  const facturado = (agg._sum.total ?? 0) - senaPaid + cobradoEnCambios;
+  const facturado = (agg._sum.total ?? 0) + cobradoEnCambios;
   const count = agg._count ?? 0;
   const devuelto = returns.reduce((s, r) => s + Math.max(0, r.difference || 0), 0);
   return {
     facturado, devuelto, neto: facturado - devuelto, count,
     avgTicket: count ? facturado / count : 0,
-    methods: payments.map((p) => ({ methodId: p.methodId, methodName: p.methodName, amount: p._sum.amount ?? 0 })).sort((a, b) => b.amount - a.amount),
+    methods: normalizeMethods(payments),
+    senas: {
+      usadas: senaPaid,
+      cobradas: senasNew.reduce((s, r) => s + (r._sum.amount ?? 0), 0),
+      cobradasCount: senasNew.reduce((s, r) => s + (r._count ?? 0), 0),
+      cobradasPorMedio: senasNew.map((r) => ({ methodName: r.methodName || 'Sin medio', amount: r._sum.amount ?? 0 })).sort((a, b) => b.amount - a.amount),
+      devueltas: senasRefunded.reduce((s, r) => s + (r.refundAmount ?? 0), 0),
+    },
     sales, returns,
   };
 }

@@ -626,15 +626,46 @@ function promoCustomerDiscount(amount, promo) {
 // ===== Modal de cobro (se abre al "Confirmar venta") =====
 // Pregunta la(s) forma(s) de pago (permite mixto), sin efectivo por defecto, y recién
 // al "Cobrar y confirmar" ejecuta la venta.
+// Señas: una seña cubre como máximo lo que falta pagar. Si es MAYOR que la venta, se aplica
+// solo lo necesario y el resto queda como sobrante a devolverle al cliente (sena_left).
+// Los vales se respetan primero; las señas se reparten en el orden en que se agregaron.
+function allocateSenaPayments(sale, total) {
+  const pays = sale.payments || [];
+  const vales = round2(pays.filter(p => p.method_id === 'credit_note').reduce((n, p) => n + (Number(p.amount) || 0), 0));
+  let remaining = Math.max(0, round2(total - vales));
+  let leftover = 0;
+  for (const p of pays) {
+    if (p.method_id !== 'sena') continue;
+    const full = Number(p.sena_amount ?? p.amount) || 0; // drafts viejos no traen sena_amount
+    p.sena_amount = full;
+    p.amount = round2(Math.min(full, remaining));
+    remaining = round2(remaining - p.amount);
+    p.sena_left = round2(full - p.amount) > 0.01 ? round2(full - p.amount) : 0;
+    leftover = round2(leftover + p.sena_left);
+  }
+  return leftover;
+}
+
+// Medio elegido para devolver el sobrante de seña (por defecto, el mismo con que se dejó).
+function senaRefundMethod(sale) {
+  const methods = state.paymentMethods || [];
+  const firstSena = (sale.payments || []).find(p => p.method_id === 'sena' && p.sena_left > 0);
+  const id = sale.sena_refund_method || firstSena?.sena_method_id;
+  return methods.find(m => m.id === id) || methods.find(m => m.affects_cash) || methods[0] || null;
+}
+
 async function openCobroModal(root) {
   const sale = activeSale();
   if (!sale) return;
   if (!sale.items.length) { toast('El carrito está vacío', 'warn'); return; }
   const totals = Sales.computeTotals(sale);
+  allocateSenaPayments(sale, totals.total);
   // Arrancar con una fila vacía (sin método) si no hay pagos cargados.
   if (!sale.payments.length) sale.payments = [{ method_id: '', amount: round2(totals.total) }];
 
   const bodyHTML = () => {
+    const senaLeft = allocateSenaPayments(sale, totals.total);
+    const refundM = senaLeft > 0 ? senaRefundMethod(sale) : null;
     const paid = round2((sale.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0));
     const pending = round2(totals.total - paid);
     const exact = Math.abs(pending) <= 0.01;
@@ -665,6 +696,15 @@ async function openCobroModal(root) {
           <div class="space-y-2">${sale.payments.map((p, i) => payRow(p, i)).join('')}</div>
           <div class="mt-2 text-sm flex justify-between"><span class="text-[#7d6c5c]">Pagado ${money(paid)}</span>${estado}</div>
         </div>
+        ${senaLeft > 0 ? `
+        <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-3">
+          <div class="text-sm font-bold text-indigo-800">La seña es mayor que la venta: sobran ${money(senaLeft)}</div>
+          <label class="block text-xs font-bold text-[#7d6c5c] uppercase mt-2 mb-1">¿Cómo se le devuelve el sobrante al cliente?</label>
+          <select data-sena-refund class="ing-input w-full">
+            ${(state.paymentMethods || []).map(m => `<option value="${m.id}" ${refundM && refundM.id === m.id ? 'selected' : ''}>${escapeHtml(m.name)}</option>`).join('')}
+          </select>
+          <div class="text-xs mt-1 font-bold ${refundM?.affects_cash ? 'text-[#d82f1e]' : 'text-[#7d6c5c]'}">${refundM?.affects_cash ? `Salen ${money(senaLeft)} de la caja.` : 'No impacta en la caja.'}</div>
+        </div>` : ''}
         <button type="button" data-cobrar ${canConfirm ? '' : 'disabled'} class="w-full ing-btn-primary text-base py-3 flex items-center justify-center gap-2 ${canConfirm ? '' : 'opacity-50 cursor-not-allowed'}">
           <span class="material-symbols-outlined">check_circle</span> Cobrar y confirmar venta
         </button>
@@ -679,6 +719,9 @@ async function openCobroModal(root) {
     onOpen: (el, close) => {
       const redraw = () => { el.querySelector('#cobro-body').innerHTML = bodyHTML(); wire(); };
       const wire = () => {
+        el.querySelector('[data-sena-refund]')?.addEventListener('change', (ev) => {
+          sale.sena_refund_method = ev.target.value; persistDraft(); redraw();
+        });
         el.querySelectorAll('[data-quick]').forEach(b => b.addEventListener('click', () => {
           // Preserva pagos fijos (vale/seña) y cubre el resto con el medio elegido.
           const fixed = sale.payments.filter(p => p.method_id === 'credit_note' || p.method_id === 'sena');
@@ -735,7 +778,7 @@ function payRow(p, i) {
     return `
     <div class="flex gap-2 items-center">
       <div class="ing-input flex-1 !bg-indigo-50 !border-indigo-200 text-indigo-700 font-bold text-sm flex items-center">Seña #${p.sena_number}</div>
-      <div class="w-28 text-right font-bold text-sm text-indigo-700">${money(p.amount || 0)}</div>
+      <div class="w-28 text-right font-bold text-sm text-indigo-700 leading-tight">${money(p.amount || 0)}${p.sena_left > 0 ? `<div class="text-[10px] font-normal text-[#7d6c5c]">de ${money(p.sena_amount)}</div>` : ''}</div>
       <button data-pay-remove="${i}" title="Quitar seña" class="w-8 h-8 rounded-md text-[#7d6c5c] hover:bg-red-50 hover:text-red-600 flex items-center justify-center">
         <span class="material-symbols-outlined text-base">close</span>
       </button>
@@ -905,7 +948,11 @@ async function _confirmSaleInner(root) {
     payments: (sale.payments || []).map(p => {
       // Pago con seña: no mueve caja (la plata entró al crearla) y lleva senaId.
       if (p.method_id === 'sena') {
-        return { methodId: 'sena', methodName: `Seña #${p.sena_number}`, amount: Number(p.amount) || 0, affectsCash: false, senaId: p.sena_id };
+        const rm = p.sena_left > 0 ? senaRefundMethod(sale) : null;
+        return {
+          methodId: 'sena', methodName: `Seña #${p.sena_number}`, amount: Number(p.amount) || 0, affectsCash: false, senaId: p.sena_id,
+          ...(rm ? { senaRefund: { methodId: rm.id, methodName: rm.name, affectsCash: !!rm.affects_cash } } : {}),
+        };
       }
       // Pago con vale (nota de crédito): no mueve caja; lleva creditNoteId para canjearlo.
       if (p.method_id === 'credit_note') {
@@ -974,7 +1021,7 @@ async function _confirmSaleInner(root) {
     // Antes acá se hacía refreshData() (recargaba TODO el catálogo, ~11k productos, en
     // cada venta). Ahora solo descontamos localmente el stock de lo vendido.
     applyLocalStockDecrement(soldItems, br);
-    state.senas = {}; // invalidar cache de señas (alguna pudo quedar usada)
+    state.senas = {}; state.senasAt = {}; // invalidar cache de señas (alguna pudo quedar usada)
     renderTabs(root); renderCart(root);
     showSaleReceipt(rec);
     // U-8: toast con deshacer durante 8s (reversión: stock + caja + audit).
@@ -1172,16 +1219,36 @@ function wireCustomerBox(root, side, sale, totals) {
   const c = currentCustomer(sale);
   // Traer señas activas del cliente (una sola vez por cliente) y refrescar el box.
   state.senas = state.senas || {};
-  if (c && state.senas[c.id] === undefined) {
-    state.senas[c.id] = []; // marca "cargando" para no re-pedir
-    Senas.list(c.id, 'active').then(list => { state.senas[c.id] = list || []; if (side.querySelector('#pos-cust-box')) refresh(); }).catch(() => { state.senas[c.id] = []; });
+  state.senasAt = state.senasAt || {};
+  // Se vuelven a pedir si pasaron más de 20 s: una seña creada recién (en Señas/Clientes o
+  // en otra PC) tiene que aparecer sin recargar el POS.
+  if (c && (state.senas[c.id] === undefined || Date.now() - (state.senasAt[c.id] || 0) > 20000)) {
+    if (state.senas[c.id] === undefined) state.senas[c.id] = [];
+    state.senasAt[c.id] = Date.now(); // marca "pidiendo" para no re-pedir en cada redibujo
+    const before = JSON.stringify((state.senas[c.id] || []).map(x => x.id));
+    Senas.list(c.id, 'active').then(list => {
+      state.senas[c.id] = list || [];
+      state.senasAt[c.id] = Date.now();
+      const changed = JSON.stringify(state.senas[c.id].map(x => x.id)) !== before;
+      if (changed && side.querySelector('#pos-cust-box')) refresh();
+    }).catch(() => {});
   }
   box.querySelectorAll('[data-use-sena]').forEach(b => b.addEventListener('click', () => {
     const senaId = b.dataset.useSena;
     const sena = (state.senas[c?.id] || []).find(s => s.id === senaId);
     if (!sena) return;
     sale.payments = sale.payments || [];
-    sale.payments.push({ method_id: 'sena', amount: round2(sena.amount), sena_id: sena.id, sena_number: sena.number });
+    sale.payments.push({ method_id: 'sena', amount: round2(sena.amount), sena_amount: round2(sena.amount), sena_method_id: sena.methodId || null, sena_id: sena.id, sena_number: sena.number });
+    // La seña cubre primero; si había un único otro medio cargado, se ajusta a lo que falta.
+    const tot = Sales.computeTotals(sale).total;
+    allocateSenaPayments(sale, tot);
+    const fixedPaid = round2(sale.payments.filter(p => p.method_id === 'sena' || p.method_id === 'credit_note').reduce((n, p) => n + (Number(p.amount) || 0), 0));
+    const others = sale.payments.filter(p => p.method_id !== 'sena' && p.method_id !== 'credit_note');
+    if (others.length === 1) {
+      const rest = round2(Math.max(0, tot - fixedPaid));
+      if (rest > 0) others[0].amount = rest;
+      else sale.payments = sale.payments.filter(p => p !== others[0]);
+    }
     persistDraft(); renderCart(root); // renderCart -> renderSide refresca todo (pagos + box + totales)
     toast(`Seña #${sena.number} aplicada (${money(sena.amount)})`, 'success');
   }));

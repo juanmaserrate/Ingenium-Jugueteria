@@ -16,8 +16,8 @@ export async function senasRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.authenticate);
 
   app.get('/senas', async (req) => {
-    const q = req.query as { customerId?: string; status?: string };
-    return listSenas({ customerId: q.customerId, status: q.status });
+    const q = req.query as { customerId?: string; status?: string; branchId?: string };
+    return listSenas({ customerId: q.customerId, status: q.status, branchId: q.branchId });
   });
 
   app.get('/senas/by-number/:number', async (req) => {
@@ -32,7 +32,14 @@ export async function senasRoutes(app: FastifyInstance) {
 
   app.post('/senas/:id/cancel', async (req, reply) => {
     const { id } = req.params as { id: string };
-    await cancelSena(id, req.user.userId);
-    return reply.send({ ok: true });
+    // Cómo se le devuelve la plata al cliente (efectivo → sale de la caja de esa sucursal).
+    const refund = z.object({
+      methodId: z.string().nullable().optional(),
+      methodName: z.string().nullable().optional(),
+      affectsCash: z.boolean().optional(),
+      branchId: z.string().optional(),
+    }).nullable().optional().parse((req.body as any)?.refund ?? null);
+    const sena = await cancelSena(id, req.user.userId, refund);
+    return reply.send({ ok: true, sena });
   });
 }

@@ -127,7 +127,8 @@ export function openMlPublishModal(products) {
             const what = res?.alreadyLinked ? 'ya estaba publicado'
               : res?.mode === 'fanout' ? `publicado: ${res.count} publicaciones (una por variante)${res.failed?.length ? `, ${res.failed.length} variante(s) con error` : ''}`
               : 'publicado';
-            line.innerHTML = `<span>✅</span><span><b>${esc(p.name)}</b> — ${what}${link ? ` · <a href="${esc(link)}" target="_blank" rel="noopener" class="underline text-[#d82f1e]">ver</a>` : ''}</span>`;
+            const catNote = res?.categoryFallback ? ' <span class="text-amber-700">(Mercado Libre rechazó la categoría mapeada; salió en la que sugiere por el título)</span>' : '';
+            line.innerHTML = `<span>✅</span><span><b>${esc(p.name)}</b> — ${what}${catNote}${link ? ` · <a href="${esc(link)}" target="_blank" rel="noopener" class="underline text-[#d82f1e]">ver</a>` : ''}</span>`;
           } catch (err) {
             fail++;
             line.innerHTML = `<span>❌</span><span><b>${esc(p.name)}</b> — <span class="text-red-600">${esc(errText(err))}</span></span>`;

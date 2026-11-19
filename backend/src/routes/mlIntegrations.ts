@@ -12,6 +12,8 @@ import { maybeReconcileMl } from '../mercadolibre/webhooks.js';
 import { predictCategory, publishProduct } from '../mercadolibre/publish.js';
 import { buildSyncPlan, applyLinks, ensureProductMapping, unlinkProduct, productMlStatus } from '../mercadolibre/syncExisting.js';
 import { ValidationError } from '../utils/errors.js';
+import { applyStoreTermsToItem, linkedItemIds } from '../mercadolibre/terms.js';
+import { listCategoryMap, suggestForCategory, setCategoryMap } from '../mercadolibre/categoryMap.js';
 import { isHistoricalOrder } from '../services/pendingMath.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -255,6 +257,36 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       }
     });
 
+    // --- Condiciones de la tienda: garantía de 30 días + retiro en persona ---
+    // Publicaciones vinculadas al inventario (para aplicarles las condiciones de a tandas).
+    r.get('/integrations/ml/linked-items', adminOnly, async () => ({ itemIds: await linkedItemIds() }));
+
+    // Aplica garantía + retiro en persona a una tanda de publicaciones (máx 15 por llamada).
+    r.post('/integrations/ml/apply-terms', adminOnly, async (req) => {
+      const b = z.object({ itemIds: z.array(z.string()).min(1).max(15) }).parse(req.body);
+      const results = [];
+      for (const id of b.itemIds) results.push(await applyStoreTermsToItem(id));
+      return { results };
+    });
+
+    // --- Mapeo de categorías del sistema → categorías de Mercado Libre ---
+    r.get('/integrations/ml/category-map', adminOnly, async () => listCategoryMap());
+
+    r.post('/integrations/ml/category-map/:id/suggest', adminOnly, async (req, reply) => {
+      const { id } = req.params as { id: string };
+      try { return await suggestForCategory(id); }
+      catch (err: any) {
+        if (err instanceof ValidationError) throw err;
+        return reply.status(502).send({ error: 'No se pudo consultar Mercado Libre', details: err?.response?.data ?? err?.message });
+      }
+    });
+
+    r.put('/integrations/ml/category-map/:id', adminOnly, async (req) => {
+      const { id } = req.params as { id: string };
+      const b = z.object({ mlCategoryId: z.string().nullable() }).parse(req.body);
+      return setCategoryMap(id, b.mlCategoryId);
+    });
+
     r.post('/integrations/ml/publish', adminOnly, async (req, reply) => {
       const b = z.object({
         productId: z.string().optional(),
@@ -266,6 +298,7 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
         title: z.string().optional(),
         condition: z.string().optional(),
         familyName: z.string().optional(),
+        dryRun: z.boolean().optional(),
         pictures: z.array(z.string()).optional(),
         attributes: z.array(z.object({ id: z.string(), value_name: z.string() })).optional(),
       }).parse(req.body);

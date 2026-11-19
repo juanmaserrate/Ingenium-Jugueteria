@@ -162,6 +162,15 @@ async function render(el) {
             </div>
           `;
         }).join('') : '<div class="text-sm text-[#7d6c5c]">Sin datos</div>'}
+        ${(data.senas && (data.senas.cobradas || data.senas.usadas || data.senas.devueltas)) ? `
+        <div class="mt-4 pt-3 border-t border-[#fff1e6]">
+          <h3 class="font-black mb-2 flex items-center gap-2"><span class="material-symbols-outlined text-indigo-600 text-base">savings</span> Señas del período</h3>
+          <div class="flex justify-between text-sm"><span>Cobradas (anticipos)</span><b>${money(data.senas.cobradas)}</b></div>
+          ${(data.senas.cobradasPorMedio || []).map(m => `<div class="flex justify-between text-xs text-[#7d6c5c] pl-3"><span>${m.methodName}</span><span>${money(m.amount)}</span></div>`).join('')}
+          <div class="flex justify-between text-sm mt-1"><span>Usadas en ventas</span><b>${money(data.senas.usadas)}</b></div>
+          <div class="flex justify-between text-sm"><span>Devueltas al cliente</span><b>${money(data.senas.devueltas)}</b></div>
+          <p class="text-[11px] text-[#7d6c5c] mt-2">La seña entra a la caja cuando se cobra (si es efectivo). La venta se factura completa el día que se hace; la parte cubierta por la seña figura arriba como "Seña (ya cobrada)".</p>
+        </div>` : ''}
       </div>
     </div>
   `;

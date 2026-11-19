@@ -503,7 +503,8 @@ async function repByPayment(f = {}) {
   const perMethod = new Map();
   const resumen = new Map();
   for (const s of sales) for (const p of (s.payments || [])) {
-    const k = p.methodName || p.methodId || 'Sin método';
+    // Señas y vales guardan su número en el nombre: se agrupan en una sola fila.
+    const k = p.methodId === 'sena' ? 'Seña (ya cobrada)' : p.methodId === 'credit_note' ? 'Vale' : (p.methodName || p.methodId || 'Sin método');
     if (!perMethod.has(k)) perMethod.set(k, []);
     perMethod.get(k).push({
       Numero: s.number, Fecha: fmtDateTime(s.datetime), Sucursal: brMap[s.branchId] || s.branchId,

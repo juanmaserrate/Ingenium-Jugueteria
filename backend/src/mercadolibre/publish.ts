@@ -3,6 +3,8 @@ import { requireMlClient } from './client.js';
 import { getTnClient } from '../tiendanube/client.js';
 import { computeMlStockForVariant } from '../services/stock.js';
 import { enqueueSync } from '../sync/queue.js';
+import { STORE_SALE_TERMS, applyStoreTermsToItem } from './terms.js';
+import { mappedMlCategoryForProduct } from './categoryMap.js';
 
 // Publicación de productos del sistema en Mercado Libre (Fase 3). Es la parte más delicada:
 // crea contenido real en la cuenta. NADA se publica solo — lo dispara el usuario desde la UI.
@@ -59,10 +61,11 @@ export async function predictCategory(title: string) {
   }));
 }
 
-export async function publishProduct(input: {
+export type PublishInput = {
   productId?: string;
   barcode?: string;
   categoryId?: string;
+  dryRun?: boolean; // valida contra ML sin crear nada
   listingTypeId: string;
   price?: number;
   quantity?: number;
@@ -71,7 +74,28 @@ export async function publishProduct(input: {
   familyName?: string;
   pictures?: string[]; // URLs extra (p.ej. fotos de TN que no están locales)
   attributes?: Array<{ id: string; value_name: string }>; // atributos obligatorios de la categoría
-}) {
+};
+
+// Publica un producto. La categoría sale, en orden, de: la que mande el form → la mapeada
+// para su subcategoría/categoría (Inventario ↔ Mercado Libre) → la que predice ML por el
+// título. Si ML rechaza la categoría MAPEADA, se reintenta una vez con la predicha y se avisa.
+export async function publishProduct(input: PublishInput): Promise<any> {
+  if (input.categoryId) return publishProductCore(input);
+  let productId = input.productId;
+  if (!productId && input.barcode) {
+    const v = await prisma.variant.findFirst({ where: { OR: [{ barcode: input.barcode }, { code: input.barcode }] }, select: { productId: true } });
+    productId = v?.productId;
+  }
+  const mapped = productId ? await mappedMlCategoryForProduct(productId).catch(() => null) : null;
+  if (!mapped) return publishProductCore(input);
+  const first: any = await publishProductCore({ ...input, categoryId: mapped });
+  if (first?.error !== 'ml_rejected') return { ...first, categorySource: 'mapeada' };
+  const second: any = await publishProductCore(input);
+  if (second?.error) return { ...first, categorySource: 'mapeada' };
+  return { ...second, categorySource: 'predicha', categoryFallback: true };
+}
+
+async function publishProductCore(input: PublishInput): Promise<any> {
   // Resolver la variante a publicar: por productId (la variante default) o por barcode/code.
   let variant;
   const include = { product: { include: { images: true, brand: true, tnMapping: true } } };
@@ -178,6 +202,7 @@ export async function publishProduct(input: {
     currency_id: 'ARS',
     buying_mode: 'buy_it_now',
     condition: input.condition || 'new',
+    sale_terms: STORE_SALE_TERMS, // garantía del vendedor de 30 días
     pictures,
   };
 
@@ -194,10 +219,28 @@ export async function publishProduct(input: {
     }
   };
 
+  // Tras crear: descripción + condiciones de la tienda (retiro en persona; la garantía ya
+  // viaja en el alta). Nada de esto es fatal: la publicación ya existe.
   const applyDescription = async (id: string) => {
     if (product.description) { try { await ml.setItemDescription(id, stripHtml(product.description)); } catch { /* no fatal */ } }
+    try { await applyStoreTermsToItem(id, ml); } catch { /* no fatal */ }
   };
   const markPublished = () => prisma.product.update({ where: { id: product.id }, data: { publishedMeli: true } }).catch(() => {});
+
+  // Prueba en seco: ML valida el item armado (categoría, atributos, garantía, fotos) sin crearlo.
+  if (input.dryRun) {
+    const payload = {
+      ...basePayload, attributes: buildAttributes(input.familyName || title),
+      family_name: input.familyName || title, price: Number(price), available_quantity: Math.max(1, Math.round(quantity)),
+      listing_type_id: input.listingTypeId,
+    };
+    try {
+      await ml.validateItem(payload);
+      return { ok: true, dryRun: true, categoryId, saleTerms: payload.sale_terms };
+    } catch (err: any) {
+      return { error: 'ml_rejected', dryRun: true, categoryId, details: err?.response?.data ?? err?.message };
+    }
+  }
 
   // Valor distintivo de una variante: une los valores de sus atributos; si no hay, su nombre.
   const variantValue = (v: any): string => {

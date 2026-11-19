@@ -44,6 +44,7 @@ const NAV = [
 
   { section: 'Comercial' },
   { path: '/crm',          label: 'Clientes',         icon: 'group' },
+  { path: '/senas',        label: 'Señas',            icon: 'savings' },
   { path: '/balance',      label: 'Saldo',            icon: 'trending_up', admin: true },
   { path: '/profits',      label: 'Ganancias',        icon: 'paid', admin: true },
   { path: '/contribution', label: 'Contribución',     icon: 'pie_chart', admin: true },

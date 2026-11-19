@@ -76,6 +76,9 @@ model Category {
   id        String   @id
   name      String
   createdAt DateTime @default(now()) @map("created_at")
+  // Categoría de Mercado Libre donde se publican los productos de esta categoría.
+  mlCategoryId   String? @map("ml_category_id")
+  mlCategoryName String? @map("ml_category_name")
 
   subcategories Subcategory[]
   products      Product[]
@@ -87,6 +90,9 @@ model Subcategory {
   id         String @id
   categoryId String @map("category_id")
   name       String
+  // Opcional: pisa la categoría ML de su categoría padre.
+  mlCategoryId   String? @map("ml_category_id")
+  mlCategoryName String? @map("ml_category_name")
 
   category Category  @relation(fields: [categoryId], references: [id])
   products Product[]
@@ -503,6 +509,14 @@ model Sena {
   redeemedAt     DateTime? @map("redeemed_at")
   redeemedSaleId String?   @map("redeemed_sale_id")
   userId         String?   @map("user_id")
+  // Uso parcial: cuánto se aplicó a la venta y cuánto se devolvió (sobrante o cancelación).
+  usedAmount        Float?    @map("used_amount")
+  refundAmount      Float?    @map("refund_amount")
+  refundMethodId    String?   @map("refund_method_id")
+  refundMethodName  String?   @map("refund_method_name")
+  refundAffectsCash Boolean?  @map("refund_affects_cash")
+  refundBranchId    String?   @map("refund_branch_id")
+  cancelledAt       DateTime? @map("cancelled_at")
 
   customer Customer @relation(fields: [customerId], references: [id])
 

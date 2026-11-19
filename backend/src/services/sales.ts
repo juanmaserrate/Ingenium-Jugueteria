@@ -6,7 +6,7 @@ import { randomId } from '../utils/crypto.js';
 import { nextCounter } from './counters.js';
 import { adjustStock, releaseReserved } from './stock.js';
 import { enqueueSync } from '../sync/queue.js';
-import { redeemSena } from './senas.js';
+import { redeemSena, reactivateSenasOfSale } from './senas.js';
 import { redeemCreditNote } from './returns.js';
 import { buildCostMetaForPromo } from './paymentCost.js';
 
@@ -19,6 +19,8 @@ export type SalePaymentInput = {
   // Si el pago es con una SEÑA, su id. La seña ya entró a la caja al crearse, así
   // que este pago NO mueve la caja (affectsCash=false) ni suma a lo facturado.
   senaId?: string | null;
+  // Si la seña es mayor que lo que cubre en la venta: cómo se devuelve el sobrante.
+  senaRefund?: { methodId?: string | null; methodName?: string | null; affectsCash?: boolean } | null;
   // Si el pago es con un VALE (nota de crédito), su id. No mueve la caja; se canjea
   // (marca usado) al confirmar la venta.
   creditNoteId?: string | null;
@@ -226,7 +228,7 @@ export async function confirmSale(input: SaleInput, opts: { userId?: string; all
         },
       });
       // Pago con seña → marcarla como usada, validando cliente y monto.
-      if (p.senaId) await redeemSena(p.senaId, saleId, { amount: p.amount, customerId: input.customerId ?? null, tx });
+      if (p.senaId) await redeemSena(p.senaId, saleId, { amount: p.amount, customerId: input.customerId ?? null, refund: p.senaRefund ?? null, branchId: input.branchId, userId: opts.userId ?? null, tx });
       // Pago con vale (nota de crédito) → canjearlo (una sola vez, valida vencimiento/monto).
       if (p.creditNoteId) await redeemCreditNote(p.creditNoteId, saleId, { amount: p.amount, customerId: input.customerId ?? null, tx });
     }
@@ -351,6 +353,8 @@ export async function cancelSale(
         },
       });
     }
+    // Las señas usadas en esta venta vuelven a quedar disponibles para el cliente.
+    await reactivateSenasOfSale(id, { userId: opts.userId ?? null, tx });
     // El estado ya se fijó a 'cancelled' arriba (guarda atómica).
   });
 
