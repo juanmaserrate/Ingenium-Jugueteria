@@ -48,3 +48,24 @@ export function pickSpread<T>(list: T[], n: number): T[] {
   for (let i = 0; i < n; i++) out.push(list[Math.floor((i * list.length) / n)]);
   return out;
 }
+
+
+// PURA: a partir de pares (categoría del sistema, categoría de ML de una publicación real)
+// arma, por cada categoría del sistema, las categorías de ML que usa el vendedor y su peso.
+export function tallyListingCategories(pairs: Array<{ systemCategoryId: string | null | undefined; mlCategoryId: string | null | undefined }>) {
+  const by = new Map<string, Map<string, number>>();
+  for (const p of pairs) {
+    if (!p.systemCategoryId || !p.mlCategoryId) continue;
+    const m = by.get(p.systemCategoryId) ?? new Map<string, number>();
+    m.set(p.mlCategoryId, (m.get(p.mlCategoryId) ?? 0) + 1);
+    by.set(p.systemCategoryId, m);
+  }
+  const out = new Map<string, { total: number; candidates: Array<{ categoryId: string; votes: number; share: number }> }>();
+  for (const [sys, m] of by) {
+    const total = [...m.values()].reduce((a, b) => a + b, 0);
+    const candidates = [...m.entries()].map(([categoryId, votes]) => ({ categoryId, votes, share: votes / total }))
+      .sort((a, b) => b.votes - a.votes);
+    out.set(sys, { total, candidates });
+  }
+  return out;
+}

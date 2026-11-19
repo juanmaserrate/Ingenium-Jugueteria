@@ -243,6 +243,33 @@ export async function mount(el) {
     try { catRows = await api('/api/integrations/ml/category-map'); drawCatMap(); }
     catch (err) { el.querySelector('#catmap-body').innerHTML = `<tr><td colspan="4" class="py-6 text-center text-red-600">${esc(err.message)}</td></tr>`; }
   }
+  // Aprende de las publicaciones que ya existen en ML: para cada categoría del sistema mira en
+  // qué categoría de ML están publicados sus productos. Guarda sola cuando es clara (≥60% y al
+  // menos 3 publicaciones); el resto queda con las opciones a la vista para elegir.
+  el.querySelector('#btn-catmap-listings').addEventListener('click', async () => {
+    const btn = el.querySelector('#btn-catmap-listings');
+    if (btn.disabled) return;
+    btn.disabled = true; btn.textContent = 'Leyendo tus publicaciones… (30 s)';
+    let saved = 0, doubt = 0;
+    try {
+      const r = await api('/api/integrations/ml/category-map/from-listings', { method: 'POST', body: {} });
+      for (const c of (r.categories || [])) {
+        const row = catRows.find((x) => x.id === c.categoryId);
+        if (!row || row.mlCategoryId) continue;
+        const top = c.candidates[0];
+        if (top && top.share >= 0.6 && c.publicaciones >= 3) {
+          try {
+            const w = await api(`/api/integrations/ml/category-map/${encodeURIComponent(c.categoryId)}`, { method: 'PUT', body: { mlCategoryId: top.categoryId } });
+            row.mlCategoryId = w.mlCategoryId; row.mlCategoryName = w.mlCategoryName; saved++;
+          } catch { catSuggest[c.categoryId] = c.candidates; doubt++; }
+        } else { catSuggest[c.categoryId] = c.candidates; doubt++; }
+      }
+      drawCatMap();
+      toast(`Mapeadas ${saved} categorías desde tus publicaciones. ${doubt} quedaron con opciones para elegir.`, doubt ? 'warn' : 'success');
+    } catch (err) { toast(err.message, 'error'); }
+    btn.disabled = false; btn.textContent = 'Aprender de mis publicaciones';
+  });
+
   // Sugiere todas las que faltan: guarda sola la propuesta cuando es clara (≥60% de los
   // productos probados caen en la misma categoría); las dudosas quedan con opciones para elegir.
   el.querySelector('#btn-catmap-all').addEventListener('click', async () => {
@@ -393,7 +420,10 @@ function renderShell() {
             <h2 class="text-lg font-bold">Categorías: sistema → Mercado Libre</h2>
             <p class="text-xs text-[#7d6c5c] max-w-2xl">Cada categoría del inventario se publica en la categoría de Mercado Libre que figura acá. "Sugerir" mira los productos de esa categoría y propone la que más coincide. Si una categoría queda sin mapear, Mercado Libre la elige por el título de cada producto.</p>
           </div>
-          <button id="btn-catmap-all" class="px-4 py-2 bg-[#241a0d] text-white rounded-xl font-bold text-sm">Sugerir las que faltan</button>
+          <div class="flex gap-2 flex-wrap">
+            <button id="btn-catmap-listings" class="px-4 py-2 bg-[#d82f1e] text-white rounded-xl font-bold text-sm" title="Usa las categorías que ya eligieron en sus publicaciones de Mercado Libre">Aprender de mis publicaciones</button>
+            <button id="btn-catmap-all" class="px-4 py-2 bg-[#241a0d] text-white rounded-xl font-bold text-sm">Sugerir las que faltan</button>
+          </div>
         </div>
         <div id="catmap-status" class="text-xs text-[#7d6c5c]"></div>
         <div class="overflow-auto max-h-[28rem] border border-[#fff1e6] rounded-xl">

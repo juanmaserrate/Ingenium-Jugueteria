@@ -9,7 +9,8 @@ import { ValidationError } from '../utils/errors.js';
 const SITE = 'MLA';
 
 export { tallyPredictions } from './pure.js';
-import { tallyPredictions, pickSpread } from './pure.js';
+import { tallyPredictions, pickSpread, tallyListingCategories } from './pure.js';
+import { buildSyncPlan } from './syncExisting.js';
 
 async function categoryPath(ml: any, categoryId: string): Promise<{ name: string; path: string; leaf: boolean }> {
   const c: any = await ml.getCategory(categoryId);
@@ -63,6 +64,40 @@ export async function suggestForCategory(categoryId: string, sample = 12) {
     withPath.push({ ...c, path });
   }
   return { categoryId, name: cat.name, sampled: total, candidates: withPath };
+}
+
+// La mejor evidencia: las publicaciones que el vendedor YA tiene. Cada publicación emparejada
+// con un producto del inventario dice en qué categoría de ML publica el local los productos de
+// esa categoría del sistema. Devuelve, por categoría del sistema, las categorías de ML usadas.
+export async function suggestFromListings() {
+  const plan = await buildSyncPlan();
+  if (!plan.available) throw new ValidationError('Mercado Libre no está conectado');
+  const rows = plan.rows.filter((r) => r.productId && r.mlCategoryId && (r.state === 'linked' || r.state === 'match'));
+  const products = await prisma.product.findMany({
+    where: { id: { in: [...new Set(rows.map((r) => r.productId as string))] } },
+    select: { id: true, categoryId: true },
+  });
+  const catOf = new Map(products.map((p) => [p.id, p.categoryId]));
+  const tally = tallyListingCategories(rows.map((r) => ({ systemCategoryId: catOf.get(r.productId as string), mlCategoryId: r.mlCategoryId })));
+
+  const ml = await requireMlClient();
+  const pathCache = new Map<string, string>();
+  const pathOf = async (id: string) => {
+    if (!pathCache.has(id)) {
+      try { pathCache.set(id, (await categoryPath(ml, id)).path); } catch { pathCache.set(id, id); }
+    }
+    return pathCache.get(id)!;
+  };
+  const cats = await prisma.category.findMany({ select: { id: true, name: true } });
+  const out = [];
+  for (const c of cats) {
+    const t = tally.get(c.id);
+    if (!t) continue;
+    const candidates = [];
+    for (const k of t.candidates.slice(0, 5)) candidates.push({ ...k, path: await pathOf(k.categoryId) });
+    out.push({ categoryId: c.id, name: c.name, publicaciones: t.total, candidates });
+  }
+  return { scanned: plan.scanned, usadas: rows.length, categories: out.sort((a, b) => b.publicaciones - a.publicaciones) };
 }
 
 // Guarda (o borra, con mlCategoryId=null) el mapeo. Valida contra ML que la categoría exista

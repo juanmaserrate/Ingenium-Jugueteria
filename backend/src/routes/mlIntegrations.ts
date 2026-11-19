@@ -13,7 +13,7 @@ import { predictCategory, publishProduct } from '../mercadolibre/publish.js';
 import { buildSyncPlan, applyLinks, ensureProductMapping, unlinkProduct, productMlStatus } from '../mercadolibre/syncExisting.js';
 import { ValidationError } from '../utils/errors.js';
 import { applyStoreTermsToItem, linkedItemIds } from '../mercadolibre/terms.js';
-import { listCategoryMap, suggestForCategory, setCategoryMap } from '../mercadolibre/categoryMap.js';
+import { listCategoryMap, suggestForCategory, setCategoryMap, suggestFromListings } from '../mercadolibre/categoryMap.js';
 import { isHistoricalOrder } from '../services/pendingMath.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -278,6 +278,15 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       catch (err: any) {
         if (err instanceof ValidationError) throw err;
         return reply.status(502).send({ error: 'No se pudo consultar Mercado Libre', details: err?.response?.data ?? err?.message });
+      }
+    });
+
+    // Sugerencias a partir de las publicaciones que el vendedor ya tiene en ML (tarda ~30 s).
+    r.post('/integrations/ml/category-map/from-listings', adminOnly, async (_req, reply) => {
+      try { return await suggestFromListings(); }
+      catch (err: any) {
+        if (err instanceof ValidationError) throw err;
+        return reply.status(502).send({ error: 'No se pudo leer Mercado Libre', details: err?.response?.data ?? err?.message });
       }
     });
 

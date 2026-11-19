@@ -68,7 +68,7 @@ async function fetchItems(ml: any, ids: string[], via: string[]): Promise<any[]>
   for (let i = 0; i < ids.length && multigetOk; i += 20) {
     const chunk = ids.slice(i, i + 20);
     try {
-      const res: any = await ml.getItemsMulti(chunk, 'id,title,permalink,status,available_quantity,seller_custom_field,attributes,variations');
+      const res: any = await ml.getItemsMulti(chunk, 'id,title,permalink,status,category_id,available_quantity,seller_custom_field,attributes,variations');
       for (const row of Array.isArray(res) ? res : []) { const b = row?.body || row; if (b?.id) out.push(b); }
     } catch {
       multigetOk = false;
@@ -108,6 +108,7 @@ export async function scanSellerListings(): Promise<{ listings: MlListing[]; ava
     title: String(b.title ?? ''),
     permalink: b.permalink ?? null,
     status: String(b.status ?? ''),
+    categoryId: b.category_id ? String(b.category_id) : null,
     qty: Number(b.available_quantity) || 0,
     skus: [...skuList(b.seller_custom_field), ...attrSkus(b.attributes)],
     variations: (Array.isArray(b.variations) ? b.variations : []).map((v: any) => ({

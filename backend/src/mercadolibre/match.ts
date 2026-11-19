@@ -17,6 +17,7 @@ export type MlListing = {
   title: string;
   permalink?: string | null;
   status?: string;
+  categoryId?: string | null;
   qty: number;
   skus: string[];
   variations: Array<{ id: string; skus: string[]; values: string[]; qty: number }>;
@@ -40,6 +41,7 @@ export type MatchRow = {
   variationLabel: string;
   permalink: string | null;
   mlStatus: string;
+  mlCategoryId?: string | null;
   mlQty: number;
   state: 'linked' | 'match' | 'unmatched';
   by?: 'sku' | 'title';
@@ -118,6 +120,7 @@ export function matchListings(listings: MlListing[], products: InvProduct[], exi
         variationLabel: t ? t.values.join(' / ') : '',
         permalink: L.permalink ?? null,
         mlStatus: L.status ?? '',
+        mlCategoryId: L.categoryId ?? null,
         mlQty: t ? t.qty : L.qty,
         state: 'unmatched',
       };

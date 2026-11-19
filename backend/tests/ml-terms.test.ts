@@ -1,7 +1,7 @@
 // Pruebas de condiciones de venta y mapeo de categorías de Mercado Libre (lógica pura).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeWarrantyTerms, tallyPredictions, pickSpread, STORE_SALE_TERMS } from '../src/mercadolibre/pure.js';
+import { mergeWarrantyTerms, tallyPredictions, pickSpread, tallyListingCategories, STORE_SALE_TERMS } from '../src/mercadolibre/pure.js';
 
 test('garantía: publicación sin términos recibe garantía del vendedor de 30 días', () => {
   assert.deepEqual(mergeWarrantyTerms([]), STORE_SALE_TERMS);
@@ -57,4 +57,17 @@ test('muestra repartida: toma de toda la lista, no solo del principio', () => {
   assert.deepEqual(pickSpread(list, 4), [0, 25, 50, 75]);
   assert.deepEqual(pickSpread([1, 2, 3], 12), [1, 2, 3]);
   assert.deepEqual(pickSpread(list, 0), []);
+});
+
+test('categorías desde publicaciones reales: cuenta por categoría del sistema', () => {
+  const t = tallyListingCategories([
+    { systemCategoryId: 'mochilas', mlCategoryId: 'MLA1' }, { systemCategoryId: 'mochilas', mlCategoryId: 'MLA1' },
+    { systemCategoryId: 'mochilas', mlCategoryId: 'MLA9' }, { systemCategoryId: 'luncheras', mlCategoryId: 'MLA2' },
+    { systemCategoryId: null, mlCategoryId: 'MLA1' }, { systemCategoryId: 'mochilas', mlCategoryId: null },
+  ]);
+  assert.equal(t.get('mochilas')!.total, 3);
+  assert.equal(t.get('mochilas')!.candidates[0].categoryId, 'MLA1');
+  assert.equal(Math.round(t.get('mochilas')!.candidates[0].share * 100), 67);
+  assert.deepEqual(t.get('luncheras')!.candidates, [{ categoryId: 'MLA2', votes: 1, share: 1 }]);
+  assert.equal(t.has('null'), false);
 });
