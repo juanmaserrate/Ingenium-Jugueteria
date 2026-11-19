@@ -9,7 +9,7 @@ import { ValidationError } from '../utils/errors.js';
 const SITE = 'MLA';
 
 export { tallyPredictions } from './pure.js';
-import { tallyPredictions } from './pure.js';
+import { tallyPredictions, pickSpread } from './pure.js';
 
 async function categoryPath(ml: any, categoryId: string): Promise<{ name: string; path: string; leaf: boolean }> {
   const c: any = await ml.getCategory(categoryId);
@@ -31,16 +31,18 @@ export async function listCategoryMap() {
 
 // Sugiere la categoría ML de una categoría del sistema: predice con títulos reales de sus
 // productos (los que tienen más variedad de nombre) y cuenta votos.
-export async function suggestForCategory(categoryId: string, sample = 8) {
+export async function suggestForCategory(categoryId: string, sample = 12) {
   const cat = await prisma.category.findUnique({ where: { id: categoryId } });
   if (!cat) throw new ValidationError('Categoría inexistente');
-  const products = await prisma.product.findMany({
+  // Muestra REPARTIDA por toda la categoría (uno cada N, ordenados por nombre). Tomar solo
+  // los últimos modificados sesga: una tanda de botellas recién cargadas no representa a "Bazar".
+  const all = await prisma.product.findMany({
     where: { categoryId, active: true },
     select: { name: true },
-    orderBy: { updatedAt: 'desc' },
-    take: sample,
+    orderBy: { name: 'asc' },
+    take: 3000,
   });
-  const titles = products.map((p) => p.name).filter(Boolean);
+  const titles = pickSpread(all.map((p) => p.name).filter(Boolean), sample);
   if (!titles.length) titles.push(cat.name);
 
   const ml = await requireMlClient();

@@ -1,7 +1,7 @@
 // Pruebas de condiciones de venta y mapeo de categorías de Mercado Libre (lógica pura).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeWarrantyTerms, tallyPredictions, STORE_SALE_TERMS } from '../src/mercadolibre/pure.js';
+import { mergeWarrantyTerms, tallyPredictions, pickSpread, STORE_SALE_TERMS } from '../src/mercadolibre/pure.js';
 
 test('garantía: publicación sin términos recibe garantía del vendedor de 30 días', () => {
   assert.deepEqual(mergeWarrantyTerms([]), STORE_SALE_TERMS);
@@ -50,4 +50,11 @@ test('categorías: gana la más votada y se informa qué tan pareja fue', () => 
 
 test('categorías: sin predicciones no propone nada', () => {
   assert.deepEqual(tallyPredictions([null, undefined]), { total: 0, candidates: [] });
+});
+
+test('muestra repartida: toma de toda la lista, no solo del principio', () => {
+  const list = Array.from({ length: 100 }, (_, i) => i);
+  assert.deepEqual(pickSpread(list, 4), [0, 25, 50, 75]);
+  assert.deepEqual(pickSpread([1, 2, 3], 12), [1, 2, 3]);
+  assert.deepEqual(pickSpread(list, 0), []);
 });

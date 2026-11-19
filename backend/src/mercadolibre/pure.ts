@@ -39,3 +39,12 @@ export function tallyPredictions(preds: Array<{ categoryId: string; categoryName
     .map((c) => ({ ...c, share: total ? c.votes / total : 0 }));
   return { total, candidates };
 }
+
+// PURA: toma `n` elementos repartidos de forma pareja a lo largo de la lista (no los primeros).
+export function pickSpread<T>(list: T[], n: number): T[] {
+  if (n <= 0) return [];
+  if (list.length <= n) return [...list];
+  const out: T[] = [];
+  for (let i = 0; i < n; i++) out.push(list[Math.floor((i * list.length) / n)]);
+  return out;
+}
