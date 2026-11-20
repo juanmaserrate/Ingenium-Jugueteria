@@ -177,7 +177,11 @@ async function publishProductCore(input: PublishInput): Promise<any> {
     // Código de barras: si la variante tiene un GTIN real se informa; si no, se declara que el
     // producto no tiene código (ML lo exige en muchas categorías y rechaza códigos internos).
     if (!have.has('GTIN')) {
-      if (isValidGtin(forVariant?.barcode)) put('GTIN', String(forVariant.barcode).trim());
+      // El código de barras real puede estar en el barcode de la variante, en su código o (lo
+      // más común en este inventario) en el CÓDIGO del producto cuando tiene una sola variante.
+      const gtin = [forVariant?.barcode, forVariant?.code, allVariants.length === 1 ? product.code : null]
+        .map((x) => String(x ?? '').trim()).find((x) => isValidGtin(x));
+      if (gtin) put('GTIN', gtin);
       else if (!have.has('EMPTY_GTIN_REASON')) {
         // ML exige GTIN "condicionalmente" (no siempre figura en los atributos de la categoría),
         // así que el motivo se manda siempre que no haya un código real.
