@@ -91,11 +91,11 @@ export async function mount(el) {
         listEl.innerHTML = perm ? `
           <div class="bg-amber-50 border border-amber-200 rounded-2xl p-5 text-sm text-[#241a0d] space-y-2">
             <p class="font-bold text-base">Falta habilitar un permiso en Mercado Libre</p>
-            <p>Mercado Libre no deja leer las preguntas porque tu aplicación no tiene activado el permiso <b>Comunicación pre y postventa</b>. Se activa una sola vez:</p>
+            <p>Mercado Libre no deja leer las preguntas porque tu aplicación no tiene activado el permiso <b>Comunicaciones pre y post ventas</b>. Se activa una sola vez:</p>
             <ol class="list-decimal pl-5 space-y-1">
-              <li>Entrá a <a href="https://developers.mercadolibre.com.ar/devcenter" target="_blank" rel="noopener noreferrer" class="underline font-bold">Mercado Libre Developers → Mis aplicaciones</a> y abrí tu aplicación para editarla.</li>
-              <li>En <b>Permisos</b>, poné <b>Comunicación pre y postventa</b> en <b>Lectura y escritura</b>.</li>
-              <li>En <b>Tópicos</b> (notificaciones), tildá <b>questions</b> y guardá.</li>
+              <li>Entrá a <a href="https://developers.mercadolibre.com.ar/devcenter" target="_blank" rel="noopener noreferrer" class="underline font-bold">Mercado Libre Developers → Mis aplicaciones</a> y abrí tu aplicación para editarla. En la primera pantalla (Información básica) bajá y tocá <b>Continuar</b>.</li>
+              <li>En la segunda pantalla, sección <b>Permisos</b>: en <b>Comunicaciones pre y post ventas</b> cambiá <b>Sin acceso</b> por <b>Lectura y escritura</b>.</li>
+              <li>Más abajo, en <b>Tópicos</b>, dentro del grupo <b>items</b>, tildá <b>questions</b>. Después guardá los cambios.</li>
               <li>Volvé acá y tocá el botón para autorizar de nuevo la cuenta.</li>
             </ol>
             ${isAdmin() ? '<button id="btn-reauth" class="mt-1 px-4 py-2 bg-[#d82f1e] text-white rounded-xl font-bold text-sm">Volver a autorizar Mercado Libre</button>' : '<p class="text-[#7d6c5c]">Lo tiene que hacer el administrador.</p>'}
