@@ -63,6 +63,7 @@ export async function runSeed() {
     `ALTER TABLE "senas" ADD COLUMN IF NOT EXISTS "cancelled_at" TIMESTAMP(3)`,
     `ALTER TABLE "categories" ADD COLUMN IF NOT EXISTS "ml_category_id" TEXT`,
     `ALTER TABLE "categories" ADD COLUMN IF NOT EXISTS "ml_category_name" TEXT`,
+    `ALTER TABLE "categories" ADD COLUMN IF NOT EXISTS "ml_default_attrs" JSONB`,
     `ALTER TABLE "subcategories" ADD COLUMN IF NOT EXISTS "ml_category_id" TEXT`,
     `ALTER TABLE "subcategories" ADD COLUMN IF NOT EXISTS "ml_category_name" TEXT`,
   ]) {

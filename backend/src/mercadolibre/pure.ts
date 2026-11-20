@@ -69,3 +69,16 @@ export function tallyListingCategories(pairs: Array<{ systemCategoryId: string |
   }
   return out;
 }
+
+// PURA: ¿es un código de barras real (GTIN-8/12/13/14 con dígito verificador correcto)?
+// Los códigos internos del local no lo son y Mercado Libre los rechaza como GTIN.
+export function isValidGtin(code: unknown): boolean {
+  const s = String(code ?? '').trim();
+  if (!/^\d+$/.test(s) || ![8, 12, 13, 14].includes(s.length)) return false;
+  const digits = s.split('').map(Number);
+  const check = digits.pop() as number;
+  let sum = 0;
+  digits.reverse().forEach((d, i) => { sum += d * (i % 2 === 0 ? 3 : 1); });
+  return (10 - (sum % 10)) % 10 === check;
+}
+

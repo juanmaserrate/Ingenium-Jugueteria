@@ -4,7 +4,8 @@ import { getTnClient } from '../tiendanube/client.js';
 import { computeMlStockForVariant } from '../services/stock.js';
 import { enqueueSync } from '../sync/queue.js';
 import { STORE_SALE_TERMS, applyStoreTermsToItem } from './terms.js';
-import { mappedMlCategoryForProduct } from './categoryMap.js';
+import { mappedMlForProduct } from './categoryMap.js';
+import { isValidGtin } from './pure.js';
 
 // Publicación de productos del sistema en Mercado Libre (Fase 3). Es la parte más delicada:
 // crea contenido real en la cuenta. NADA se publica solo — lo dispara el usuario desde la UI.
@@ -86,9 +87,12 @@ export async function publishProduct(input: PublishInput): Promise<any> {
     const v = await prisma.variant.findFirst({ where: { OR: [{ barcode: input.barcode }, { code: input.barcode }] }, select: { productId: true } });
     productId = v?.productId;
   }
-  const mapped = productId ? await mappedMlCategoryForProduct(productId).catch(() => null) : null;
+  const mapped = productId ? await mappedMlForProduct(productId).catch(() => null) : null;
   if (!mapped) return publishProductCore(input);
-  const first: any = await publishProductCore({ ...input, categoryId: mapped });
+  // Datos fijos de la categoría (ej. "Tipo de mochila"): lo que mande el form tiene prioridad.
+  const sent = new Set((input.attributes || []).map((a) => a.id));
+  const attributes = [...(input.attributes || []), ...mapped.attributes.filter((a) => !sent.has(a.id))];
+  const first: any = await publishProductCore({ ...input, categoryId: mapped.categoryId, attributes });
   if (first?.error !== 'ml_rejected') return { ...first, categorySource: 'mapeada' };
   const second: any = await publishProductCore(input);
   if (second?.error) return { ...first, categorySource: 'mapeada' };
@@ -161,7 +165,7 @@ async function publishProductCore(input: PublishInput): Promise<any> {
   // Atributos de la categoría para un nombre dado: el "nombre de catálogo" required de texto
   // libre (BOARD_GAME_NAME, MODEL, etc.) se completa con ese nombre; el resto es común a todas
   // las variantes. Lo que mande el form (dimensiones del paquete, IVA) siempre gana.
-  const buildAttributes = (nameValue: string): any[] => {
+  const buildAttributes = (nameValue: string, forVariant: any = variant): any[] => {
     const attrs: any[] = [];
     const have = new Set<string>();
     const put = (id: string, value: any) => {
@@ -170,6 +174,16 @@ async function publishProductCore(input: PublishInput): Promise<any> {
       have.add(id);
     };
     for (const a of input.attributes || []) put(a.id, a.value_name);
+    // Código de barras: si la variante tiene un GTIN real se informa; si no, se declara que el
+    // producto no tiene código (ML lo exige en muchas categorías y rechaza códigos internos).
+    if (byId['GTIN'] && !have.has('GTIN')) {
+      if (isValidGtin(forVariant?.barcode)) put('GTIN', String(forVariant.barcode).trim());
+      else if (byId['EMPTY_GTIN_REASON'] && !have.has('EMPTY_GTIN_REASON')) {
+        const vals: any[] = byId['EMPTY_GTIN_REASON'].values || [];
+        const pick = vals.find((v) => /no tiene c[oó]digo/i.test(v?.name || '')) || vals[0];
+        if (pick) { attrs.push({ id: 'EMPTY_GTIN_REASON', value_id: String(pick.id), value_name: pick.name }); have.add('EMPTY_GTIN_REASON'); }
+      }
+    }
     if (product.brand?.name && byId['BRAND']) put('BRAND', product.brand.name);
     if (byId['VALUE_ADDED_TAX']) put('VALUE_ADDED_TAX', '21%');
     if (byId['IMPORT_DUTY']) put('IMPORT_DUTY', '0%');
@@ -328,7 +342,7 @@ async function publishProductCore(input: PublishInput): Promise<any> {
       if (!vprice || vprice <= 0) { failed.push({ variantId: v.id, value: val, error: 'variante sin precio' }); continue; }
       const qty = await computeMlStockForVariant(v.id);
       const r = await createWithLtFallback(() => ({
-        ...basePayload, attributes: buildAttributes(famTitle), family_name: famTitle,
+        ...basePayload, attributes: buildAttributes(famTitle, v), family_name: famTitle,
         price: vprice, available_quantity: Math.max(0, Math.round(qty)),
       }));
       if (r.created) {

@@ -13,7 +13,7 @@ import { predictCategory, publishProduct } from '../mercadolibre/publish.js';
 import { buildSyncPlan, applyLinks, ensureProductMapping, unlinkProduct, productMlStatus } from '../mercadolibre/syncExisting.js';
 import { ValidationError } from '../utils/errors.js';
 import { applyStoreTermsToItem, linkedItemIds } from '../mercadolibre/terms.js';
-import { listCategoryMap, suggestForCategory, setCategoryMap, suggestFromListings } from '../mercadolibre/categoryMap.js';
+import { listCategoryMap, suggestForCategory, setCategoryMap, suggestFromListings, requiredListAttrs, setCategoryDefaultAttrs } from '../mercadolibre/categoryMap.js';
 import { isHistoricalOrder } from '../services/pendingMath.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -288,6 +288,19 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
         if (err instanceof ValidationError) throw err;
         return reply.status(502).send({ error: 'No se pudo leer Mercado Libre', details: err?.response?.data ?? err?.message });
       }
+    });
+
+    // Datos con lista de valores que ML exige en una categoría (para dejarlos fijos por categoría).
+    r.get('/integrations/ml/category-required/:mlCategoryId', adminOnly, async (req, reply) => {
+      const { mlCategoryId } = req.params as { mlCategoryId: string };
+      try { return await requiredListAttrs(mlCategoryId); }
+      catch (err: any) { return reply.status(502).send({ error: 'No se pudo consultar Mercado Libre', details: err?.response?.data ?? err?.message }); }
+    });
+
+    r.put('/integrations/ml/category-map/:id/attributes', adminOnly, async (req) => {
+      const { id } = req.params as { id: string };
+      const b = z.object({ attributes: z.array(z.object({ id: z.string(), name: z.string().optional(), value_name: z.string() })) }).parse(req.body);
+      return setCategoryDefaultAttrs(id, b.attributes);
     });
 
     r.put('/integrations/ml/category-map/:id', adminOnly, async (req) => {

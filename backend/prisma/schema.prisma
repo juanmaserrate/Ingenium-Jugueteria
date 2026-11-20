@@ -79,6 +79,8 @@ model Category {
   // Categoría de Mercado Libre donde se publican los productos de esta categoría.
   mlCategoryId   String? @map("ml_category_id")
   mlCategoryName String? @map("ml_category_name")
+  // Datos fijos que ML exige en esa categoría (ej. "Tipo de mochila"): [{ id, name, value_name }]
+  mlDefaultAttrs Json?   @map("ml_default_attrs")
 
   subcategories Subcategory[]
   products      Product[]

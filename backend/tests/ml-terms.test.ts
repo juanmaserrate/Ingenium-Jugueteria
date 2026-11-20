@@ -1,7 +1,7 @@
 // Pruebas de condiciones de venta y mapeo de categorías de Mercado Libre (lógica pura).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeWarrantyTerms, tallyPredictions, pickSpread, tallyListingCategories, STORE_SALE_TERMS } from '../src/mercadolibre/pure.js';
+import { mergeWarrantyTerms, tallyPredictions, pickSpread, tallyListingCategories, isValidGtin, STORE_SALE_TERMS } from '../src/mercadolibre/pure.js';
 
 test('garantía: publicación sin términos recibe garantía del vendedor de 30 días', () => {
   assert.deepEqual(mergeWarrantyTerms([]), STORE_SALE_TERMS);
@@ -70,4 +70,16 @@ test('categorías desde publicaciones reales: cuenta por categoría del sistema'
   assert.equal(Math.round(t.get('mochilas')!.candidates[0].share * 100), 67);
   assert.deepEqual(t.get('luncheras')!.candidates, [{ categoryId: 'MLA2', votes: 1, share: 1 }]);
   assert.equal(t.has('null'), false);
+});
+
+test('código de barras: acepta GTIN reales y rechaza códigos internos', () => {
+  assert.equal(isValidGtin('7790001000010'), false); // dígito verificador incorrecto
+  assert.equal(isValidGtin('7791234567898'), true);  // EAN-13 válido
+  assert.equal(isValidGtin('4006381333931'), true);  // EAN-13 válido
+  assert.equal(isValidGtin('036000291452'), true);   // UPC-A válido
+  assert.equal(isValidGtin('96385074'), true);       // EAN-8 válido
+  assert.equal(isValidGtin('SKU-123456'), false);
+  assert.equal(isValidGtin('12345'), false);
+  assert.equal(isValidGtin(''), false);
+  assert.equal(isValidGtin(null), false);
 });

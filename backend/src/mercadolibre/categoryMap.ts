@@ -1,4 +1,5 @@
 import { prisma } from '../db.js';
+import { Prisma } from '@prisma/client';
 import { requireMlClient } from './client.js';
 import { ValidationError } from '../utils/errors.js';
 
@@ -27,6 +28,7 @@ export async function listCategoryMap() {
   return cats.map((c) => ({
     id: c.id, name: c.name, products: n.get(c.id) ?? 0,
     mlCategoryId: c.mlCategoryId ?? null, mlCategoryName: c.mlCategoryName ?? null,
+    mlDefaultAttrs: Array.isArray(c.mlDefaultAttrs) ? c.mlDefaultAttrs : [],
   }));
 }
 
@@ -106,7 +108,7 @@ export async function setCategoryMap(categoryId: string, mlCategoryId: string | 
   const cat = await prisma.category.findUnique({ where: { id: categoryId } });
   if (!cat) throw new ValidationError('Categoría inexistente');
   if (!mlCategoryId) {
-    await prisma.category.update({ where: { id: categoryId }, data: { mlCategoryId: null, mlCategoryName: null } });
+    await prisma.category.update({ where: { id: categoryId }, data: { mlCategoryId: null, mlCategoryName: null, mlDefaultAttrs: Prisma.DbNull } });
     return { id: categoryId, mlCategoryId: null, mlCategoryName: null };
   }
   const id = String(mlCategoryId).trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -115,15 +117,54 @@ export async function setCategoryMap(categoryId: string, mlCategoryId: string | 
   try { info = await categoryPath(ml, id); }
   catch { throw new ValidationError(`Mercado Libre no reconoce la categoría ${id}`); }
   if (!info.leaf) throw new ValidationError(`"${info.path}" tiene subcategorías: elegí una categoría final`);
-  await prisma.category.update({ where: { id: categoryId }, data: { mlCategoryId: id, mlCategoryName: info.path } });
+  await prisma.category.update({
+    where: { id: categoryId },
+    data: { mlCategoryId: id, mlCategoryName: info.path, ...(cat.mlCategoryId !== id ? { mlDefaultAttrs: Prisma.DbNull } : {}) },
+  });
   return { id: categoryId, mlCategoryId: id, mlCategoryName: info.path };
 }
 
 // Categoría ML mapeada para un producto (subcategoría pisa a categoría). null = sin mapeo.
 export async function mappedMlCategoryForProduct(productId: string): Promise<string | null> {
+  return (await mappedMlForProduct(productId))?.categoryId ?? null;
+}
+
+// Categoría ML mapeada + los datos fijos que ML exige ahí (si se cargaron).
+export async function mappedMlForProduct(productId: string): Promise<{ categoryId: string; attributes: Array<{ id: string; value_name: string }> } | null> {
   const p = await prisma.product.findUnique({
     where: { id: productId },
-    select: { category: { select: { mlCategoryId: true } }, subcategory: { select: { mlCategoryId: true } } },
+    select: {
+      category: { select: { mlCategoryId: true, mlDefaultAttrs: true } },
+      subcategory: { select: { mlCategoryId: true } },
+    },
   });
-  return p?.subcategory?.mlCategoryId || p?.category?.mlCategoryId || null;
+  if (p?.subcategory?.mlCategoryId) return { categoryId: p.subcategory.mlCategoryId, attributes: [] };
+  if (!p?.category?.mlCategoryId) return null;
+  const raw = Array.isArray(p.category.mlDefaultAttrs) ? (p.category.mlDefaultAttrs as any[]) : [];
+  return {
+    categoryId: p.category.mlCategoryId,
+    attributes: raw.filter((a) => a?.id && a?.value_name).map((a) => ({ id: String(a.id), value_name: String(a.value_name) })),
+  };
+}
+
+// Atributos con lista de valores que ML exige en una categoría y que el sistema no puede
+// deducir solo (marca, IVA, paquete, código de barras y nombres libres sí los completa).
+const AUTO_ATTRS = new Set(['BRAND', 'VALUE_ADDED_TAX', 'IMPORT_DUTY', 'GTIN', 'EMPTY_GTIN_REASON', 'ITEM_CONDITION']);
+export async function requiredListAttrs(mlCategoryId: string) {
+  const ml = await requireMlClient();
+  const attrs: any[] = await ml.getCategoryAttributes(mlCategoryId);
+  return (Array.isArray(attrs) ? attrs : [])
+    .filter((a) => a?.tags && (a.tags.required || a.tags.catalog_required)
+      && Array.isArray(a.values) && a.values.length && !AUTO_ATTRS.has(a.id) && !/^SELLER_PACKAGE_/.test(a.id))
+    .map((a) => ({ id: a.id, name: a.name, values: a.values.slice(0, 60).map((v: any) => v.name) }));
+}
+
+// Guarda los datos fijos de una categoría ya mapeada.
+export async function setCategoryDefaultAttrs(categoryId: string, attributes: Array<{ id: string; name?: string; value_name: string }>) {
+  const cat = await prisma.category.findUnique({ where: { id: categoryId } });
+  if (!cat) throw new ValidationError('Categoría inexistente');
+  if (!cat.mlCategoryId) throw new ValidationError('Primero elegí la categoría de Mercado Libre');
+  const clean = attributes.filter((a) => a.id && a.value_name).map((a) => ({ id: a.id, name: a.name ?? a.id, value_name: a.value_name }));
+  await prisma.category.update({ where: { id: categoryId }, data: { mlDefaultAttrs: clean.length ? clean : Prisma.DbNull } });
+  return { id: categoryId, mlDefaultAttrs: clean };
 }

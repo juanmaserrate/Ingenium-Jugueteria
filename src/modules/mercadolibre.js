@@ -191,6 +191,7 @@ export async function mount(el) {
   // ---- Mapeo de categorías del sistema → Mercado Libre ----
   let catRows = [];
   const catSuggest = {}; // id → candidatos de la última sugerencia
+  const catReq = {};     // id → datos con lista de valores que ML exige en la categoría mapeada
   function drawCatMap() {
     const body = el.querySelector('#catmap-body');
     if (!catRows.length) { body.innerHTML = '<tr><td colspan="4" class="py-6 text-center text-[#7d6c5c]">No hay categorías cargadas.</td></tr>'; return; }
@@ -208,11 +209,26 @@ export async function mount(el) {
           ${c.mlCategoryId
             ? `<div>${esc(c.mlCategoryName || c.mlCategoryId)} <span class="text-[11px] text-[#7d6c5c]">(${esc(c.mlCategoryId)})</span></div>`
             : '<div class="text-[#7d6c5c] italic">Sin mapear — se elige por el título de cada producto</div>'}
+          ${(c.mlDefaultAttrs || []).length ? `<div class="mt-1 flex flex-wrap gap-1">${c.mlDefaultAttrs.map((a) => `<span class="px-2 py-0.5 rounded-full bg-[#fff1e6] text-[11px]">${esc(a.name || a.id)}: <b>${esc(a.value_name)}</b></span>`).join('')}</div>` : ''}
+          ${catReq[c.id] ? (catReq[c.id].length ? `
+            <div class="mt-2 p-2 rounded-lg bg-[#fff8f4] border border-[#fff1e6] space-y-2">
+              <div class="text-[11px] text-[#7d6c5c]">Mercado Libre exige estos datos en esta categoría. Elegí el valor que vale para todos los productos de "${esc(c.name)}":</div>
+              ${catReq[c.id].map((a) => {
+                const cur = (c.mlDefaultAttrs || []).find((x) => x.id === a.id)?.value_name || '';
+                return `<label class="flex items-center gap-2 text-xs"><span class="w-40 font-bold">${esc(a.name)}</span>
+                  <select data-reqattr="${esc(a.id)}" data-reqname="${esc(a.name)}" class="px-2 py-1 rounded-lg border border-[#e3ceba] flex-1">
+                    <option value="">— lo completo en cada producto —</option>
+                    ${a.values.map((v) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('')}
+                  </select></label>`;
+              }).join('')}
+              <button type="button" data-savereq="${esc(c.id)}" class="px-3 py-1 bg-[#241a0d] text-white rounded-lg font-bold text-xs">Guardar datos fijos</button>
+            </div>` : '<div class="mt-1 text-[11px] text-green-700">Mercado Libre no pide datos extra en esta categoría.</div>') : ''}
           ${candHtml}
         </td>
         <td class="py-2 px-2 text-right whitespace-nowrap">
           <button type="button" data-sug="${esc(c.id)}" class="text-xs font-bold text-[#d82f1e] hover:underline">Sugerir</button>
           <button type="button" data-manual="${esc(c.id)}" class="text-xs text-[#7d6c5c] hover:underline ml-2">Escribir código</button>
+          ${c.mlCategoryId ? `<button type="button" data-req="${esc(c.id)}" class="text-xs text-[#7d6c5c] hover:underline ml-2" title="Datos que Mercado Libre exige en esta categoría (ej. tipo de mochila)">Datos fijos</button>` : ''}
           ${c.mlCategoryId ? `<button type="button" data-clear="${esc(c.id)}" class="text-xs text-[#7d6c5c] hover:underline ml-2">Quitar</button>` : ''}
         </td>
       </tr>`;
@@ -225,6 +241,29 @@ export async function mount(el) {
     }));
     body.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => saveCat(b.dataset.pick, b.dataset.cat)));
     body.querySelectorAll('[data-clear]').forEach((b) => b.addEventListener('click', () => saveCat(b.dataset.clear, null)));
+    body.querySelectorAll('[data-req]').forEach((b) => b.addEventListener('click', async () => {
+      const row = catRows.find((c) => c.id === b.dataset.req);
+      if (!row?.mlCategoryId) return;
+      b.textContent = 'Consultando…';
+      try { catReq[row.id] = await api(`/api/integrations/ml/category-required/${encodeURIComponent(row.mlCategoryId)}`); }
+      catch (err) { toast(err.message, 'error'); }
+      drawCatMap();
+    }));
+    body.querySelectorAll('[data-savereq]').forEach((b) => b.addEventListener('click', async () => {
+      const id = b.dataset.savereq;
+      const box = b.closest('td');
+      const attributes = [...box.querySelectorAll('[data-reqattr]')]
+        .map((sel) => ({ id: sel.dataset.reqattr, name: sel.dataset.reqname, value_name: sel.value }))
+        .filter((a) => a.value_name);
+      try {
+        const r = await api(`/api/integrations/ml/category-map/${encodeURIComponent(id)}/attributes`, { method: 'PUT', body: { attributes } });
+        const row = catRows.find((c) => c.id === id);
+        if (row) row.mlDefaultAttrs = r.mlDefaultAttrs;
+        delete catReq[id];
+        toast('Datos fijos guardados', 'success');
+        drawCatMap();
+      } catch (err) { toast(err.message, 'error'); }
+    }));
     body.querySelectorAll('[data-manual]').forEach((b) => b.addEventListener('click', () => {
       const v = prompt('Código de la categoría de Mercado Libre (ej: MLA1234):');
       if (v && v.trim()) saveCat(b.dataset.manual, v.trim());
@@ -234,8 +273,8 @@ export async function mount(el) {
     try {
       const r = await api(`/api/integrations/ml/category-map/${encodeURIComponent(id)}`, { method: 'PUT', body: { mlCategoryId } });
       const row = catRows.find((c) => c.id === id);
-      if (row) { row.mlCategoryId = r.mlCategoryId; row.mlCategoryName = r.mlCategoryName; }
-      delete catSuggest[id];
+      if (row) { if (row.mlCategoryId !== r.mlCategoryId) row.mlDefaultAttrs = []; row.mlCategoryId = r.mlCategoryId; row.mlCategoryName = r.mlCategoryName; }
+      delete catSuggest[id]; delete catReq[id];
       drawCatMap();
     } catch (err) { toast(err.message, 'error'); }
   }
