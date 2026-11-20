@@ -693,6 +693,9 @@ model Integration {
   refreshTokenEnc String? @map("refresh_token_enc") // encriptado con ENCRYPTION_KEY
   tokenExpiresAt  DateTime? @map("token_expires_at") // cuándo vence el access token
   mlUserId        String?  @map("ml_user_id") // id del vendedor en ML (seller id)
+  // Corte de ventas online: las órdenes pagadas antes de esta fecha no entran como pendientes
+  // (el local ya las cobró por otro lado). Lo fija "Empezar desde ahora" en Ventas Mercado Libre.
+  ordersFrom      DateTime? @map("orders_from")
 
   @@map("integrations")
 }

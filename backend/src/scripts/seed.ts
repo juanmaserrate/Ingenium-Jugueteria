@@ -66,6 +66,7 @@ export async function runSeed() {
     `ALTER TABLE "categories" ADD COLUMN IF NOT EXISTS "ml_default_attrs" JSONB`,
     `ALTER TABLE "subcategories" ADD COLUMN IF NOT EXISTS "ml_category_id" TEXT`,
     `ALTER TABLE "subcategories" ADD COLUMN IF NOT EXISTS "ml_category_name" TEXT`,
+    `ALTER TABLE "integrations" ADD COLUMN IF NOT EXISTS "orders_from" TIMESTAMP(3)`,
   ]) {
     try { await prisma.$executeRawUnsafe(ddl); }
     catch (err) { console.warn('[seed] DDL no aplicado:', ddl, err); }

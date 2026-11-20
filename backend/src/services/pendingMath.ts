@@ -52,3 +52,20 @@ export function isHistoricalOrder(orderDate: unknown, connectedAt: Date | null |
   if (!Number.isFinite(t)) return false;
   return t < connectedAt.getTime() - marginMs;
 }
+
+// Momento en que la orden quedó PAGADA (date_closed); si ML no lo trae, el de la compra.
+// Se usa para el corte "empezar desde ahora": una compra hecha antes del corte pero pagada
+// después (pago en efectivo que tarda días) es una venta nueva y tiene que entrar.
+export function orderPaidAt(order: { date_closed?: unknown; date_created?: unknown } | null | undefined): string | null {
+  const v = order?.date_closed || order?.date_created;
+  return v ? String(v) : null;
+}
+
+// ¿La orden quedó pagada ANTES del corte que fijó el local ("ya las cobré, empezá desde
+// ahora")? Esas no entran como venta pendiente. Sin corte o sin fecha válida → entra.
+export function isBeforeCutoff(paidAt: unknown, ordersFrom: Date | null | undefined): boolean {
+  if (!paidAt || !ordersFrom) return false;
+  const t = new Date(String(paidAt)).getTime();
+  if (!Number.isFinite(t)) return false;
+  return t < ordersFrom.getTime();
+}

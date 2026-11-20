@@ -3,7 +3,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { matchListings, normSku, normTitle, type InvProduct, type MlListing } from '../src/mercadolibre/match.js';
-import { sumPendingForVariant, isHistoricalOrder } from '../src/services/pendingMath.js';
+import { sumPendingForVariant, isHistoricalOrder, isBeforeCutoff, orderPaidAt } from '../src/services/pendingMath.js';
+
+test('corte "empezar desde ahora": solo entra lo pagado después del corte', () => {
+  const corte = new Date('2026-11-20T18:00:00.000Z');
+  // pagada antes del corte → no entra
+  assert.equal(isBeforeCutoff(orderPaidAt({ date_created: '2026-11-20T10:00:00.000-04:00', date_closed: '2026-11-20T10:01:00.000-04:00' }), corte), true);
+  // pagada después → entra
+  assert.equal(isBeforeCutoff(orderPaidAt({ date_created: '2026-11-20T15:00:00.000-04:00', date_closed: '2026-11-20T15:00:30.000-04:00' }), corte), false);
+  // comprada antes pero pagada después (pago en efectivo que tarda) → es venta nueva, entra
+  assert.equal(isBeforeCutoff(orderPaidAt({ date_created: '2026-11-19T10:00:00.000-04:00', date_closed: '2026-11-21T09:00:00.000-04:00' }), corte), false);
+  // sin date_closed se usa la fecha de compra
+  assert.equal(isBeforeCutoff(orderPaidAt({ date_created: '2026-11-19T10:00:00.000-04:00' }), corte), true);
+  // sin corte o sin fecha válida → entra
+  assert.equal(isBeforeCutoff('2026-01-01T00:00:00Z', null), false);
+  assert.equal(isBeforeCutoff(orderPaidAt(null), corte), false);
+  assert.equal(isBeforeCutoff('no-es-fecha', corte), false);
+});
 
 const listing = (o: Partial<MlListing> & { id: string; title: string }): MlListing => ({
   permalink: null, status: 'active', qty: 5, skus: [], variations: [], ...o,

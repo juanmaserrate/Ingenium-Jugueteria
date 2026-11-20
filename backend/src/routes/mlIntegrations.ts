@@ -376,6 +376,21 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       return { ok: true, dismissed: upd.count };
     });
 
+    // "Ya las cobré: empezar desde ahora". Fija el corte en este momento y descarta TODO lo
+    // pendiente: lo pagado antes del corte no vuelve a entrar (ni por aviso ni por el respaldo).
+    // No registra ventas ni toca el stock físico; libera la reserva de esas unidades.
+    r.post('/ml-orders/start-now', adminOnly, async () => {
+      const now = new Date();
+      await prisma.integration.update({ where: { provider: 'mercadolibre' }, data: { ordersFrom: now } });
+      const rows = await prisma.mlOrderPending.findMany({ where: { status: 'pending' }, select: { id: true, items: true } });
+      const upd = await prisma.mlOrderPending.updateMany({ where: { id: { in: rows.map((o) => o.id) }, status: 'pending' }, data: { status: 'dismissed' } });
+      try {
+        const { repushStockForOrderItems } = await import('../services/pendingReserve.js');
+        await repushStockForOrderItems('ml', rows.flatMap((o) => (Array.isArray(o.items) ? (o.items as any[]) : [])));
+      } catch { /* best-effort */ }
+      return { ok: true, dismissed: upd.count, ordersFrom: now.toISOString() };
+    });
+
     r.get('/ml-orders/pending-count', async () => {
       maybeReconcileMl(); // respaldo: el poll del menú también recupera webhooks perdidos
       const count = await prisma.mlOrderPending.count({ where: { status: 'pending' } });

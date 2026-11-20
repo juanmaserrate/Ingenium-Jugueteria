@@ -38,7 +38,21 @@ export async function mount(el) {
           <div class="text-sm text-[#241a0d]"><b>${hist.length} venta${hist.length === 1 ? '' : 's'} vieja${hist.length === 1 ? '' : 's'}</b> (compras anteriores a conectar Mercado Libre, ya entregadas). No hace falta cobrarlas: podés descartarlas todas juntas.</div>
           <button id="btn-dismiss-hist" class="px-4 py-2 bg-[#241a0d] text-white rounded-xl font-bold text-sm whitespace-nowrap">Descartar las ${hist.length} viejas</button>
         </div>` : '';
-      listEl.innerHTML = banner + orders.map((o) => renderOrder(o, branches)).join('');
+      // "Ya las cobré": descarta todo lo que figura y deja el sistema contando desde este momento.
+      const startNow = isAdmin() ? `
+        <div class="flex items-center justify-between gap-3 flex-wrap bg-white border border-[#fff1e6] rounded-2xl p-4">
+          <div class="text-sm text-[#7d6c5c]">¿Ya cobraste por otro lado las ${orders.length === 1 ? 'venta que figura' : `${orders.length} ventas que figuran`}? Sacalas de la lista y empezá a contar desde ahora.</div>
+          <button id="btn-start-now" class="px-4 py-2 bg-[#241a0d] text-white rounded-xl font-bold text-sm whitespace-nowrap">Ya las cobré: empezar desde ahora</button>
+        </div>` : '';
+      listEl.innerHTML = banner + startNow + orders.map((o) => renderOrder(o, branches)).join('');
+      listEl.querySelector('#btn-start-now')?.addEventListener('click', async () => {
+        if (!confirm(`Se sacan de la lista las ${orders.length} venta(s) que figuran y desde ahora solo entran las ventas nuevas.\n\nNo se registran como venta ni se descuenta stock. ¿Seguir?`)) return;
+        try {
+          const r = await api('/api/ml-orders/start-now', { method: 'POST', body: {} });
+          toast(`${r.dismissed} venta(s) sacada(s) de la lista. Desde ahora entran solo las nuevas.`, 'success');
+          refresh();
+        } catch (err) { toast(err.message, 'error'); }
+      });
       listEl.querySelector('#btn-dismiss-hist')?.addEventListener('click', async () => {
         if (!confirm(`¿Descartar las ${hist.length} ventas viejas? No se registran como venta ni tocan el stock.`)) return;
         try {
