@@ -368,7 +368,12 @@ async function renderProducts(container, forceReload = false) {
   // Orden. Por defecto los más nuevos primero (created_at desc). Fallback estable por nombre.
   // El orden se aplica SIEMPRE sobre lo que dejaron los filtros, así que se combinan.
   const coll = new Intl.Collator('es', { sensitivity: 'base', numeric: true });
-  const cmpName = (a, b) => coll.compare(alphaKey(a.name), alphaKey(b.name));
+  // Primero los que empiezan con letra (A, B, C…); los que empiezan con número van al final.
+  const cmpName = (a, b) => {
+    const x = alphaKey(a.name), y = alphaKey(b.name);
+    const gx = /^\p{L}/u.test(x) ? 0 : 1, gy = /^\p{L}/u.test(y) ? 0 : 1;
+    return gx - gy || coll.compare(x, y);
+  };
   const cmpDate = (a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''));
   if (state.sort === 'name') list.sort(cmpName);                    // A → Z
   else list.sort((a, b) => cmpDate(a, b) || cmpName(a, b));         // más nuevos primero
