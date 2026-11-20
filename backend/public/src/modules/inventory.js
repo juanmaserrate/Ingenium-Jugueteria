@@ -214,10 +214,16 @@ const state = {
 };
 const PAGE_SIZE = 100;
 
+// Nombre tal como se ordena alfabéticamente: sin los símbolos del principio ("¡Odio todo!" va
+// en la O) ni los restos de Excel ("_x000D_" + salto de línea) que quedaron en algún nombre.
+function alphaKey(name) {
+  return String(name ?? '').replace(/_x000D_/gi, '').replace(/^[^\p{L}\p{N}]+/u, '').trim();
+}
+
 // Letra inicial para el filtro "Empieza con": ignora símbolos y acentos (Á→A, Ñ→N);
 // '#' agrupa los nombres que empiezan con un número.
 function initialOf(name) {
-  const t = String(name ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+  const t = alphaKey(name).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
   const m = t.match(/[A-Z0-9]/);
   if (!m) return '';
   return /[0-9]/.test(m[0]) ? '#' : m[0];
@@ -371,7 +377,7 @@ async function renderProducts(container, forceReload = false) {
   // Orden. Por defecto los más nuevos primero (created_at desc). Fallback estable por nombre.
   // El orden se aplica SIEMPRE sobre lo que dejaron los filtros, así que se combinan.
   const coll = new Intl.Collator('es', { sensitivity: 'base', numeric: true });
-  const cmpName = (a, b) => coll.compare(a.name || '', b.name || '');
+  const cmpName = (a, b) => coll.compare(alphaKey(a.name), alphaKey(b.name));
   const cmpDate = (a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''));
   // Por un catálogo (categoría/marca/proveedor): alfabético, los "sin dato" al final y, dentro
   // de cada grupo, por nombre.
