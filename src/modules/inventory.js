@@ -203,14 +203,25 @@ const state = {
   tab: 'products',
   selected: new Set(),
   page: 0,
-  filters: { search: '', category: '', brand: '', supplier: '', onlyMeli: false, variant: '', stock: 'all', stockMax: null },
-  sort: 'newest', // newest | oldest | name — por defecto los más nuevos primero
+  filters: { search: '', category: '', brand: '', supplier: '', onlyMeli: false, variant: '', stock: 'all', stockMax: null, letter: '' },
+  // newest | oldest | name (A→Z) | name_desc (Z→A) | category | brand | supplier. Se recuerda
+  // entre sesiones; por defecto los más nuevos primero.
+  sort: (() => { try { return localStorage.getItem('inv_sort') || 'newest'; } catch { return 'newest'; } })(),
   expandedVariants: new Set(), // productos con el detalle de variantes desplegado
   visibleCols: new Set(['code', 'name', 'category', 'brand', 'supplier', 'cost', 'price', 'margin', 'stock_lomas', 'stock_banfield', 'total', 'meli', 'tn']),
   // Caché de datos: se carga una sola vez y los filtros operan sobre él
   cache: null, // { products, stocks, categories, brands, suppliers, branches, subcats }
 };
 const PAGE_SIZE = 100;
+
+// Letra inicial para el filtro "Empieza con": ignora símbolos y acentos (Á→A, Ñ→N);
+// '#' agrupa los nombres que empiezan con un número.
+function initialOf(name) {
+  const t = String(name ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+  const m = t.match(/[A-Z0-9]/);
+  if (!m) return '';
+  return /[0-9]/.test(m[0]) ? '#' : m[0];
+}
 
 export async function mount(el) {
   render(el);
@@ -340,6 +351,7 @@ async function renderProducts(container, forceReload = false) {
     if (f.brand && p.brand_id !== f.brand) return false;
     if (f.supplier && p.supplier_id !== f.supplier) return false;
     if (f.onlyMeli && !p.linked_ml) return false;
+    if (f.letter && initialOf(p.name) !== f.letter) return false;
     if (f.variant) {
       const vq = f.variant.toLowerCase();
       const hit = (p.variants || []).some(v =>
@@ -357,10 +369,23 @@ async function renderProducts(container, forceReload = false) {
   });
 
   // Orden. Por defecto los más nuevos primero (created_at desc). Fallback estable por nombre.
-  const cmpName = (a, b) => (a.name || '').localeCompare(b.name || '', 'es', { sensitivity: 'base' });
+  // El orden se aplica SIEMPRE sobre lo que dejaron los filtros, así que se combinan.
+  const coll = new Intl.Collator('es', { sensitivity: 'base', numeric: true });
+  const cmpName = (a, b) => coll.compare(a.name || '', b.name || '');
   const cmpDate = (a, b) => String(b.created_at || '').localeCompare(String(a.created_at || ''));
+  // Por un catálogo (categoría/marca/proveedor): alfabético, los "sin dato" al final y, dentro
+  // de cada grupo, por nombre.
+  const cmpBy = (map, key) => (a, b) => {
+    const x = map[a[key]] || '', y = map[b[key]] || '';
+    if (!x !== !y) return x ? -1 : 1;
+    return coll.compare(x, y) || cmpName(a, b);
+  };
   if (state.sort === 'oldest') list.sort((a, b) => -cmpDate(a, b) || cmpName(a, b));
   else if (state.sort === 'name') list.sort(cmpName);
+  else if (state.sort === 'name_desc') list.sort((a, b) => cmpName(b, a));
+  else if (state.sort === 'category') list.sort(cmpBy(catMap, 'category_id'));
+  else if (state.sort === 'brand') list.sort(cmpBy(brMap, 'brand_id'));
+  else if (state.sort === 'supplier') list.sort(cmpBy(spMap, 'supplier_id'));
   else list.sort((a, b) => cmpDate(a, b) || cmpName(a, b)); // newest (default)
 
   // Paginado: dibujar 15k filas de una vez es muy lento. Mostramos de a PAGE_SIZE
@@ -429,11 +454,16 @@ async function renderProducts(container, forceReload = false) {
         <button id="btn-filters" class="ing-btn-secondary text-sm" title="Mostrar/ocultar filtros">
           <span class="material-symbols-outlined align-middle text-base">tune</span> Filtrar
         </button>
-        <select id="f-sort" class="ing-filter" title="Ordenar">
+        <label class="flex items-center gap-2 text-xs font-bold text-[#7d6c5c] uppercase">Ordenar
+        <select id="f-sort" class="ing-filter normal-case" title="Orden de la lista (se combina con los filtros)">
           <option value="newest" ${state.sort==='newest'?'selected':''}>Más nuevos</option>
           <option value="oldest" ${state.sort==='oldest'?'selected':''}>Más viejos</option>
-          <option value="name" ${state.sort==='name'?'selected':''}>Nombre A-Z</option>
-        </select>
+          <option value="name" ${state.sort==='name'?'selected':''}>Nombre A → Z</option>
+          <option value="name_desc" ${state.sort==='name_desc'?'selected':''}>Nombre Z → A</option>
+          <option value="category" ${state.sort==='category'?'selected':''}>Categoría A → Z</option>
+          <option value="brand" ${state.sort==='brand'?'selected':''}>Marca A → Z</option>
+          <option value="supplier" ${state.sort==='supplier'?'selected':''}>Proveedor A → Z</option>
+        </select></label>
         <div class="flex-1"></div>
         <button id="btn-cols" class="ing-btn-secondary text-sm">
           <span class="material-symbols-outlined align-middle text-base">view_column</span> Columnas
@@ -456,7 +486,7 @@ async function renderProducts(container, forceReload = false) {
       </div>
 
       <!-- Panel de filtros: se abre con "Filtrar". Queda abierto si hay filtros activos. -->
-      <div id="filter-panel" class="${(f.category||f.brand||f.supplier||(f.variant&&f.variant.trim())||(f.stock&&f.stock!=='all')||f.stockMax!=null||f.onlyMeli)?'':'hidden'} mt-3 pt-3 border-t border-[#fff1e6] flex flex-wrap gap-3 items-center">
+      <div id="filter-panel" class="${(f.category||f.brand||f.supplier||(f.variant&&f.variant.trim())||(f.stock&&f.stock!=='all')||f.stockMax!=null||f.onlyMeli||f.letter)?'':'hidden'} mt-3 pt-3 border-t border-[#fff1e6] flex flex-wrap gap-3 items-center">
         <div class="combo-wrap relative w-[180px]" data-combo="category">
           <input id="f-category" class="ing-input w-full" autocomplete="off" placeholder="Todas las categorías" />
           <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
@@ -469,6 +499,11 @@ async function renderProducts(container, forceReload = false) {
           <input id="f-supplier" class="ing-input w-full" autocomplete="off" placeholder="Todos los proveedores" />
           <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
         </div>
+        <select id="f-letter" class="ing-filter" title="Mostrar solo los productos cuyo nombre empieza con esta letra">
+          <option value="">Empieza con…</option>
+          ${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(l => `<option value="${l}" ${f.letter===l?'selected':''}>${l}</option>`).join('')}
+          <option value="#" ${f.letter==='#'?'selected':''}>0-9</option>
+        </select>
         <input id="f-variant" class="ing-input max-w-[160px]" placeholder="Variante (talle…)" value="${escapeAttr(f.variant || '')}" />
         <select id="f-stock" class="ing-filter" title="Filtrar por stock">
           <option value="all" ${f.stock==='all'?'selected':''}>Todo el stock</option>
@@ -559,8 +594,13 @@ async function renderProducts(container, forceReload = false) {
   container.querySelector('#f-variant').addEventListener('input', e => { state.filters.variant = e.target.value; state.page = 0; scheduleFilterRender(container, 'f-variant'); });
   container.querySelector('#f-stock').addEventListener('change', e => { state.filters.stock = e.target.value; state.page = 0; renderProducts(container); });
   container.querySelector('#f-stock-max').addEventListener('change', e => { const v = e.target.value.trim(); state.filters.stockMax = v === '' ? null : Math.max(0, Math.floor(Number(v) || 0)); state.page = 0; renderProducts(container); });
-  container.querySelector('#f-sort').addEventListener('change', e => { state.sort = e.target.value; state.page = 0; renderProducts(container); });
-  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false, variant:'', stock:'all', stockMax:null }; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-sort').addEventListener('change', e => {
+    state.sort = e.target.value; state.page = 0;
+    try { localStorage.setItem('inv_sort', state.sort); } catch { /* sin storage: no se recuerda */ }
+    renderProducts(container);
+  });
+  container.querySelector('#f-letter').addEventListener('change', e => { state.filters.letter = e.target.value; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', onlyMeli:false, variant:'', stock:'all', stockMax:null, letter:'' }; state.page = 0; renderProducts(container); });
 
   container.querySelector('#btn-new')?.addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-bulkcost')?.addEventListener('click', () => openBulkCostModal(container));
