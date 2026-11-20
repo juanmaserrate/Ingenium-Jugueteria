@@ -3,7 +3,8 @@
 // que no hace falta entrar a ML para contestar. Al lado de cada pregunta se ve el producto
 // del sistema (precio y stock por sucursal) para responder con el dato real.
 
-import { api, ApiError } from '../core/api.js';
+import { api, ApiError, getApiBase } from '../core/api.js';
+import { isAdmin } from '../core/auth.js';
 import { toast } from '../core/notifications.js';
 
 const MAX = 2000; // tope de Mercado Libre para una respuesta
@@ -87,13 +88,26 @@ export async function mount(el) {
       } else {
         const d = err.details || {};
         const perm = d.status === 403 || d.status === 401;
-        listEl.innerHTML = `
+        listEl.innerHTML = perm ? `
+          <div class="bg-amber-50 border border-amber-200 rounded-2xl p-5 text-sm text-[#241a0d] space-y-2">
+            <p class="font-bold text-base">Falta habilitar un permiso en Mercado Libre</p>
+            <p>Mercado Libre no deja leer las preguntas porque tu aplicación no tiene activado el permiso <b>Comunicación pre y postventa</b>. Se activa una sola vez:</p>
+            <ol class="list-decimal pl-5 space-y-1">
+              <li>Entrá a <a href="https://developers.mercadolibre.com.ar/devcenter" target="_blank" rel="noopener noreferrer" class="underline font-bold">Mercado Libre Developers → Mis aplicaciones</a> y abrí tu aplicación para editarla.</li>
+              <li>En <b>Permisos</b>, poné <b>Comunicación pre y postventa</b> en <b>Lectura y escritura</b>.</li>
+              <li>En <b>Tópicos</b> (notificaciones), tildá <b>questions</b> y guardá.</li>
+              <li>Volvé acá y tocá el botón para autorizar de nuevo la cuenta.</li>
+            </ol>
+            ${isAdmin() ? '<button id="btn-reauth" class="mt-1 px-4 py-2 bg-[#d82f1e] text-white rounded-xl font-bold text-sm">Volver a autorizar Mercado Libre</button>' : '<p class="text-[#7d6c5c]">Lo tiene que hacer el administrador.</p>'}
+          </div>` : `
           <div class="bg-amber-50 border border-amber-200 rounded-2xl p-5 text-sm text-[#241a0d]">
             <p class="font-bold">No se pudieron traer las preguntas de Mercado Libre.</p>
-            <p class="mt-1">${perm
-              ? 'Mercado Libre rechazó el pedido por permisos. En la configuración de tu aplicación de Mercado Libre hay que habilitar el permiso de preguntas (comunicación pre y post venta) y volver a conectar la cuenta.'
-              : esc(d.message || err.message || 'Error desconocido')}</p>
+            <p class="mt-1">${esc(d.message || err.message || 'Error desconocido')}</p>
           </div>`;
+        // Reautorizar no desvincula nada: solo renueva el permiso de la cuenta ya conectada.
+        listEl.querySelector('#btn-reauth')?.addEventListener('click', () => {
+          window.location.href = `${getApiBase()}/api/integrations/ml/authorize`;
+        });
       }
     }
   }
