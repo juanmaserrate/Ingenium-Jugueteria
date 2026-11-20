@@ -176,12 +176,16 @@ async function publishProductCore(input: PublishInput): Promise<any> {
     for (const a of input.attributes || []) put(a.id, a.value_name);
     // Código de barras: si la variante tiene un GTIN real se informa; si no, se declara que el
     // producto no tiene código (ML lo exige en muchas categorías y rechaza códigos internos).
-    if (byId['GTIN'] && !have.has('GTIN')) {
+    if (!have.has('GTIN')) {
       if (isValidGtin(forVariant?.barcode)) put('GTIN', String(forVariant.barcode).trim());
-      else if (byId['EMPTY_GTIN_REASON'] && !have.has('EMPTY_GTIN_REASON')) {
-        const vals: any[] = byId['EMPTY_GTIN_REASON'].values || [];
-        const pick = vals.find((v) => /no tiene c[oó]digo/i.test(v?.name || '')) || vals[0];
-        if (pick) { attrs.push({ id: 'EMPTY_GTIN_REASON', value_id: String(pick.id), value_name: pick.name }); have.add('EMPTY_GTIN_REASON'); }
+      else if (!have.has('EMPTY_GTIN_REASON')) {
+        // ML exige GTIN "condicionalmente" (no siempre figura en los atributos de la categoría),
+        // así que el motivo se manda siempre que no haya un código real.
+        const vals: any[] = byId['EMPTY_GTIN_REASON']?.values || [];
+        const pick = vals.find((v) => /no tiene c[oó]digo/i.test(v?.name || '')) || vals[0]
+          || { id: '17055160', name: 'El producto no tiene código registrado' };
+        attrs.push({ id: 'EMPTY_GTIN_REASON', value_id: String(pick.id), value_name: pick.name });
+        have.add('EMPTY_GTIN_REASON');
       }
     }
     if (product.brand?.name && byId['BRAND']) put('BRAND', product.brand.name);
@@ -250,7 +254,7 @@ async function publishProductCore(input: PublishInput): Promise<any> {
     };
     try {
       await ml.validateItem(payload);
-      return { ok: true, dryRun: true, categoryId, saleTerms: payload.sale_terms };
+      return { ok: true, dryRun: true, categoryId, saleTerms: payload.sale_terms, sentAttributes: payload.attributes };
     } catch (err: any) {
       // /items/validate responde 400 también cuando solo hay ADVERTENCIAS (que al publicar de
       // verdad no frenan). Se distingue: solo advertencias = publicable. Y se compara contra
@@ -265,8 +269,12 @@ async function publishProductCore(input: PublishInput): Promise<any> {
         withoutTerms = onlyWarnings(c2) ? 'solo advertencias' : 'rechazado';
       }
       const warnings = causes.filter((c) => c?.type === 'warning').map((c) => c?.message || c?.code);
-      if (onlyWarnings(causes)) return { ok: true, dryRun: true, categoryId, saleTerms: payload.sale_terms, warnings, withoutTerms };
-      return { error: 'ml_rejected', dryRun: true, categoryId, withoutTerms, warnings, details: data ?? err?.message };
+      if (onlyWarnings(causes)) return { ok: true, dryRun: true, categoryId, saleTerms: payload.sale_terms, warnings, withoutTerms, sentAttributes: payload.attributes };
+      return {
+        error: 'ml_rejected', dryRun: true, categoryId, withoutTerms, warnings, details: data ?? err?.message,
+        sentAttributes: payload.attributes,
+        gtinInfo: { enCategoria: !!byId['GTIN'], motivos: (byId['EMPTY_GTIN_REASON']?.values || []).map((v: any) => `${v.id}:${v.name}`) },
+      };
     }
   }
 
