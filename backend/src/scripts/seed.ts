@@ -71,6 +71,13 @@ export async function runSeed() {
     try { await prisma.$executeRawUnsafe(ddl); }
     catch (err) { console.warn('[seed] DDL no aplicado:', ddl, err); }
   }
+  // Limpieza única de los datos de prueba de Señas (ver cleanupTestData.ts). Nunca frena el arranque.
+  try {
+    const { cleanupSenaTestData } = await import('./cleanupTestData.js');
+    await cleanupSenaTestData();
+  } catch (err) {
+    console.warn('[seed] limpieza de datos de prueba fallida:', err);
+  }
   // Snapshot del vendedor en la venta (el POS lo manda como nombre; ver sales.ts).
   try {
     await prisma.$executeRawUnsafe(
