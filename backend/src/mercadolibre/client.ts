@@ -126,6 +126,13 @@ export class MlClient {
   getOrder(orderId: string) { return this.req({ method: 'get', url: `/orders/${orderId}` }); }
   searchOrders(params: Record<string, any>) { return this.req({ method: 'get', url: '/orders/search', params }); }
 
+  // --- Preguntas de compradores (pre-venta) ---
+  searchQuestions(params: Record<string, any>) { return this.req({ method: 'get', url: '/questions/search', params }); }
+  getQuestion(questionId: string) { return this.req({ method: 'get', url: `/questions/${questionId}`, params: { api_version: 4 } }); }
+  answerQuestion(questionId: string, text: string) {
+    return this.req({ method: 'post', url: '/answers', data: { question_id: Number(questionId), text } });
+  }
+
   // --- Notificaciones perdidas ---
   getMyFeeds(params: Record<string, any> = {}) { return this.req({ method: 'get', url: '/myfeeds', params }); }
 }

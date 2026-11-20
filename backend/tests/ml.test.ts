@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { matchListings, normSku, normTitle, type InvProduct, type MlListing } from '../src/mercadolibre/match.js';
+import { normalizeQuestion, cleanAnswerText, ANSWER_MAX_CHARS } from '../src/mercadolibre/questionsPure.js';
 import { sumPendingForVariant, isHistoricalOrder, isBeforeCutoff, orderPaidAt } from '../src/services/pendingMath.js';
 
 test('corte "empezar desde ahora": solo entra lo pagado después del corte', () => {
@@ -204,4 +205,23 @@ test('historial: compra anterior a la conexión de la cuenta no entra como pendi
   assert.equal(isHistoricalOrder(null, connectedAt), false);
   assert.equal(isHistoricalOrder('2026-02-10T00:00:00Z', null), false);
   assert.equal(isHistoricalOrder('no-es-fecha', connectedAt), false);
+});
+
+test('preguntas ML: normaliza la pregunta y descarta las eliminadas', () => {
+  const q = normalizeQuestion({ id: 13001, text: 'Hola, tienen stock?', status: 'UNANSWERED', item_id: 'MLA123', date_created: '2026-11-20T10:00:00.000-04:00', from: { id: 555 }, answer: null });
+  assert.deepEqual(q, { id: '13001', text: 'Hola, tienen stock?', status: 'UNANSWERED', dateCreated: '2026-11-20T10:00:00.000-04:00', itemId: 'MLA123', buyerId: '555', answer: null });
+  const a = normalizeQuestion({ id: 2, text: 'x', status: 'ANSWERED', item_id: 'MLA1', answer: { text: 'Si, hay', status: 'ACTIVE', date_created: '2026-11-20T11:00:00.000-04:00' } });
+  assert.deepEqual(a?.answer, { text: 'Si, hay', dateCreated: '2026-11-20T11:00:00.000-04:00' });
+  assert.equal(normalizeQuestion({ id: 3, text: 'spam', status: 'BANNED' }), null);
+  assert.equal(normalizeQuestion({ id: 4, text: 'x', status: 'UNANSWERED', deleted_from_listing: true }), null);
+  assert.equal(normalizeQuestion({ text: 'sin id' }), null);
+  assert.equal(normalizeQuestion(null), null);
+});
+
+test('preguntas ML: la respuesta se limpia y se valida antes de publicarla', () => {
+  assert.equal(cleanAnswerText('  Hola! Si, tenemos stock.  \r\nSaludos   \n'), 'Hola! Si, tenemos stock.\nSaludos');
+  assert.throws(() => cleanAnswerText('   \n '), /Escrib/);
+  assert.throws(() => cleanAnswerText(null), /Escrib/);
+  assert.equal(cleanAnswerText('a'.repeat(ANSWER_MAX_CHARS)).length, ANSWER_MAX_CHARS);
+  assert.throws(() => cleanAnswerText('a'.repeat(ANSWER_MAX_CHARS + 1)), /muy larga/);
 });

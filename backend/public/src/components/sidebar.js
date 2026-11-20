@@ -9,9 +9,11 @@ import { toast } from '../core/notifications.js';
 let webPendingCount = 0;
 // Ídem para las ventas de Mercado Libre (badge en "Ventas Mercado Libre").
 let mlPendingCount = 0;
+// Preguntas de Mercado Libre sin responder (badge en "Preguntas Mercado Libre").
+let mlQuestionsCount = 0;
 
 function badgeFor(item, active) {
-  const count = item.path === '/ventas-web' ? webPendingCount : item.path === '/ventas-ml' ? mlPendingCount : 0;
+  const count = item.path === '/ventas-web' ? webPendingCount : item.path === '/ventas-ml' ? mlPendingCount : item.path === '/preguntas-ml' ? mlQuestionsCount : 0;
   if (count <= 0) return '';
   const n = count > 99 ? '99+' : count;
   const cls = active
@@ -40,6 +42,7 @@ const NAV = [
 
   { section: 'Mercado Libre' },
   { path: '/ventas-ml',           label: 'Ventas Mercado Libre', icon: 'local_mall' },
+  { path: '/preguntas-ml',        label: 'Preguntas Mercado Libre', icon: 'forum' },
   { path: '/mercadolibre',        label: 'Mercado Libre',     icon: 'storefront', admin: true },
 
   { section: 'Comercial' },
@@ -162,4 +165,20 @@ export function mountSidebar(el, { onLogout }) {
   };
   pollMl();
   setInterval(pollMl, 60_000);
+
+  // Preguntas de compradores de Mercado Libre sin responder.
+  let prevQ = null;
+  const pollQuestions = async () => {
+    try {
+      const { count } = await api('/api/ml-questions/count');
+      if (typeof count !== 'number') return;
+      if (prevQ !== null && count > prevQ) {
+        toast(`Nueva pregunta en Mercado Libre (${count} sin responder)`, 'info');
+      }
+      prevQ = count;
+      if (count !== mlQuestionsCount) { mlQuestionsCount = count; render(); }
+    } catch { /* sin conexión / sin ML: no molestar */ }
+  };
+  pollQuestions();
+  setInterval(pollQuestions, 60_000);
 }

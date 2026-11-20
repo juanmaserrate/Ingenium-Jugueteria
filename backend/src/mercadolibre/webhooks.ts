@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { requireMlClient, getMlClient } from './client.js';
 import { processReturn } from '../services/returns.js';
 import { randomId } from '../utils/crypto.js';
+import { invalidateQuestionsCount } from './questions.js';
 
 // Procesa una notificación de Mercado Libre. Las notificaciones son "finas": traen un
 // resource (ej. "/orders/123") y hay que ir a buscar el detalle con nuestro token. La
@@ -13,6 +14,12 @@ import { randomId } from '../utils/crypto.js';
 export async function handleMlNotification(notif: any) {
   const topic = String(notif?.topic ?? '');
   const resource = String(notif?.resource ?? '');
+  // Pregunta nueva (o respondida/borrada): las preguntas se leen en vivo de ML, así que
+  // alcanza con vencer el contador del menú para que se actualice enseguida.
+  if (topic === 'questions' || /^\/questions\//.test(resource)) {
+    invalidateQuestionsCount();
+    return { ok: true, questions: true };
+  }
   const m = resource.match(/\/orders\/(\d+)/);
   if (!/order/.test(topic) && !m) return { skipped: `topic ${topic}` };
   if (!m) return { skipped: 'sin order id' };

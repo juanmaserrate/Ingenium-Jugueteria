@@ -15,6 +15,7 @@ import { ValidationError } from '../utils/errors.js';
 import { applyStoreTermsToItem, linkedItemIds } from '../mercadolibre/terms.js';
 import { listCategoryMap, suggestForCategory, setCategoryMap, suggestFromListings, requiredListAttrs, setCategoryDefaultAttrs } from '../mercadolibre/categoryMap.js';
 import { isHistoricalOrder } from '../services/pendingMath.js';
+import { listQuestions, countUnanswered, answerQuestion } from '../mercadolibre/questions.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -374,6 +375,37 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       if (!ids.length) return { ok: true, dismissed: 0 };
       const upd = await prisma.mlOrderPending.updateMany({ where: { id: { in: ids }, status: 'pending' }, data: { status: 'dismissed' } });
       return { ok: true, dismissed: upd.count };
+    });
+
+    // --- Preguntas de compradores: se leen en vivo de ML y se responden desde el sistema ---
+    const mlError = (err: any) => {
+      const d = err?.response?.data;
+      return { status: err?.response?.status ?? null, code: d?.error ?? null, message: d?.message ?? err?.message ?? 'Error de Mercado Libre' };
+    };
+
+    r.get('/ml-questions', async (req, reply) => {
+      const status = String((req.query as any).status ?? 'UNANSWERED').toUpperCase() === 'ANSWERED' ? 'ANSWERED' : 'UNANSWERED';
+      try {
+        return await listQuestions(status);
+      } catch (err: any) {
+        if (err instanceof ValidationError) throw err;
+        return reply.status(502).send({ error: 'ml_questions_failed', details: mlError(err) });
+      }
+    });
+
+    r.get('/ml-questions/count', async () => {
+      try { return { count: await countUnanswered() }; } catch { return { count: 0 }; }
+    });
+
+    r.post('/ml-questions/:id/answer', async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const { text } = z.object({ text: z.string() }).parse(req.body);
+      try {
+        return await answerQuestion(id, text);
+      } catch (err: any) {
+        if (err instanceof ValidationError) throw err;
+        return reply.status(502).send({ error: 'ml_answer_failed', details: mlError(err) });
+      }
     });
 
     // "Ya las cobré: empezar desde ahora". Fija el corte en este momento y descarta TODO lo
