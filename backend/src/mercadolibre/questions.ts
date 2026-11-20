@@ -24,7 +24,9 @@ async function itemInfo(ml: MlClient, itemId: string): Promise<ItemInfo | null> 
     v = {
       title: String(it?.title ?? ''),
       permalink: it?.permalink ?? null,
-      thumbnail: it?.secure_thumbnail ?? it?.thumbnail ?? null,
+      // ML suele mandar la miniatura en http: se pasa a https (mismo servidor) para que el
+      // navegador la muestre dentro del sistema.
+      thumbnail: String(it?.secure_thumbnail ?? it?.thumbnail ?? '').replace(/^http:\/\//i, 'https://') || null,
       price: it?.price != null ? Number(it.price) : null,
       availableQty: it?.available_quantity != null ? Number(it.available_quantity) : null,
       status: it?.status ?? null,
