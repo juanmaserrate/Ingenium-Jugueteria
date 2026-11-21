@@ -16,6 +16,7 @@ import { applyStoreTermsToItem, linkedItemIds } from '../mercadolibre/terms.js';
 import { listCategoryMap, suggestForCategory, setCategoryMap, suggestFromListings, requiredListAttrs, setCategoryDefaultAttrs } from '../mercadolibre/categoryMap.js';
 import { isHistoricalOrder } from '../services/pendingMath.js';
 import { listQuestions, countUnanswered, answerQuestion } from '../mercadolibre/questions.js';
+import { flexSchedule } from '../mercadolibre/questionsPure.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -375,6 +376,54 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       if (!ids.length) return { ok: true, dismissed: 0 };
       const upd = await prisma.mlOrderPending.updateMany({ where: { id: { in: ids }, status: 'pending' }, data: { status: 'dismissed' } });
       return { ok: true, dismissed: upd.count };
+    });
+
+    // --- Envíos Flex: cómo está configurado en Mercado Libre (SOLO LECTURA) ---
+    // Horario de corte y franja de entrega por día. No cambia nada en ML.
+    r.get('/integrations/ml/flex', adminOnly, async (_req, reply) => {
+      const { getMlClient } = await import('../mercadolibre/client.js');
+      const ml = await getMlClient();
+      const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
+      if (!ml || !integ?.mlUserId) return reply.status(409).send({ error: 'Mercado Libre no está conectado' });
+      const fail = (err: any) => ({ status: err?.response?.status ?? null, message: err?.response?.data?.message ?? err?.message ?? 'Error de Mercado Libre' });
+      let subs: any[];
+      try {
+        const res = await ml.flexSubscriptions('MLA', integ.mlUserId);
+        subs = Array.isArray(res) ? res : [];
+      } catch (err: any) {
+        // 404 = la cuenta no tiene Flex activado.
+        if (err?.response?.status === 404) return { subscribed: false, services: [] };
+        return reply.status(502).send({ error: 'ml_flex_failed', details: fail(err) });
+      }
+      const services = await Promise.all(subs.map(async (s) => {
+        const set = s?.configuration?.set ?? {};
+        const out: any = {
+          serviceId: s?.service_id ?? null,
+          mode: s?.mode ?? null,
+          status: s?.status ?? null,
+          origin: s?.origin ? { address: s.origin.address_line ?? null, city: s.origin.city?.name ?? null, zip: s.origin.zip_code ?? null } : null,
+          deliveryRangesMode: set.delivery_ranges ?? null,
+          cutoffByZone: !!set?.coverage?.capabilities?.cutoff_by_zone,
+          coverageType: set?.coverage?.type ?? null,
+          holidays: set.holidays ?? null,
+        };
+        if (s?.service_id == null) return out;
+        try {
+          const dr: any = await ml.flexDeliveryRanges('MLA', integ.mlUserId!, s.service_id);
+          out.deliveryWindow = dr?.delivery_window ?? null;
+          out.schedule = flexSchedule(dr?.delivery_ranges);
+          out.isDowngraded = !!dr?.is_downgraded;
+          out.hasExtendedRange = !!dr?.has_extended_range;
+          out.cutoffLimits = dr?.availables?.cutoffs?.global ?? null;
+          out.rawRanges = dr?.delivery_ranges ?? null;
+        } catch (err: any) { out.rangesError = fail(err); }
+        if (out.cutoffByZone) {
+          try { out.zones = await ml.flexZones('MLA', integ.mlUserId!, s.service_id); }
+          catch (err: any) { out.zonesError = fail(err); }
+        }
+        return out;
+      }));
+      return { subscribed: services.length > 0, services };
     });
 
     // --- Preguntas de compradores: se leen en vivo de ML y se responden desde el sistema ---

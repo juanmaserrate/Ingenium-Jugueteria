@@ -33,6 +33,21 @@ export function normalizeQuestion(q: any): MlQuestionView | null {
   };
 }
 
+// --- Envíos Flex: pasa la respuesta de ML (rangos de entrega) a algo legible ---
+export type FlexDay = { day: 'week' | 'saturday' | 'sunday'; label: string; works: boolean; ranges: Array<{ from: number | null; to: number | null; cutoff: number | null; capacity: number | null }> };
+
+const FLEX_DAYS: Array<[FlexDay['day'], string]> = [['week', 'Lunes a viernes'], ['saturday', 'Sábados'], ['sunday', 'Domingos']];
+const hour = (v: unknown) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
+
+// Un día sin rangos configurados = ese día no se despacha por Flex.
+export function flexSchedule(deliveryRanges: any): FlexDay[] {
+  return FLEX_DAYS.map(([day, label]) => {
+    const raw = Array.isArray(deliveryRanges?.[day]) ? deliveryRanges[day] : [];
+    const ranges = raw.map((r: any) => ({ from: hour(r?.from), to: hour(r?.to), cutoff: hour(r?.cutoff), capacity: hour(r?.capacity) }));
+    return { day, label, works: ranges.length > 0, ranges };
+  });
+}
+
 // Valida y limpia el texto de una respuesta: sin espacios sobrantes, no vacío y dentro del
 // tope de ML. Tira ValidationError con un mensaje para mostrarle al operador.
 export function cleanAnswerText(raw: unknown): string {

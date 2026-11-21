@@ -41,6 +41,38 @@ export async function mount(el) {
     }
   });
 
+  // Envíos Flex: muestra cómo está configurado en Mercado Libre (solo lectura).
+  async function loadFlex() {
+    const box = el.querySelector('#ml-flex-out');
+    const safe = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const h = (n) => (n == null ? null : `${String(n).padStart(2, '0')}:00`);
+    try {
+      const r = await api('/api/integrations/ml/flex');
+      const flex = (r.services || []).filter((s) => String(s.mode || '').toUpperCase() === 'FLEX');
+      const list = flex.length ? flex : (r.services || []);
+      if (!r.subscribed || !list.length) { box.innerHTML = '<p class="text-sm text-[#7d6c5c]">Tu cuenta no tiene Envíos Flex activado en Mercado Libre.</p>'; return; }
+      box.innerHTML = list.map((s) => {
+        const active = s.status === 'in';
+        const rows = (s.schedule || []).map((d) => {
+          if (!d.works) return `<tr class="border-t border-[#fff1e6]"><td class="py-1.5 pr-4 font-bold">${d.label}</td><td class="py-1.5 text-[#7d6c5c]" colspan="2">No se despacha</td></tr>`;
+          return d.ranges.map((g) => `<tr class="border-t border-[#fff1e6]"><td class="py-1.5 pr-4 font-bold">${d.label}</td><td class="py-1.5 pr-4">${g.cutoff != null ? `<b class="text-[#d82f1e]">${h(g.cutoff)} hs</b>` : '<span class="text-[#7d6c5c]">según la zona</span>'}</td><td class="py-1.5 text-[#7d6c5c]">${g.from != null && g.to != null ? `entrega de ${h(g.from)} a ${h(g.to)}` : ''}</td></tr>`).join('');
+        }).join('');
+        const win = s.deliveryWindow === 'same_day' ? 'en el día' : s.deliveryWindow === 'next_day' ? 'al día siguiente' : null;
+        const lim = s.cutoffLimits ? ` Mercado Libre te deja elegir un corte entre las ${h(s.cutoffLimits.min)} y las ${h(s.cutoffLimits.max)}.` : '';
+        return `
+          <div class="space-y-2">
+            <p class="text-sm">Estado: <b class="${active ? 'text-green-700' : 'text-amber-700'}">${active ? 'activo' : 'inactivo'}</b>${s.origin?.address ? ` · sale desde ${safe(s.origin.address)}${s.origin.city ? `, ${safe(s.origin.city)}` : ''}` : ''}${win ? ` · entrega ${win}` : ''}</p>
+            ${s.rangesError ? `<p class="text-sm text-amber-700">No se pudo leer el horario: ${safe(s.rangesError.message)}</p>` : `
+            <table class="text-sm"><thead><tr class="text-xs uppercase text-[#7d6c5c] text-left"><th class="pr-4 pb-1">Día</th><th class="pr-4 pb-1">Horario de corte</th><th class="pb-1">Entrega</th></tr></thead><tbody>${rows}</tbody></table>`}
+            <p class="text-xs text-[#7d6c5c]">Las ventas que entran antes del corte salen ese mismo día; las posteriores, al día hábil siguiente.${lim}${s.isDowngraded ? ' <b class="text-amber-700">Mercado Libre tiene tu servicio Flex moderado.</b>' : ''}</p>
+          </div>`;
+      }).join('<hr class="border-[#fff1e6]" />');
+    } catch (err) {
+      const d = err.details || {};
+      box.innerHTML = `<p class="text-sm text-amber-700">No se pudo leer la configuración de Flex: ${safe(d.message || err.message)}</p>`;
+    }
+  }
+
   async function refresh() {
     try {
       const s = await api('/api/integrations/ml/status');
@@ -60,9 +92,10 @@ export async function mount(el) {
       el.querySelector('#ml-link-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-publish-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-howto-box').classList.toggle('hidden', !s.connected);
+      el.querySelector('#ml-flex-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-terms-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-catmap-box').classList.toggle('hidden', !s.connected);
-      if (s.connected) { await loadMappings(); loadTermsCount(); loadCatMap(); }
+      if (s.connected) { loadFlex(); await loadMappings(); loadTermsCount(); loadCatMap(); }
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) {
         el.querySelector('#status-badge').innerHTML = '<span class="px-2 py-0.5 rounded-full bg-red-100 text-red-800 text-xs font-bold">Backend offline</span>';
@@ -392,6 +425,14 @@ function renderShell() {
             <p class="text-xs text-[#7d6c5c] mt-1">En <b>Ventas Mercado Libre</b>: cada venta entra sola; elegís la sucursal y se registra con su comisión real.</p>
           </a>
         </div>
+      </section>
+
+      <section id="ml-flex-box" class="hidden bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 space-y-3">
+        <div>
+          <h2 class="text-lg font-bold">Envíos Flex</h2>
+          <p class="text-xs text-[#7d6c5c]">Cómo está configurado en Mercado Libre. Solo se muestra: para cambiarlo hay que hacerlo en Mercado Libre.</p>
+        </div>
+        <div id="ml-flex-out"><p class="text-sm text-[#7d6c5c]">Cargando...</p></div>
       </section>
 
       <section id="ml-link-box" class="hidden bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 space-y-4">

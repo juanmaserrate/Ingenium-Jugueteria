@@ -3,7 +3,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { matchListings, normSku, normTitle, type InvProduct, type MlListing } from '../src/mercadolibre/match.js';
-import { normalizeQuestion, cleanAnswerText, ANSWER_MAX_CHARS } from '../src/mercadolibre/questionsPure.js';
+import { normalizeQuestion, cleanAnswerText, ANSWER_MAX_CHARS, flexSchedule } from '../src/mercadolibre/questionsPure.js';
+
+test('Flex: arma el horario por dia y marca los dias que no se despacha', () => {
+  const s = flexSchedule({ week: [{ capacity: 500, from: 12, to: 21, cutoff: 14 }], saturday: [{ capacity: 100, from: 12, to: 18, cutoff: 12 }], sunday: [] });
+  assert.deepEqual(s[0], { day: 'week', label: 'Lunes a viernes', works: true, ranges: [{ from: 12, to: 21, cutoff: 14, capacity: 500 }] });
+  assert.equal(s[1].ranges[0].cutoff, 12);
+  assert.deepEqual(s[2], { day: 'sunday', label: 'Domingos', works: false, ranges: [] });
+  // sin dato de corte (corte por zona) no inventa una hora
+  assert.equal(flexSchedule({ week: [{ from: 9, to: 21 }] })[0].ranges[0].cutoff, null);
+  assert.equal(flexSchedule(null).every((d) => !d.works), true);
+});
 import { sumPendingForVariant, isHistoricalOrder, isBeforeCutoff, orderPaidAt } from '../src/services/pendingMath.js';
 
 test('corte "empezar desde ahora": solo entra lo pagado después del corte', () => {

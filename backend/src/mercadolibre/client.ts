@@ -133,6 +133,17 @@ export class MlClient {
     return this.req({ method: 'post', url: '/answers', data: { question_id: Number(questionId), text } });
   }
 
+  // --- Envíos Flex (solo lectura): suscripción y rangos de entrega con su horario de corte ---
+  flexSubscriptions(site: string, userId: string) {
+    return this.req({ method: 'get', url: `/flex/sites/${site}/users/${userId}/subscriptions/v1` });
+  }
+  flexDeliveryRanges(site: string, userId: string, serviceId: string | number) {
+    return this.req({ method: 'get', url: `/flex/sites/${site}/users/${userId}/services/${serviceId}/configurations/delivery-ranges/v1`, params: { show_availables: true } });
+  }
+  flexZones(site: string, userId: string, serviceId: string | number) {
+    return this.req({ method: 'get', url: `/flex/sites/${site}/users/${userId}/services/${serviceId}/configurations/coverage/zones/v1` });
+  }
+
   // --- Notificaciones perdidas ---
   getMyFeeds(params: Record<string, any> = {}) { return this.req({ method: 'get', url: '/myfeeds', params }); }
 }
