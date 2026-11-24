@@ -214,10 +214,10 @@ export async function mount(el) {
       }).join('');
       out.innerHTML = `
         <div class="bg-[#fff8f4] rounded-xl p-4 text-sm space-y-1">
-          <p>Sobre ${sm.calculated} productos${markupPct ? ` con recargo del ${markupPct}%` : ' al precio del sistema'}: en el local te queda en promedio <b>${pc(sm.storeMarginPct)}</b> del precio y en Mercado Libre <b>${pc(sm.realMarginPct)}</b>.</p>
+          <p>Sobre ${sm.calculated} productos${markupPct ? ` con recargo del ${markupPct}%` : ' al precio del sistema'}: en el local te queda normalmente <b>${pc(sm.storeMarginPct)}</b> del precio y en Mercado Libre <b>${pc(sm.realMarginPct)}</b>.</p>
           ${sm.withFreeShipping && sm.realMarginBelowPct != null ? `<p>Los que no llegan al monto de envío gratis dejan <b>${pc(sm.realMarginBelowPct)}</b>; los ${sm.withFreeShipping} que lo superan (el envío lo pagás vos) dejan <b>${pc(sm.realMarginAbovePct)}</b>.</p>` : ''}
           ${sm.losingReal ? `<p class="text-red-700 font-bold">${sm.losingReal} de ${sm.calculated} dan pérdida.</p>` : ''}
-          ${sm.equalMarkupRealPct != null ? `<p>Para ganar lo mismo que en el local, el recargo promedio tendría que ser de <b>${pc(sm.equalMarkupRealPct)}</b>.</p>` : ''}
+          ${sm.equalMarkupRealPct != null ? `<p>Para ganar lo mismo que en el local, el recargo típico tendría que ser de <b>${pc(sm.equalMarkupRealPct)}</b>.</p>` : ''}
         </div>
         <div class="overflow-x-auto"><table class="w-full text-sm mt-2">
           <thead><tr class="text-xs uppercase text-[#7d6c5c] text-right">

@@ -104,7 +104,14 @@ export async function profitSample(opts: { n?: number; markupPct?: number; logis
 
   // Resumen sobre los que se pudieron calcular.
   const ok = rows.filter((r) => r.result) as Array<ProfitRow & { result: MlProfit }>;
-  const avg = (xs: Array<number | null>) => { const v = xs.filter((x): x is number => x != null && Number.isFinite(x)); return v.length ? Math.round((v.reduce((s, x) => s + x, 0) / v.length) * 10) / 10 : null; };
+  // Valor típico = MEDIANA, no promedio: un solo producto con el costo mal cargado (costo mayor
+  // que el precio) arrastraba el promedio de toda la muestra.
+  const avg = (xs: Array<number | null>) => {
+    const v = xs.filter((x): x is number => x != null && Number.isFinite(x)).sort((a, b) => a - b);
+    if (!v.length) return null;
+    const mid = Math.floor(v.length / 2);
+    return Math.round((v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2) * 10) / 10;
+  };
   return {
     candidates: products.length, markupPct, logistic, listingType: LISTING,
     rows,
