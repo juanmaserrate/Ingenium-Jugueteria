@@ -68,6 +68,12 @@ let analysis: MassAnalysis | null = null;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// ¿ML rechazó por el peso/medidas del paquete?
+export function isPackageRejection(res: any): boolean {
+  if (!res || res.ok || res.error !== 'ml_rejected') return false;
+  try { return /seller_package/i.test(JSON.stringify(res.details ?? '')); } catch { return false; }
+}
+
 // Peso y medidas del paquete: los del producto; lo que falte, de su publicación de Tienda Nube.
 type Dims = { weight?: number | null; height?: number | null; width?: number | null; depth?: number | null };
 async function dimensionsFor(p: Dims & { tnMapping?: { tnProductId: string } | null }) {
@@ -284,29 +290,36 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
         j.belowMin++; j.done++;
         continue;
       }
+      // Un intento = calcular el precio para ese paquete y publicar.
+      const attempt = async (dims: Dims) => {
+        let priceByBase: Record<string, number> | undefined;
+        if (pricing === 'target') {
+          if (!ctx) {
+            const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
+            if (!integ?.mlUserId) throw new Error('Mercado Libre no está conectado');
+            ctx = await newPricingCtx(await requireMlClient(), integ.mlUserId, listingTypeId);
+          }
+          const mapped = await mappedMlForProduct(item.productId).catch(() => null);
+          const categoryId = mapped?.categoryId ?? (await predictCategory(p.name.slice(0, 60)))[0]?.categoryId;
+          if (!categoryId) throw new Error('No se pudo determinar la categoría para calcular el precio');
+          const bases = [...new Set([p.price, ...p.variants.map((v) => Number(v.priceOverride) || 0)].filter((x) => x > 0))];
+          priceByBase = {};
+          for (const base of bases) {
+            const t = await targetPriceFor(ctx, { categoryId, storePrice: base, product: dims });
+            priceByBase[String(base)] = t.price;
+          }
+          mlPrice = priceByBase[String(p.price)];
+        } else {
+          mlPrice = Math.round(p.price * priceFactor);
+        }
+        // ML exige peso y medidas del paquete en toda publicación.
+        return publishProduct({ productId: item.productId, listingTypeId, priceFactor, priceByBase, attributes: packageAttributes(packageFor(dims)) });
+      };
+      // Paquete: lo del producto, o lo de Tienda Nube. Si ML no acepta esas medidas (pasa con
+      // valores muy chicos, ej. 15 g / 4×2×2 cm), se reintenta una vez con el paquete estándar.
       const dims = await dimensionsFor(p);
-      let priceByBase: Record<string, number> | undefined;
-      if (pricing === 'target') {
-        if (!ctx) {
-          const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
-          if (!integ?.mlUserId) throw new Error('Mercado Libre no está conectado');
-          ctx = await newPricingCtx(await requireMlClient(), integ.mlUserId, listingTypeId);
-        }
-        const mapped = await mappedMlForProduct(item.productId).catch(() => null);
-        const categoryId = mapped?.categoryId ?? (await predictCategory(p.name.slice(0, 60)))[0]?.categoryId;
-        if (!categoryId) throw new Error('No se pudo determinar la categoría para calcular el precio');
-        const bases = [...new Set([p.price, ...p.variants.map((v) => Number(v.priceOverride) || 0)].filter((x) => x > 0))];
-        priceByBase = {};
-        for (const base of bases) {
-          const t = await targetPriceFor(ctx, { categoryId, storePrice: base, product: dims });
-          priceByBase[String(base)] = t.price;
-        }
-        mlPrice = priceByBase[String(p.price)];
-      } else {
-        mlPrice = Math.round(p.price * priceFactor);
-      }
-      // ML exige peso y medidas del paquete: los del producto o, si no los tiene, el estándar.
-      res = await publishProduct({ productId: item.productId, listingTypeId, priceFactor, priceByBase, attributes: packageAttributes(packageFor(dims)) });
+      res = await attempt(dims);
+      if (isPackageRejection(res) && !packageFor(dims).assumed) res = await attempt({});
     } catch (err: any) {
       const data = err?.response?.data;
       res = { error: 'ml_rejected', details: data ?? { message: err?.message, status: err?.response?.status } };
