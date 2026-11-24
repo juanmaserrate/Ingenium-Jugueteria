@@ -4,6 +4,10 @@ import { publishProduct } from './publish.js';
 import { variantValue } from './match.js';
 import { isValidGtin } from './pure.js';
 import { classifyForMl, publishFailureReason, isHardStop, type MassProduct, type MassStatus } from './massPure.js';
+import { requireMlClient } from './client.js';
+import { mappedMlForProduct } from './categoryMap.js';
+import { predictCategory } from './publish.js';
+import { newPricingCtx, targetPriceFor, type PricingCtx } from './pricing.js';
 
 // Publicación MASIVA del stock en Mercado Libre. Dos pasos, los dos lanzados por el dueño:
 //   1) analizar: clasifica todo el inventario (listo / ya vinculado / ya está en ML sin vincular
@@ -14,13 +18,17 @@ import { classifyForMl, publishFailureReason, isHardStop, type MassProduct, type
 // El trabajo vive en memoria; el último análisis y el último informe se guardan en kv_items
 // para que sobrevivan a un reinicio.
 
-const KV = { collection: 'ml_mass', analysis: 'analysis', report: 'report' };
+const KV = { collection: 'ml_mass', analysis: 'analysis', report: 'report', schedule: 'schedule' };
 const LISTING_SECONDS = 6;          // estimación por publicación (crear + descripción + condiciones + stock)
 const PAUSE_MS = 300;               // respiro entre productos
 const MAX_CONSECUTIVE_REJECTS = 25; // tantos rechazos seguidos = algo anda mal: se frena sola
 const ANALYSIS_MAX_AGE_MS = 12 * 3600 * 1000;
 
-type Row = { productId: string; name: string; code: string; stock?: number; detail?: string };
+type Row = { productId: string; name: string; code: string; stock?: number; detail?: string; storePrice?: number; mlPrice?: number; link?: string | null };
+
+// 'target' = precio para que en ML quede lo mismo que en el local; 'factor' = precio del sistema
+// con un recargo fijo (1 = mismo precio).
+export type MassOptions = { limit: number | null; pricing: 'target' | 'factor'; priceFactor: number; minPrice: number; listingTypeId: string };
 
 export type MassAnalysis = {
   at: string;
@@ -32,6 +40,7 @@ export type MassAnalysis = {
   // Los que Mercado Libre rechazó desde este análisis (acumulado entre tandas). Salen de
   // "listos" para no reintentarlos en cada tanda; al volver a analizar se prueban de nuevo.
   failed: Row[];
+  belowMin?: Row[]; // no se publican sueltos: precio menor al mínimo elegido
 };
 
 type Job = {
@@ -47,7 +56,9 @@ type Job = {
   skipped: number;     // ya estaban vinculados
   failed: Row[];
   partial: Row[];      // se publicó pero alguna variante quedó afuera
-  options?: { limit: number | null; priceFactor: number; listingTypeId: string };
+  belowMin: number;    // salteados por precio menor al mínimo
+  rows: Row[];         // lo publicado, con precio del sistema y precio en ML
+  options?: MassOptions;
 };
 
 let job: Job | null = null;
@@ -82,20 +93,22 @@ export async function massStatus() {
     if (saved) j = saved.status === 'running' ? { ...saved, status: 'interrupted', message: 'El servidor se reinició. Volvé a lanzar la publicación: sigue donde quedó.' } : saved;
   }
   return {
-    job: j ? { ...j, failed: undefined, partial: undefined, failedCount: j.failed.length, partialCount: j.partial.length } : null,
+    job: j ? { ...j, failed: undefined, partial: undefined, rows: undefined, failedCount: j.failed.length, partialCount: j.partial.length, rowsCount: (j.rows ?? []).length } : null,
+    schedule: await kvGet<MassSchedule>(KV.schedule),
     analysis: a ? { at: a.at, scannedListings: a.scannedListings, counts: a.counts, failedCount: (a.failed ?? []).length, estimateSeconds: a.estimateSeconds, stale: Date.now() - new Date(a.at).getTime() > ANALYSIS_MAX_AGE_MS } : null,
   };
 }
 
 // Listados para descargar: lo que no se puede publicar y por qué.
 export async function massList(list: string): Promise<Row[]> {
-  if (list === 'partial') {
+  if (list === 'partial' || list === 'published') {
     const j = job ?? (await kvGet<Job>(KV.report));
-    return (j?.partial ?? []) as Row[];
+    return ((list === 'partial' ? j?.partial : j?.rows) ?? []) as Row[];
   }
   const a = await loadAnalysis();
   if (!a) return [];
   if (list === 'failed') return a.failed ?? [];
+  if (list === 'below_min') return a.belowMin ?? [];
   if (list === 'ready') return a.ready;
   return (a.lists as any)[list] ?? [];
 }
@@ -107,7 +120,7 @@ export function massStop() {
 
 const newJob = (kind: Job['kind'], total = 0): Job => ({
   kind, status: 'running', startedAt: new Date().toISOString(), finishedAt: null, message: null,
-  total, done: 0, published: 0, listings: 0, skipped: 0, failed: [], partial: [],
+  total, done: 0, published: 0, listings: 0, skipped: 0, failed: [], partial: [], belowMin: 0, rows: [],
 });
 
 // ---------------------------------------------------------------------------------------
@@ -205,7 +218,7 @@ async function runAnalysis(j: Job) {
 // ---------------------------------------------------------------------------------------
 // 2) PUBLICACIÓN
 // ---------------------------------------------------------------------------------------
-export async function startPublish(opts: { limit?: number | null; priceFactor?: number; listingTypeId?: string }) {
+export async function startPublish(opts: Partial<MassOptions>) {
   if (job?.status === 'running') return { started: false, reason: 'Ya hay un proceso corriendo' };
   const a = await loadAnalysis();
   if (!a) return { started: false, reason: 'Primero hay que analizar el stock' };
@@ -213,33 +226,72 @@ export async function startPublish(opts: { limit?: number | null; priceFactor?: 
   const limit = opts.limit && opts.limit > 0 ? Math.floor(opts.limit) : null;
   const priceFactor = opts.priceFactor && opts.priceFactor > 0 ? opts.priceFactor : 1;
   const listingTypeId = opts.listingTypeId || 'gold_special';
+  const pricing: MassOptions['pricing'] = opts.pricing === 'target' ? 'target' : 'factor';
+  const minPrice = opts.minPrice && opts.minPrice > 0 ? Math.floor(opts.minPrice) : 0;
   const queue = limit ? a.ready.slice(0, limit) : a.ready.slice();
   if (!queue.length) return { started: false, reason: 'No hay productos listos para publicar' };
 
-  job = { ...newJob('publish', queue.length), options: { limit, priceFactor, listingTypeId } };
+  job = { ...newJob('publish', queue.length), options: { limit, pricing, priceFactor, minPrice, listingTypeId } };
   stopRequested = false;
   const mine = job;
   void runPublish(mine, queue).catch((err) => {
     mine.status = 'error'; mine.finishedAt = new Date().toISOString();
     mine.message = `La publicación se cortó: ${err?.message ?? 'error'}`;
     void kvSet(KV.report, mine);
+    void finishSchedule(`Se cortó: ${err?.message ?? 'error'}`);
   });
   return { started: true, total: queue.length };
 }
 
 async function runPublish(j: Job, queue: MassAnalysis['ready']) {
-  const { priceFactor, listingTypeId } = j.options!;
+  const { priceFactor, listingTypeId, pricing, minPrice } = j.options!;
   let consecutive = 0;
   let hard = 0;
   const publishedIds = new Set<string>();
   const rejected = new Map<string, Row>(); // rechazos propios del producto (no por límite de la cuenta)
+  const belowMin = new Map<string, Row>();
+  let ctx: PricingCtx | null = null;
   await kvSet(KV.report, j);
 
   for (const item of queue) {
     if (stopRequested) { j.status = 'stopped'; j.message = 'Frenada a mano. Se puede volver a lanzar: sigue donde quedó.'; break; }
     let res: any;
+    let storePrice: number | undefined;
+    let mlPrice: number | undefined;
     try {
-      res = await publishProduct({ productId: item.productId, listingTypeId, priceFactor });
+      const p = await prisma.product.findUnique({
+        where: { id: item.productId },
+        select: { name: true, price: true, weight: true, width: true, height: true, depth: true, variants: { select: { priceOverride: true } } },
+      });
+      if (!p) throw new Error('Producto no encontrado');
+      storePrice = p.price;
+      // Los baratos no se publican sueltos: el costo fijo de ML se come la ganancia.
+      if (minPrice && p.price < minPrice) {
+        belowMin.set(item.productId, { productId: item.productId, name: item.name, code: item.code, stock: item.stock, storePrice: p.price, detail: `Precio menor al mínimo ($${minPrice.toLocaleString('es-AR')})` });
+        j.belowMin++; j.done++;
+        continue;
+      }
+      let priceByBase: Record<string, number> | undefined;
+      if (pricing === 'target') {
+        if (!ctx) {
+          const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
+          if (!integ?.mlUserId) throw new Error('Mercado Libre no está conectado');
+          ctx = await newPricingCtx(await requireMlClient(), integ.mlUserId, listingTypeId);
+        }
+        const mapped = await mappedMlForProduct(item.productId).catch(() => null);
+        const categoryId = mapped?.categoryId ?? (await predictCategory(p.name.slice(0, 60)))[0]?.categoryId;
+        if (!categoryId) throw new Error('No se pudo determinar la categoría para calcular el precio');
+        const bases = [...new Set([p.price, ...p.variants.map((v) => Number(v.priceOverride) || 0)].filter((x) => x > 0))];
+        priceByBase = {};
+        for (const base of bases) {
+          const t = await targetPriceFor(ctx, { categoryId, storePrice: base, weightKg: p.weight, dims: { h: p.height, w: p.width, d: p.depth } });
+          priceByBase[String(base)] = t.price;
+        }
+        mlPrice = priceByBase[String(p.price)];
+      } else {
+        mlPrice = Math.round(p.price * priceFactor);
+      }
+      res = await publishProduct({ productId: item.productId, listingTypeId, priceFactor, priceByBase });
     } catch (err: any) {
       const data = err?.response?.data;
       res = { error: 'ml_rejected', details: data ?? { message: err?.message, status: err?.response?.status } };
@@ -249,6 +301,7 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
       j.skipped++; consecutive = 0; hard = 0; publishedIds.add(item.productId);
     } else if (res?.ok) {
       j.published++; j.listings += Number(res.count) || 1; consecutive = 0; hard = 0; publishedIds.add(item.productId);
+      j.rows.push({ productId: item.productId, name: item.name, code: item.code, stock: item.stock, storePrice, mlPrice, link: res.permalink ?? null });
       const left = [
         ...(Array.isArray(res.failed) ? res.failed.map((f: any) => `${f.value}: ${publishFailureReason({ error: 'ml_rejected', details: f.error })}`) : []),
       ];
@@ -274,10 +327,14 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
   if (j.status === 'running') j.status = 'done';
   j.finishedAt = new Date().toISOString();
   await kvSet(KV.report, j);
+  await finishSchedule(j.message ?? `Publicados ${j.published} productos (${j.listings} publicaciones), ${j.failed.length} rechazados.`);
 
   // Lo ya publicado sale de la lista de "listos" para que la próxima tanda no lo repita.
-  if (analysis && (publishedIds.size || rejected.size)) {
-    analysis.ready = analysis.ready.filter((r) => !publishedIds.has(r.productId) && !rejected.has(r.productId));
+  if (analysis && (publishedIds.size || rejected.size || belowMin.size)) {
+    analysis.ready = analysis.ready.filter((r) => !publishedIds.has(r.productId) && !rejected.has(r.productId) && !belowMin.has(r.productId));
+    const prevMin = new Map((analysis.belowMin ?? []).map((r) => [r.productId, r]));
+    for (const [id, row] of belowMin) prevMin.set(id, row);
+    analysis.belowMin = [...prevMin.values()];
     analysis.counts.ready = analysis.ready.length;
     analysis.counts.linked += publishedIds.size;
     const prev = new Map((analysis.failed ?? []).map((r) => [r.productId, r]));
@@ -287,4 +344,127 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
     analysis.estimateSeconds = analysis.counts.listings * LISTING_SECONDS;
     await kvSet(KV.analysis, analysis);
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// 3) PROGRAMACIÓN: lanzar la publicación sola a una hora. Vive en kv_items, así que sobrevive
+//    a un reinicio; si el servidor se reinicia EN MEDIO de la corrida, se retoma sola.
+// ---------------------------------------------------------------------------------------
+export type MassSchedule = {
+  at: string;                 // cuándo arranca (ISO)
+  options: MassOptions;
+  status: 'pending' | 'running' | 'done' | 'cancelled' | 'expired' | 'error';
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  resumes?: number;
+  note?: string;
+};
+
+const SCHEDULE_TICK_MS = 30_000;
+const SCHEDULE_LATE_MS = 6 * 3600 * 1000;    // si el servidor estuvo caído más que esto, no arranca
+const SCHEDULE_RESUME_MS = 24 * 3600 * 1000; // ventana para retomar tras un reinicio
+const MAX_RESUMES = 5;
+let ticking = false;
+
+export async function setSchedule(at: Date, opts: Partial<MassOptions>) {
+  if (!(at.getTime() > Date.now() - 60_000)) return { ok: false, reason: 'Esa hora ya pasó' };
+  const cur = await kvGet<MassSchedule>(KV.schedule);
+  if (cur?.status === 'running') return { ok: false, reason: 'Ya hay una publicación programada corriendo' };
+  const s: MassSchedule = {
+    at: at.toISOString(), status: 'pending', createdAt: new Date().toISOString(),
+    options: {
+      limit: opts.limit && opts.limit > 0 ? Math.floor(opts.limit) : null,
+      pricing: opts.pricing === 'target' ? 'target' : 'factor',
+      priceFactor: opts.priceFactor && opts.priceFactor > 0 ? opts.priceFactor : 1,
+      minPrice: opts.minPrice && opts.minPrice > 0 ? Math.floor(opts.minPrice) : 0,
+      listingTypeId: opts.listingTypeId || 'gold_special',
+    },
+  };
+  await kvSet(KV.schedule, s);
+  return { ok: true, schedule: s };
+}
+
+export async function cancelSchedule() {
+  const cur = await kvGet<MassSchedule>(KV.schedule);
+  if (!cur || cur.status !== 'pending') return { ok: false, reason: 'No hay una publicación programada pendiente' };
+  await kvSet(KV.schedule, { ...cur, status: 'cancelled', finishedAt: new Date().toISOString() });
+  return { ok: true };
+}
+
+async function finishSchedule(note: string) {
+  const cur = await kvGet<MassSchedule>(KV.schedule);
+  if (cur?.status !== 'running') return;
+  await kvSet(KV.schedule, { ...cur, status: 'done', finishedAt: new Date().toISOString(), note });
+}
+
+// Analiza (para tener la foto del momento) y publica con las opciones programadas.
+async function runScheduled(s: MassSchedule) {
+  try {
+    job = newJob('analyze');
+    stopRequested = false;
+    await runAnalysis(job);
+    const r = await startPublish(s.options);
+    if (!r.started) await kvSet(KV.schedule, { ...s, status: 'error', finishedAt: new Date().toISOString(), note: r.reason });
+  } catch (err: any) {
+    if (job?.status === 'running') { job.status = 'error'; job.finishedAt = new Date().toISOString(); job.message = `No se pudo analizar: ${err?.message ?? 'error'}`; }
+    await kvSet(KV.schedule, { ...s, status: 'error', finishedAt: new Date().toISOString(), note: String(err?.message ?? 'error') });
+  }
+}
+
+async function scheduleTick() {
+  if (ticking) return;
+  ticking = true;
+  try {
+    const s = await kvGet<MassSchedule>(KV.schedule);
+    if (!s) return;
+    const late = Date.now() - new Date(s.at).getTime();
+    if (s.status === 'pending' && late >= 0) {
+      if (late > SCHEDULE_LATE_MS) { await kvSet(KV.schedule, { ...s, status: 'expired', note: 'El servidor no estaba disponible a esa hora' }); return; }
+      if (job?.status === 'running') return; // espera a que termine lo que esté corriendo
+      const run: MassSchedule = { ...s, status: 'running', startedAt: new Date().toISOString() };
+      await kvSet(KV.schedule, run);
+      await runScheduled(run);
+    } else if (s.status === 'running' && !job) {
+      // El servidor se reinició con la corrida en marcha: se retoma (no duplica lo ya publicado).
+      if ((s.resumes ?? 0) >= MAX_RESUMES || late > SCHEDULE_RESUME_MS) {
+        await kvSet(KV.schedule, { ...s, status: 'error', finishedAt: new Date().toISOString(), note: 'Se interrumpió por reinicios del servidor' });
+        return;
+      }
+      const run: MassSchedule = { ...s, resumes: (s.resumes ?? 0) + 1 };
+      await kvSet(KV.schedule, run);
+      await runScheduled(run);
+    }
+  } catch { /* se reintenta en el próximo tick */ } finally { ticking = false; }
+}
+
+export function startMassScheduler() {
+  setInterval(() => { void scheduleTick(); }, SCHEDULE_TICK_MS).unref?.();
+}
+
+// Vista previa: a qué precio saldrían algunos productos con el precio objetivo. No publica.
+export async function pricePreview(n = 10, minPrice = 0) {
+  const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
+  if (!integ?.mlUserId) throw new Error('Mercado Libre no está conectado');
+  const ctx = await newPricingCtx(await requireMlClient(), integ.mlUserId, 'gold_special');
+  const products = await prisma.product.findMany({
+    where: { active: true, price: { gte: Math.max(1, minPrice) }, mlMapping: null, variants: { some: { stocks: { some: { qty: { gt: 0 } } } } } },
+    select: { id: true, code: true, name: true, price: true, cost: true, weight: true, width: true, height: true, depth: true },
+    orderBy: { price: 'asc' },
+  });
+  const step = Math.max(1, Math.floor(products.length / Math.max(1, n)));
+  const sample = products.filter((_, i) => i % step === 0).slice(0, n);
+  const rows: any[] = [];
+  for (const p of sample) {
+    try {
+      const mapped = await mappedMlForProduct(p.id).catch(() => null);
+      const categoryId = mapped?.categoryId ?? (await predictCategory(p.name.slice(0, 60)))[0]?.categoryId;
+      if (!categoryId) { rows.push({ code: p.code, name: p.name, storePrice: p.price, error: 'sin categoría' }); continue; }
+      const t = await targetPriceFor(ctx, { categoryId, storePrice: p.price, weightKg: p.weight, dims: { h: p.height, w: p.width, d: p.depth } });
+      rows.push({ productId: p.id, code: p.code, name: p.name, cost: p.cost, storePrice: p.price, categoryId, mlPrice: t.price, net: t.net, freeShipping: t.freeShipping, capped: t.capped, upPct: Math.round((t.price / p.price - 1) * 1000) / 10 });
+    } catch (err: any) {
+      rows.push({ code: p.code, name: p.name, storePrice: p.price, error: String(err?.response?.data?.message ?? err?.message ?? 'error').slice(0, 160) });
+    }
+  }
+  return { candidates: products.length, threshold: ctx.threshold, rows };
 }

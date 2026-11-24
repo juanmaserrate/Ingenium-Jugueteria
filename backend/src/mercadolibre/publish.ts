@@ -73,6 +73,9 @@ export type PublishInput = {
   // Recargo sobre el precio del sistema (1.15 = +15%). Solo al CREAR la publicación: después
   // Mercado Libre mantiene su precio. Lo usa la publicación masiva.
   priceFactor?: number;
+  // Precio de ML ya calculado para cada precio base del sistema ({ "21600": 28810 }). Tiene
+  // prioridad sobre priceFactor. Lo arma la publicación masiva (precio para ganar lo mismo).
+  priceByBase?: Record<string, number>;
   quantity?: number;
   title?: string;
   condition?: string;
@@ -143,7 +146,12 @@ async function publishProductCore(input: PublishInput): Promise<any> {
   if (already && !completing) return { ok: true, itemId: already.mlItemId, alreadyLinked: true };
 
   const title = (input.title || product.name).slice(0, 60); // ML limita el título a 60 chars
-  const price = input.price ?? priceWithFactor(variant.priceOverride ?? product.price, input.priceFactor);
+  // Precio de ML para un precio base del sistema: el calculado, o el base con recargo.
+  const mlPriceOf = (base: number) => {
+    const exact = input.priceByBase?.[String(base)];
+    return exact && exact > 0 ? exact : priceWithFactor(base, input.priceFactor);
+  };
+  const price = input.price ?? mlPriceOf(Number(variant.priceOverride ?? product.price));
   if (!price || price <= 0) return { error: 'no_price', message: 'El producto no tiene precio' };
   const quantity = input.quantity ?? (await computeMlStockForVariant(variant.id));
 
@@ -313,7 +321,7 @@ async function publishProductCore(input: PublishInput): Promise<any> {
       variations.push({
         attribute_combinations: [{ id: mlVarAttr, value_name: value }],
         available_quantity: Math.max(0, Math.round(qty)),
-        price: priceWithFactor(Number(v.priceOverride ?? product.price), input.priceFactor),
+        price: mlPriceOf(Number(v.priceOverride ?? product.price)),
       });
       variationBuild.push({ variantId: v.id, value });
     }
@@ -362,7 +370,7 @@ async function publishProductCore(input: PublishInput): Promise<any> {
     for (const { v, val } of valued) {
       if (mappedVariantIds.has(v.id)) continue; // ya publicada
       const famTitle = `${baseName} ${val}`.slice(0, 60).trim();
-      const vprice = priceWithFactor(Number(v.priceOverride ?? product.price), input.priceFactor);
+      const vprice = mlPriceOf(Number(v.priceOverride ?? product.price));
       if (!vprice || vprice <= 0) { failed.push({ variantId: v.id, value: val, error: 'variante sin precio' }); continue; }
       const qty = await computeMlStockForVariant(v.id);
       if (qty <= 0) { noStock.push(val); continue; }

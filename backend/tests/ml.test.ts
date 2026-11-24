@@ -4,7 +4,51 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { matchListings, normSku, normTitle, type InvProduct, type MlListing } from '../src/mercadolibre/match.js';
 import { normalizeQuestion, cleanAnswerText, ANSWER_MAX_CHARS, flexSchedule } from '../src/mercadolibre/questionsPure.js';
-import { classifyForMl, isFanOut, priceWithFactor, publishFailureReason, isHardStop, mlProfit, pickListingPrice, freeShippingApplies, type MassProduct, type MassVariant } from '../src/mercadolibre/massPure.js';
+import { classifyForMl, isFanOut, priceWithFactor, publishFailureReason, isHardStop, mlProfit, pickListingPrice, freeShippingApplies, solveTargetPrice, netOf, type FeeQuote, type MassProduct, type MassVariant } from '../src/mercadolibre/massPure.js';
+
+// Modelo de lo que cobra ML medido el 2026-11-24: 13,5% + fijo por tramos; desde $33.000 no hay
+// fijo pero el envio gratis ($8.091) corre por cuenta del vendedor.
+const TH = 33000;
+const fakeQuote = async (p: number): Promise<FeeQuote> => {
+  const applies = p >= TH;
+  const fixedFee = applies ? 0 : p < 15000 ? 1330 : p < 25000 ? 2740 : 3320;
+  return { saleFee: Math.round((0.135 * p + fixedFee) * 100) / 100, fixedFee, shipping: applies ? 8091 : null, applies };
+};
+const solve = (target: number) => solveTargetPrice({ target, quote: fakeQuote, threshold: TH, capRatio: 0.9 });
+
+test('precio objetivo: en ML queda lo mismo que en el local', async () => {
+  // Hot Wheels $7.200 → (7.200 + 1.330) / 0,865 = 9.861 → $9.870
+  const a = await solve(7200);
+  assert.equal(a.price, 9870); assert.ok(a.net >= 7200 && a.net < 7215); assert.equal(a.freeShipping, false); assert.equal(a.capped, false);
+  // cruza de tramo de costo fijo: $12.500 → con fijo 1.330 daria 15.990, que ya paga fijo 2.740
+  const b = await solve(12500);
+  assert.ok(b.price >= 15000); assert.ok(b.net >= 12500 - 0.5); assert.ok(b.net < 12500 + 12);
+  assert.equal((await fakeQuote(b.price)).fixedFee, 2740);
+  // siempre multiplo de 10 y nunca por debajo del objetivo
+  for (const t of [5000, 9990, 14000, 18500, 21600]) {
+    const r = await solve(t);
+    assert.equal(r.price % 10, 0);
+    assert.ok(netOf(r.price, await fakeQuote(r.price)) >= t - 0.5, `objetivo ${t}`);
+  }
+});
+
+test('precio objetivo: cerca del monto de envio gratis se queda justo debajo', async () => {
+  // $27.000: para que quede todo habria que ir a ~$40.570 pagando el envio; a $32.990 queda
+  // 25.216 (93% de lo del local) → se prefiere quedar debajo
+  const r = await solve(27000);
+  assert.equal(r.price, 32990); assert.equal(r.capped, true); assert.equal(r.freeShipping, false);
+  assert.ok(r.net >= 0.9 * 27000 && r.net < 27000);
+});
+
+test('precio objetivo: lejos del limite se cubre el envio en el precio', async () => {
+  // $34.000: debajo del limite quedaria 74% → no conviene; (34.000 + 8.091) / 0,865 = 48.660
+  const r = await solve(34000);
+  assert.equal(r.capped, false); assert.equal(r.freeShipping, true);
+  assert.equal(r.price, 48670); assert.ok(r.net >= 34000 && r.net < 34015);
+  // sin monto detectado no se hace el recorte, pero el precio cierra igual
+  const n = await solveTargetPrice({ target: 27000, quote: fakeQuote, threshold: null });
+  assert.equal(n.capped, false); assert.ok(n.net >= 27000 - 0.5);
+});
 
 test('ganancia ML: el envio gratis corre por cuenta del vendedor solo donde ML lo exige', () => {
   // datos reales del 2026-11-24: por debajo del monto ML cobra costo fijo y el envio lo paga el comprador

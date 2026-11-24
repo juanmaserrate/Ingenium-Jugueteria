@@ -57,6 +57,7 @@ export async function mount(el) {
   const MASS_LISTS = {
     ready: 'listos_para_publicar', on_ml: 'ya_estan_en_mercado_libre', no_picture: 'sin_foto',
     no_price: 'sin_precio', failed: 'rechazados_por_mercado_libre', partial: 'variantes_que_quedaron_afuera',
+    published: 'publicados_con_precio', below_min: 'no_publicados_por_precio_minimo',
   };
 
   async function downloadMassList(name) {
@@ -66,6 +67,9 @@ export async function mount(el) {
       const { exportSimple } = await import('../core/xlsx.js');
       exportSimple(`ml_${MASS_LISTS[name]}.xlsx`, rows.map((r) => ({
         Código: r.code, Producto: r.name, Stock: r.stock ?? '',
+        ...(r.storePrice != null ? { 'Precio sistema': r.storePrice } : {}),
+        ...(r.mlPrice != null ? { 'Precio Mercado Libre': r.mlPrice } : {}),
+        ...(r.link ? { Publicación: r.link } : {}),
         ...(r.listings != null ? { Publicaciones: r.listings } : {}),
         ...(r.detail ? { Motivo: r.detail } : {}),
       })));
@@ -93,7 +97,7 @@ export async function mount(el) {
             ${running ? '<button id="mass-stop" class="px-3 py-1.5 bg-[#241a0d] text-white rounded-xl font-bold text-xs">Frenar</button>' : ''}
           </div>
           <div class="h-2 bg-[#f5dfca] rounded-full overflow-hidden"><div class="h-full bg-[#d82f1e]" style="width:${pct}%"></div></div>
-          <p>Publicados: <b>${num(j.published)}</b> productos (${num(j.listings)} publicaciones) · Ya estaban: ${num(j.skipped)} · Rechazados: <b class="${j.failedCount ? 'text-red-700' : ''}">${num(j.failedCount)}</b>${j.partialCount ? ` · Con variantes afuera: ${num(j.partialCount)}${dl('partial', j.partialCount)}` : ''}</p>
+          <p>Publicados: <b>${num(j.published)}</b> productos (${num(j.listings)} publicaciones)${dl('published', j.rowsCount)} · Ya estaban: ${num(j.skipped)} · Rechazados: <b class="${j.failedCount ? 'text-red-700' : ''}">${num(j.failedCount)}</b>${j.belowMin ? ` · Salteados por precio mínimo: ${num(j.belowMin)}${dl('below_min', j.belowMin)}` : ''}${j.partialCount ? ` · Con variantes afuera: ${num(j.partialCount)}${dl('partial', j.partialCount)}` : ''}</p>
           ${j.message ? `<p class="text-amber-800 font-bold">${j.message}</p>` : ''}
         </div>`;
     } else if (j && j.status === 'error') {
@@ -122,22 +126,46 @@ export async function mount(el) {
       html += '<p class="text-sm text-[#7d6c5c]">Todavía no se analizó el stock. El análisis no publica nada: solo cuenta qué se puede subir.</p>';
     }
 
+    // --- publicación programada ---
+    const sc = st.schedule;
+    const priceTxt = (o) => (o.pricing === 'target' ? 'precio para ganar lo mismo que en el local' : o.priceFactor > 1 ? `precio del sistema + ${Math.round((o.priceFactor - 1) * 100)}%` : 'mismo precio del sistema');
+    if (sc && (sc.status === 'pending' || sc.status === 'running')) {
+      const when = new Date(sc.at).toLocaleString('es-AR', { weekday: 'long', hour: '2-digit', minute: '2-digit' });
+      html += `
+        <div class="bg-green-50 border border-green-200 rounded-xl p-4 text-sm flex items-center justify-between gap-3 flex-wrap">
+          <div><b>${sc.status === 'running' ? 'Publicación programada en marcha' : `Publicación programada para el ${when}`}</b><br/>
+          <span class="text-xs text-[#7d6c5c]">${sc.options.limit ? `Los primeros ${num(sc.options.limit)}` : 'Todos los productos listos'} · ${priceTxt(sc.options)}${sc.options.minPrice ? ` · no publica lo que cuesta menos de $${num(sc.options.minPrice)}` : ''} · arranca sola, aunque cierres el sistema</span></div>
+          ${sc.status === 'pending' ? '<button id="mass-unschedule" class="px-3 py-1.5 bg-[#241a0d] text-white rounded-xl font-bold text-xs">Cancelar programación</button>' : ''}
+        </div>`;
+    } else if (sc && (sc.status === 'error' || sc.status === 'expired') && sc.note) {
+      html += `<div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm">La publicación programada no se pudo hacer: ${String(sc.note).replace(/</g, '&lt;')}</div>`;
+    }
+
     // --- acciones ---
     const canPublish = a && !a.stale && a.counts.ready > 0 && !running;
+    const pending = sc && sc.status === 'pending';
     html += `
       <div class="flex items-end gap-3 flex-wrap pt-1">
         <button id="mass-analyze" class="px-4 py-2 bg-gray-100 text-[#241a0d] rounded-xl font-bold text-sm disabled:opacity-50" ${running ? 'disabled' : ''}>${a ? 'Volver a analizar' : 'Analizar mi stock'}</button>
-        ${canPublish ? `
+        ${!running ? `
           <label class="text-xs font-bold text-[#7d6c5c] uppercase">Cuántos
             <select id="mass-limit" class="ing-input mt-1 normal-case">
               <option value="20">Los primeros 20 (prueba)</option>
               <option value="200">Los primeros 200</option>
               <option value="1000">Los primeros 1.000</option>
-              <option value="">Todos (${num(a.counts.ready)})</option>
+              <option value="">Todos${a ? ` (${num(a.counts.ready)})` : ''}</option>
             </select></label>
-          <label class="text-xs font-bold text-[#7d6c5c] uppercase">Recargo sobre el precio (%)
-            <input id="mass-markup" type="number" min="0" max="200" step="1" value="0" class="ing-input mt-1 w-28" /></label>
-          <button id="mass-publish" class="px-4 py-2 bg-[#d82f1e] text-white rounded-xl font-bold text-sm">Publicar en Mercado Libre</button>` : ''}
+          <label class="text-xs font-bold text-[#7d6c5c] uppercase">Precio en Mercado Libre
+            <select id="mass-pricing" class="ing-input mt-1 normal-case">
+              <option value="target">Para ganar lo mismo que en el local</option>
+              <option value="factor">El mismo precio del sistema</option>
+            </select></label>
+          <label class="text-xs font-bold text-[#7d6c5c] uppercase">No publicar si cuesta menos de ($)
+            <input id="mass-min" type="number" min="0" step="500" value="5000" class="ing-input mt-1 w-32" /></label>
+          ${canPublish ? '<button id="mass-publish" class="px-4 py-2 bg-[#d82f1e] text-white rounded-xl font-bold text-sm">Publicar ahora</button>' : ''}
+          ${!pending ? `<label class="text-xs font-bold text-[#7d6c5c] uppercase">O a esta hora
+            <input id="mass-at" type="time" value="20:15" class="ing-input mt-1 w-28" /></label>
+          <button id="mass-schedule" class="px-4 py-2 bg-[#241a0d] text-white rounded-xl font-bold text-sm">Programar</button>` : ''}` : ''}
       </div>`;
     box.innerHTML = html;
 
@@ -152,19 +180,43 @@ export async function mount(el) {
         loadMass();
       } catch (err) { toast(err.message, 'error'); }
     });
-    box.querySelector('#mass-publish')?.addEventListener('click', async () => {
+    const readOpts = () => {
       const limitRaw = box.querySelector('#mass-limit').value;
-      const limit = limitRaw ? Number(limitRaw) : null;
-      const markupPct = Math.max(0, Number(box.querySelector('#mass-markup').value) || 0);
-      const n = limit ? Math.min(limit, a.counts.ready) : a.counts.ready;
-      const precio = markupPct > 0 ? `al precio del sistema + ${markupPct}%` : 'al mismo precio del sistema';
-      if (!confirm(`Se van a publicar ${num(n)} productos en Mercado Libre, ${precio}, como publicación Clásica, con retiro en persona y garantía de 30 días.\n\nQuedan visibles para los compradores apenas se crean. ¿Publicar?`)) return;
+      return {
+        limit: limitRaw ? Number(limitRaw) : null,
+        pricing: box.querySelector('#mass-pricing').value,
+        minPrice: Math.max(0, Number(box.querySelector('#mass-min').value) || 0),
+      };
+    };
+    const describe = (o) => `${o.pricing === 'target' ? 'con el precio calculado para ganar lo mismo que en el local' : 'al mismo precio del sistema'}${o.minPrice ? `, sin publicar lo que cuesta menos de $${num(o.minPrice)}` : ''}, como publicación Clásica, con retiro en persona y garantía de 30 días`;
+    box.querySelector('#mass-publish')?.addEventListener('click', async () => {
+      const o = readOpts();
+      const n = o.limit ? Math.min(o.limit, a.counts.ready) : a.counts.ready;
+      if (!confirm(`Se van a publicar hasta ${num(n)} productos en Mercado Libre, ${describe(o)}.\n\nQuedan visibles para los compradores apenas se crean. ¿Publicar?`)) return;
       try {
-        const r = await api('/api/ml-mass/publish', { method: 'POST', body: { limit, markupPct } });
+        const r = await api('/api/ml-mass/publish', { method: 'POST', body: o });
         if (!r.started) toast(r.reason || 'No se pudo iniciar', 'warning');
         else toast(`Publicando ${num(r.total)} productos. Podés cerrar esta pantalla: sigue en el servidor.`, 'success');
         loadMass();
       } catch (err) { toast(err.message, 'error'); }
+    });
+    box.querySelector('#mass-schedule')?.addEventListener('click', async () => {
+      const o = readOpts();
+      const [hh, mm] = String(box.querySelector('#mass-at').value || '').split(':').map(Number);
+      if (!Number.isFinite(hh) || !Number.isFinite(mm)) { toast('Elegí la hora', 'warning'); return; }
+      const at = new Date(); at.setHours(hh, mm, 0, 0);
+      if (at.getTime() <= Date.now()) at.setDate(at.getDate() + 1); // esa hora ya pasó hoy → mañana
+      const when = at.toLocaleString('es-AR', { weekday: 'long', hour: '2-digit', minute: '2-digit' });
+      if (!confirm(`El ${when} el sistema va a analizar el stock y publicar ${o.limit ? `los primeros ${num(o.limit)} productos` : 'TODOS los productos listos'} en Mercado Libre, ${describe(o)}.\n\nArranca solo, aunque el sistema esté cerrado. ¿Programar?`)) return;
+      try {
+        const r = await api('/api/ml-mass/schedule', { method: 'POST', body: { ...o, at: at.toISOString() } });
+        if (!r.ok) toast(r.reason || 'No se pudo programar', 'warning'); else toast(`Programada para el ${when}`, 'success');
+        loadMass();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+    box.querySelector('#mass-unschedule')?.addEventListener('click', async () => {
+      if (!confirm('¿Cancelar la publicación programada?')) return;
+      try { const r = await api('/api/ml-mass/schedule/cancel', { method: 'POST', body: {} }); if (!r.ok) toast(r.reason, 'warning'); loadMass(); } catch (err) { toast(err.message, 'error'); }
     });
   }
 
@@ -177,6 +229,7 @@ export async function mount(el) {
       const editing = el.querySelector('#ml-mass-out')?.contains(document.activeElement) && st.job?.status !== 'running';
       if (!editing) renderMass(st);
       if (st.job?.status === 'running') massTimer = setTimeout(loadMass, 4000);
+      else if (st.schedule && (st.schedule.status === 'pending' || st.schedule.status === 'running')) massTimer = setTimeout(loadMass, 30000);
     } catch (err) {
       const box = el.querySelector('#ml-mass-out');
       if (box) box.innerHTML = `<p class="text-sm text-amber-700">No se pudo leer el estado: ${String(err.message).replace(/</g, '&lt;')}</p>`;

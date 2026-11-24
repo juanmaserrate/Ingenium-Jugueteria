@@ -34,6 +34,7 @@ import { syncStateRoutes } from './routes/syncState.js';
 import { AppError } from './utils/errors.js';
 import { startSyncWorker } from './sync/worker.js';
 import { runSeed } from './scripts/seed.js';
+import { startMassScheduler } from './mercadolibre/massPublish.js';
 
 async function main() {
   const app = Fastify({
@@ -196,6 +197,8 @@ async function main() {
 
   // Start background sync worker
   startSyncWorker(app.log);
+  // Publicación masiva en Mercado Libre programada (arranca sola a la hora fijada)
+  startMassScheduler();
 }
 
 main().catch((err) => {

@@ -17,7 +17,7 @@ import { listCategoryMap, suggestForCategory, setCategoryMap, suggestFromListing
 import { isHistoricalOrder } from '../services/pendingMath.js';
 import { listQuestions, countUnanswered, answerQuestion } from '../mercadolibre/questions.js';
 import { flexSchedule } from '../mercadolibre/questionsPure.js';
-import { massStatus, massList, massStop, startAnalysis, startPublish } from '../mercadolibre/massPublish.js';
+import { massStatus, massList, massStop, startAnalysis, startPublish, setSchedule, cancelSchedule, pricePreview } from '../mercadolibre/massPublish.js';
 import { profitSample } from '../mercadolibre/profit.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -381,15 +381,32 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
     });
 
     // --- Publicación masiva del stock (la lanza el admin; corre en el servidor) ---
+    const massOptionsSchema = z.object({
+      limit: z.number().int().positive().nullable().optional(),
+      pricing: z.enum(['target', 'factor']).optional(),  // target = ganar lo mismo que en el local
+      markupPct: z.number().min(0).max(200).optional(),   // recargo fijo (solo con pricing 'factor')
+      minPrice: z.number().min(0).optional(),             // no publicar sueltos los más baratos
+      listingTypeId: z.enum(['gold_special', 'gold_pro', 'free']).optional(),
+    });
     r.get('/ml-mass/status', adminOnly, async () => massStatus());
     r.post('/ml-mass/analyze', adminOnly, async () => startAnalysis());
     r.post('/ml-mass/publish', adminOnly, async (req) => {
-      const b = z.object({
-        limit: z.number().int().positive().nullable().optional(),
-        markupPct: z.number().min(0).max(200).optional(), // recargo sobre el precio del sistema
-        listingTypeId: z.enum(['gold_special', 'gold_pro', 'free']).optional(),
-      }).parse(req.body ?? {});
-      return startPublish({ limit: b.limit ?? null, priceFactor: 1 + (b.markupPct ?? 0) / 100, listingTypeId: b.listingTypeId });
+      const b = massOptionsSchema.parse(req.body ?? {});
+      return startPublish({ limit: b.limit ?? null, pricing: b.pricing, priceFactor: 1 + (b.markupPct ?? 0) / 100, minPrice: b.minPrice, listingTypeId: b.listingTypeId });
+    });
+    // Programar la publicación para una hora (la lanza sola el servidor).
+    r.post('/ml-mass/schedule', adminOnly, async (req) => {
+      const b = massOptionsSchema.extend({ at: z.string() }).parse(req.body ?? {});
+      const at = new Date(b.at);
+      if (!Number.isFinite(at.getTime())) throw new ValidationError('Fecha y hora inválidas');
+      return setSchedule(at, { limit: b.limit ?? null, pricing: b.pricing, priceFactor: 1 + (b.markupPct ?? 0) / 100, minPrice: b.minPrice, listingTypeId: b.listingTypeId });
+    });
+    r.post('/ml-mass/schedule/cancel', adminOnly, async () => cancelSchedule());
+    // A qué precio saldrían algunos productos con el precio objetivo (no publica nada).
+    r.get('/ml-mass/price-preview', adminOnly, async (req, reply) => {
+      const q = req.query as { n?: string; minPrice?: string };
+      try { return await pricePreview(Math.min(20, Math.max(1, Number(q.n) || 10)), Math.max(0, Number(q.minPrice) || 0)); }
+      catch (err: any) { return reply.status(502).send({ error: 'ml_preview_failed', details: { status: err?.response?.status ?? null, message: err?.response?.data?.message ?? err?.message } }); }
     });
     r.post('/ml-mass/stop', adminOnly, async () => massStop());
     // Simulador de ganancia: muestra de productos sin publicar con la comisión real de ML.
@@ -404,7 +421,7 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
     });
     r.get('/ml-mass/list/:name', adminOnly, async (req) => {
       const { name } = req.params as { name: string };
-      if (!['ready', 'on_ml', 'no_picture', 'no_price', 'failed', 'partial'].includes(name)) throw new ValidationError('Listado desconocido');
+      if (!['ready', 'on_ml', 'no_picture', 'no_price', 'failed', 'partial', 'published', 'below_min'].includes(name)) throw new ValidationError('Listado desconocido');
       return massList(name);
     });
 

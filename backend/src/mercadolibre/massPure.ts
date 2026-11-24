@@ -141,6 +141,57 @@ export function freeShippingApplies(input: { mlPrice: number; saleFee: number; f
   return input.shipping != null && input.shipping > 0 && input.saleFee > 0 && !(input.fixedFee > 0) && input.mlPrice >= 5000;
 }
 
+// --- Precio objetivo: que en Mercado Libre quede lo mismo que vendiendo en el local ---
+export type FeeQuote = { saleFee: number; fixedFee: number; shipping: number | null; applies: boolean };
+export type TargetPrice = {
+  price: number;        // precio a publicar
+  net: number;          // lo que queda después de lo que cobra ML (y del envío si corre por cuenta del vendedor)
+  target: number;       // lo que se buscaba que quede (precio del sistema)
+  freeShipping: boolean;
+  capped: boolean;      // se dejó justo debajo del monto de envío gratis
+};
+
+const up10 = (n: number) => Math.ceil(Math.round(n * 100) / 100 / 10) * 10; // a decenas, hacia arriba
+export const netOf = (price: number, q: FeeQuote) => price - q.saleFee - (q.applies && q.shipping ? q.shipping : 0);
+
+// Busca el precio al que queda `target` en mano. `quote` devuelve lo que cobra ML a un precio
+// dado (cambia por tramos: el costo fijo depende del precio y, desde cierto monto, se reemplaza
+// por el envío gratis a cargo del vendedor), así que se itera subiendo hasta que cierra.
+export async function solveTargetPrice(input: {
+  target: number;
+  quote: (price: number) => Promise<FeeQuote>;
+  threshold?: number | null;
+  capRatio?: number;
+}): Promise<TargetPrice> {
+  const target = Number(input.target) || 0;
+  let price = up10(target);
+  let q = await input.quote(price);
+  for (let i = 0; i < 6; i++) {
+    if (netOf(price, q) >= target - 0.5) break;
+    const pct = price > 0 ? Math.max(0, Math.min(0.9, (q.saleFee - q.fixedFee) / price)) : 0;
+    const extra = q.fixedFee + (q.applies && q.shipping ? q.shipping : 0);
+    const next = Math.max(price + 10, up10((target + extra) / (1 - pct)));
+    price = next;
+    q = await input.quote(price);
+  }
+  let result: TargetPrice = { price, net: Math.round(netOf(price, q) * 100) / 100, target, freeShipping: q.applies, capped: false };
+
+  // Cerca del monto de envío gratis: si quedando justo debajo se conserva casi todo, se prefiere
+  // eso a subir mucho el precio para cubrir un envío que pasaría a pagar el vendedor.
+  const th = input.threshold;
+  if (q.applies && th && th > 10) {
+    const cap = th - 10;
+    if (cap < price) {
+      const qc = await input.quote(cap);
+      const netCap = netOf(cap, qc);
+      if (!qc.applies && netCap >= (input.capRatio ?? 0.9) * target) {
+        result = { price: cap, net: Math.round(netCap * 100) / 100, target, freeShipping: false, capped: true };
+      }
+    }
+  }
+  return result;
+}
+
 // La respuesta de listing_prices puede venir como objeto, lista o lista de listas.
 export function pickListingPrice(res: any, listingTypeId: string): any | null {
   const flat: any[] = [];
