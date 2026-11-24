@@ -160,6 +160,27 @@ export function packageFor(p: { weight?: number | null; height?: number | null; 
   };
 }
 
+// Peso (kg) y medidas (cm) que tiene cargados el producto en Tienda Nube. TN los guarda por
+// variante y como texto ("0.350"); se toma el mayor de cada uno (el paquete más grande).
+export function tnDimensions(tnProduct: any): { weight: number; height: number; width: number; depth: number } {
+  const out = { weight: 0, height: 0, width: 0, depth: 0 };
+  const vs: any[] = Array.isArray(tnProduct?.variants) ? tnProduct.variants : [];
+  for (const v of vs) {
+    for (const k of ['weight', 'height', 'width', 'depth'] as const) {
+      const n = Number(v?.[k]);
+      if (Number.isFinite(n) && n > out[k]) out[k] = n;
+    }
+  }
+  return out;
+}
+
+// Completa lo que le falta al producto con lo de Tienda Nube (lo propio tiene prioridad).
+export function mergeDimensions<T extends { weight?: number | null; height?: number | null; width?: number | null; depth?: number | null }>(own: T, tn: { weight: number; height: number; width: number; depth: number } | null) {
+  if (!tn) return { weight: own.weight ?? null, height: own.height ?? null, width: own.width ?? null, depth: own.depth ?? null };
+  const pick = (a: number | null | undefined, b: number) => (Number(a) > 0 ? Number(a) : b > 0 ? b : null);
+  return { weight: pick(own.weight, tn.weight), height: pick(own.height, tn.height), width: pick(own.width, tn.width), depth: pick(own.depth, tn.depth) };
+}
+
 export function packageAttributes(pkg: Package): Array<{ id: string; value_name: string }> {
   return [
     { id: 'SELLER_PACKAGE_WEIGHT', value_name: `${pkg.weightG} g` },

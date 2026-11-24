@@ -20,6 +20,18 @@ test('paquete: usa las medidas del producto y, si faltan, el paquete estandar', 
   assert.deepEqual(packageFor({ weight: 0.2, height: null, width: 0, depth: undefined }), { weightG: 200, heightCm: 15, widthCm: 20, lengthCm: 20, assumed: true });
 });
 
+test('paquete: lo que falta en el sistema se toma de Tienda Nube', async () => {
+  const { tnDimensions, mergeDimensions, packageFor } = await import('../src/mercadolibre/massPure.js');
+  const tn = tnDimensions({ variants: [{ weight: '0.350', height: '12.00', width: '25.00', depth: '8.00' }, { weight: '0.500', height: '10', width: '25', depth: null }] });
+  assert.deepEqual(tn, { weight: 0.5, height: 12, width: 25, depth: 8 });
+  assert.deepEqual(packageFor(mergeDimensions({ weight: null, height: null, width: null, depth: null }, tn)), { weightG: 500, heightCm: 12, widthCm: 25, lengthCm: 8, assumed: false });
+  // lo cargado en el sistema tiene prioridad
+  assert.deepEqual(mergeDimensions({ weight: 2, height: null, width: 30, depth: 0 }, tn), { weight: 2, height: 12, width: 30, depth: 8 });
+  // TN en cero o sin variantes: queda el estandar
+  assert.equal(packageFor(mergeDimensions({}, tnDimensions({ variants: [{ weight: '0.00', height: '0.00', width: '0.00', depth: '0.00' }] }))).assumed, true);
+  assert.deepEqual(tnDimensions(null), { weight: 0, height: 0, width: 0, depth: 0 });
+});
+
 // Modelo de lo que cobra ML medido el 2026-11-24: 13,5% + fijo por tramos; desde $33.000 no hay
 // fijo pero el envio gratis ($8.091) corre por cuenta del vendedor.
 const TH = 33000;

@@ -3,7 +3,8 @@ import { buildSyncPlan } from './syncExisting.js';
 import { publishProduct } from './publish.js';
 import { variantValue } from './match.js';
 import { isValidGtin } from './pure.js';
-import { classifyForMl, publishFailureReason, isHardStop, packageFor, packageAttributes, type MassProduct, type MassStatus } from './massPure.js';
+import { classifyForMl, publishFailureReason, isHardStop, packageFor, packageAttributes, tnDimensions, mergeDimensions, type MassProduct, type MassStatus } from './massPure.js';
+import { getTnClient } from '../tiendanube/client.js';
 import { requireMlClient } from './client.js';
 import { mappedMlForProduct } from './categoryMap.js';
 import { predictCategory } from './publish.js';
@@ -66,6 +67,18 @@ let stopRequested = false;
 let analysis: MassAnalysis | null = null;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Peso y medidas del paquete: los del producto; lo que falte, de su publicación de Tienda Nube.
+type Dims = { weight?: number | null; height?: number | null; width?: number | null; depth?: number | null };
+async function dimensionsFor(p: Dims & { tnMapping?: { tnProductId: string } | null }) {
+  const complete = [p.weight, p.height, p.width, p.depth].every((x) => Number(x) > 0);
+  if (complete || !p.tnMapping?.tnProductId) return mergeDimensions(p, null);
+  try {
+    const tn = await getTnClient();
+    if (!tn) return mergeDimensions(p, null);
+    return mergeDimensions(p, tnDimensions(await tn.getProduct(p.tnMapping.tnProductId)));
+  } catch { return mergeDimensions(p, null); }
+}
 
 async function kvGet<T>(key: string): Promise<T | null> {
   const row = await prisma.kvItem.findUnique({ where: { collection_key: { collection: KV.collection, key } } }).catch(() => null);
@@ -261,7 +274,7 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
     try {
       const p = await prisma.product.findUnique({
         where: { id: item.productId },
-        select: { name: true, price: true, weight: true, width: true, height: true, depth: true, variants: { select: { priceOverride: true } } },
+        select: { name: true, price: true, weight: true, width: true, height: true, depth: true, tnMapping: { select: { tnProductId: true } }, variants: { select: { priceOverride: true } } },
       });
       if (!p) throw new Error('Producto no encontrado');
       storePrice = p.price;
@@ -271,6 +284,7 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
         j.belowMin++; j.done++;
         continue;
       }
+      const dims = await dimensionsFor(p);
       let priceByBase: Record<string, number> | undefined;
       if (pricing === 'target') {
         if (!ctx) {
@@ -284,7 +298,7 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
         const bases = [...new Set([p.price, ...p.variants.map((v) => Number(v.priceOverride) || 0)].filter((x) => x > 0))];
         priceByBase = {};
         for (const base of bases) {
-          const t = await targetPriceFor(ctx, { categoryId, storePrice: base, product: p });
+          const t = await targetPriceFor(ctx, { categoryId, storePrice: base, product: dims });
           priceByBase[String(base)] = t.price;
         }
         mlPrice = priceByBase[String(p.price)];
@@ -292,7 +306,7 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
         mlPrice = Math.round(p.price * priceFactor);
       }
       // ML exige peso y medidas del paquete: los del producto o, si no los tiene, el estándar.
-      res = await publishProduct({ productId: item.productId, listingTypeId, priceFactor, priceByBase, attributes: packageAttributes(packageFor(p)) });
+      res = await publishProduct({ productId: item.productId, listingTypeId, priceFactor, priceByBase, attributes: packageAttributes(packageFor(dims)) });
     } catch (err: any) {
       const data = err?.response?.data;
       res = { error: 'ml_rejected', details: data ?? { message: err?.message, status: err?.response?.status } };
@@ -450,7 +464,7 @@ export async function pricePreview(n = 10, minPrice = 0) {
   const ctx = await newPricingCtx(await requireMlClient(), integ.mlUserId, 'gold_special');
   const products = await prisma.product.findMany({
     where: { active: true, price: { gte: Math.max(1, minPrice) }, mlMapping: null, variants: { some: { stocks: { some: { qty: { gt: 0 } } } } } },
-    select: { id: true, code: true, name: true, price: true, cost: true, weight: true, width: true, height: true, depth: true },
+    select: { id: true, code: true, name: true, price: true, cost: true, weight: true, width: true, height: true, depth: true, tnMapping: { select: { tnProductId: true } } },
     orderBy: { price: 'asc' },
   });
   const step = Math.max(1, Math.floor(products.length / Math.max(1, n)));
@@ -461,8 +475,10 @@ export async function pricePreview(n = 10, minPrice = 0) {
       const mapped = await mappedMlForProduct(p.id).catch(() => null);
       const categoryId = mapped?.categoryId ?? (await predictCategory(p.name.slice(0, 60)))[0]?.categoryId;
       if (!categoryId) { rows.push({ code: p.code, name: p.name, storePrice: p.price, error: 'sin categoría' }); continue; }
-      const t = await targetPriceFor(ctx, { categoryId, storePrice: p.price, product: p });
-      rows.push({ productId: p.id, code: p.code, name: p.name, cost: p.cost, storePrice: p.price, categoryId, package: packageAttributes(packageFor(p)), mlPrice: t.price, net: t.net, freeShipping: t.freeShipping, capped: t.capped, upPct: Math.round((t.price / p.price - 1) * 1000) / 10 });
+      const dims = await dimensionsFor(p);
+      const pkg = packageFor(dims);
+      const t = await targetPriceFor(ctx, { categoryId, storePrice: p.price, product: dims });
+      rows.push({ productId: p.id, code: p.code, name: p.name, cost: p.cost, storePrice: p.price, categoryId, package: packageAttributes(pkg), packageAssumed: pkg.assumed, inTn: !!p.tnMapping, mlPrice: t.price, net: t.net, freeShipping: t.freeShipping, capped: t.capped, upPct: Math.round((t.price / p.price - 1) * 1000) / 10 });
     } catch (err: any) {
       rows.push({ code: p.code, name: p.name, storePrice: p.price, error: String(err?.response?.data?.message ?? err?.message ?? 'error').slice(0, 160) });
     }
