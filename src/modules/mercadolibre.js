@@ -183,6 +183,57 @@ export async function mount(el) {
     }
   }
 
+  // Simulador de ganancia en Mercado Libre (solo lectura).
+  async function runProfit() {
+    const out = el.querySelector('#ml-profit-out');
+    const btn = el.querySelector('#profit-run');
+    const safe = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const $ = (n) => (n == null ? '—' : (n < 0 ? '−$' : '$') + Math.abs(Math.round(n)).toLocaleString('es-AR'));
+    const pc = (n) => (n == null ? '—' : `${String(n).replace('.', ',')}%`);
+    const tone = (n) => (n == null ? '' : n < 0 ? 'text-red-700 font-bold' : '');
+    const markupPct = Math.max(0, Number(el.querySelector('#profit-markup').value) || 0);
+    const logistic = el.querySelector('#profit-logistic').value;
+    btn.disabled = true; btn.textContent = 'Calculando...';
+    out.innerHTML = '<p class="text-sm text-[#7d6c5c]">Consultando a Mercado Libre la comisión de cada producto...</p>';
+    try {
+      const r = await api(`/api/ml-mass/profit-sample?n=12&markupPct=${markupPct}&logistic=${encodeURIComponent(logistic)}`);
+      if (!r.rows.length) { out.innerHTML = '<p class="text-sm text-[#7d6c5c]">No hay productos con stock, costo y precio cargados que estén sin publicar.</p>'; return; }
+      const sm = r.summary;
+      const body = r.rows.map((x) => {
+        if (!x.result) return `<tr class="border-t border-[#fff1e6]"><td class="py-1.5 pr-3">${safe(x.name)}<div class="text-xs text-[#7d6c5c]">${safe(x.code)}</div></td><td colspan="7" class="py-1.5 text-amber-700">${safe(x.error || 'Sin datos')}</td></tr>`;
+        const g = x.result;
+        return `<tr class="border-t border-[#fff1e6] align-top">
+          <td class="py-1.5 pr-3">${safe(x.name)}<div class="text-xs text-[#7d6c5c]">${safe(x.code)} · stock ${x.stock}${x.weightAssumed ? ' · peso supuesto 1 kg' : ''}</div></td>
+          <td class="py-1.5 pr-3 text-right">${$(x.cost)}</td>
+          <td class="py-1.5 pr-3 text-right">${$(g.mlPrice)}</td>
+          <td class="py-1.5 pr-3 text-right">${$(g.saleFee)}<div class="text-xs text-[#7d6c5c]">${pc(g.feePct)}${g.fixedFee ? ` + ${$(g.fixedFee)} fijo` : ''}</div></td>
+          <td class="py-1.5 pr-3 text-right ${tone(g.profit)}">${$(g.profit)}<div class="text-xs font-normal text-[#7d6c5c]">${pc(g.marginPct)}</div></td>
+          <td class="py-1.5 pr-3 text-right">${$(g.shipping)}</td>
+          <td class="py-1.5 pr-3 text-right ${tone(g.profitFreeShipping)}">${$(g.profitFreeShipping)}<div class="text-xs font-normal text-[#7d6c5c]">${pc(g.marginFreeShippingPct)}</div></td>
+          <td class="py-1.5 text-right">${$(g.storeProfit)}<div class="text-xs text-[#7d6c5c]">${pc(g.storeMarginPct)}</div></td>
+        </tr>`;
+      }).join('');
+      out.innerHTML = `
+        <div class="bg-[#fff8f4] rounded-xl p-4 text-sm space-y-1">
+          <p>Sobre ${sm.calculated} productos${markupPct ? ` con recargo del ${markupPct}%` : ' al precio del sistema'}: en el local ganás en promedio <b>${pc(sm.storeMarginPct)}</b> del precio; en Mercado Libre, <b>${pc(sm.mlMarginPct)}</b> si el envío lo paga el comprador${sm.mlMarginFreeShippingPct != null ? ` y <b>${pc(sm.mlMarginFreeShippingPct)}</b> si el envío gratis corre por tu cuenta` : ''}.</p>
+          ${sm.losing || sm.losingFreeShipping ? `<p class="text-red-700 font-bold">Dan pérdida: ${sm.losing} con envío a cargo del comprador${sm.losingFreeShipping ? ` y ${sm.losingFreeShipping} con envío gratis a tu cargo` : ''}.</p>` : ''}
+          ${sm.equalMarkupPct != null ? `<p>Para ganar lo mismo que en el local, el recargo promedio tendría que ser de <b>${pc(sm.equalMarkupPct)}</b>${sm.equalMarkupFreeShippingPct != null ? ` (o <b>${pc(sm.equalMarkupFreeShippingPct)}</b> si además pagás vos el envío gratis)` : ''}.</p>` : ''}
+        </div>
+        <div class="overflow-x-auto"><table class="w-full text-sm mt-2">
+          <thead><tr class="text-xs uppercase text-[#7d6c5c] text-right">
+            <th class="text-left pb-1 pr-3">Producto</th><th class="pb-1 pr-3">Costo</th><th class="pb-1 pr-3">Precio en ML</th><th class="pb-1 pr-3">Cobra ML</th>
+            <th class="pb-1 pr-3">Ganancia</th><th class="pb-1 pr-3">Envío gratis</th><th class="pb-1 pr-3">Ganancia pagando el envío</th><th class="pb-1">En el local</th>
+          </tr></thead><tbody>${body}</tbody></table></div>
+        <p class="text-xs text-[#7d6c5c]">Publicación Clásica. "Cobra ML" es la comisión más el costo fijo que informa Mercado Libre. El envío gratis es una cotización y solo lo pagás vos en los productos que superan el monto desde el que Mercado Libre lo exige. No incluye impuestos ni retenciones, ni el costo de tu propio reparto si usás Flex. La muestra sale de ${Number(r.candidates).toLocaleString('es-AR')} productos con stock, costo y precio que no están publicados.</p>`;
+    } catch (err) {
+      const d = err.details || {};
+      out.innerHTML = `<p class="text-sm text-amber-700">No se pudo calcular: ${safe(d.message || err.message)}</p>`;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Calcular con 12 productos';
+    }
+  }
+  el.querySelector('#profit-run')?.addEventListener('click', runProfit);
+
   // Envíos Flex: muestra cómo está configurado en Mercado Libre (solo lectura).
   async function loadFlex() {
     const box = el.querySelector('#ml-flex-out');
@@ -236,6 +287,7 @@ export async function mount(el) {
       el.querySelector('#ml-howto-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-flex-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-mass-box').classList.toggle('hidden', !s.connected);
+      el.querySelector('#ml-profit-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-terms-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-catmap-box').classList.toggle('hidden', !s.connected);
       if (s.connected) { loadFlex(); loadMass(); await loadMappings(); loadTermsCount(); loadCatMap(); }
@@ -576,6 +628,26 @@ function renderShell() {
           <p class="text-xs text-[#7d6c5c]">Sube a Mercado Libre los productos con stock que todavía no están publicados. Primero se analiza (no publica nada) y después se publica en tandas. Los productos con variantes salen como una publicación por variante, cada una con su stock.</p>
         </div>
         <div id="ml-mass-out" class="space-y-3"><p class="text-sm text-[#7d6c5c]">Cargando...</p></div>
+      </section>
+
+      <section id="ml-profit-box" class="hidden bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 space-y-3">
+        <div>
+          <h2 class="text-lg font-bold">¿Cuánto me queda si vendo por Mercado Libre?</h2>
+          <p class="text-xs text-[#7d6c5c]">Toma una muestra de productos con stock que todavía no están en Mercado Libre (baratos, medios y caros) y calcula la ganancia con la comisión que informa Mercado Libre para cada uno. No publica nada.</p>
+        </div>
+        <div class="flex items-end gap-3 flex-wrap">
+          <label class="text-xs font-bold text-[#7d6c5c] uppercase">Recargo sobre el precio (%)
+            <input id="profit-markup" type="number" min="0" max="200" step="1" value="0" class="ing-input mt-1 w-28" /></label>
+          <label class="text-xs font-bold text-[#7d6c5c] uppercase">Cómo despachás
+            <select id="profit-logistic" class="ing-input mt-1 normal-case">
+              <option value="drop_off">Llevo el paquete al correo</option>
+              <option value="xd_drop_off">Lo dejo en un punto de despacho</option>
+              <option value="cross_docking">Me lo retira la colecta</option>
+              <option value="self_service">Flex (lo entrego yo)</option>
+            </select></label>
+          <button id="profit-run" class="px-4 py-2 bg-[#d82f1e] text-white rounded-xl font-bold text-sm">Calcular con 12 productos</button>
+        </div>
+        <div id="ml-profit-out"></div>
       </section>
 
       <section id="ml-flex-box" class="hidden bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 space-y-3">

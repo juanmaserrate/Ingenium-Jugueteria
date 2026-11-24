@@ -75,6 +75,61 @@ export function priceWithFactor(price: number, factor?: number | null): number {
   return Math.round(p * factor);
 }
 
+// --- Ganancia estimada vendiendo por Mercado Libre ---
+export type MlProfit = {
+  mlPrice: number;         // precio publicado (precio del sistema + recargo)
+  saleFee: number;         // lo que cobra ML por vender (comisión % + costo fijo)
+  feePct: number;          // comisión % efectiva (sin el costo fijo)
+  fixedFee: number;
+  shipping: number | null; // envío gratis a cargo del vendedor, si ML lo cotizó
+  profit: number;          // ganancia si el envío lo paga el comprador
+  marginPct: number;
+  profitFreeShipping: number | null; // ganancia si el envío gratis corre por cuenta del vendedor
+  marginFreeShippingPct: number | null;
+  storeProfit: number;     // ganancia vendiéndolo en el local al precio del sistema
+  storeMarginPct: number;
+  // Recargo (%) sobre el precio del sistema para ganar lo MISMO que en el local.
+  equalMarkupPct: number | null;
+  equalMarkupFreeShippingPct: number | null;
+};
+
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+export function mlProfit(input: { storePrice: number; cost: number; mlPrice: number; saleFee: number; fixedFee?: number | null; shipping?: number | null }): MlProfit {
+  const storePrice = Number(input.storePrice) || 0;
+  const cost = Number(input.cost) || 0;
+  const mlPrice = Number(input.mlPrice) || 0;
+  const saleFee = Math.max(0, Number(input.saleFee) || 0);
+  const fixedFee = Math.min(saleFee, Math.max(0, Number(input.fixedFee) || 0));
+  const shipping = input.shipping != null && Number(input.shipping) > 0 ? Number(input.shipping) : null;
+  const pct = mlPrice > 0 ? (saleFee - fixedFee) / mlPrice : 0; // fracción
+
+  const profit = mlPrice - saleFee - cost;
+  const storeProfit = storePrice - cost;
+  const profitFree = shipping != null ? profit - shipping : null;
+  // precio' tal que precio' − (pct·precio' + fijo) − envío − costo = ganancia del local
+  const equalPrice = (ship: number) => (pct < 1 ? (storeProfit + cost + fixedFee + ship) / (1 - pct) : NaN);
+  const asMarkup = (p: number) => (storePrice > 0 && Number.isFinite(p) ? r2((p / storePrice - 1) * 100) : null);
+
+  return {
+    mlPrice: r2(mlPrice), saleFee: r2(saleFee), feePct: r2(pct * 100), fixedFee: r2(fixedFee), shipping: shipping != null ? r2(shipping) : null,
+    profit: r2(profit), marginPct: mlPrice > 0 ? r2((profit / mlPrice) * 100) : 0,
+    profitFreeShipping: profitFree != null ? r2(profitFree) : null,
+    marginFreeShippingPct: profitFree != null && mlPrice > 0 ? r2((profitFree / mlPrice) * 100) : null,
+    storeProfit: r2(storeProfit), storeMarginPct: storePrice > 0 ? r2((storeProfit / storePrice) * 100) : 0,
+    equalMarkupPct: asMarkup(equalPrice(0)),
+    equalMarkupFreeShippingPct: shipping != null ? asMarkup(equalPrice(shipping)) : null,
+  };
+}
+
+// La respuesta de listing_prices puede venir como objeto, lista o lista de listas.
+export function pickListingPrice(res: any, listingTypeId: string): any | null {
+  const flat: any[] = [];
+  const walk = (x: any) => { if (Array.isArray(x)) x.forEach(walk); else if (x && typeof x === 'object') flat.push(x); };
+  walk(res);
+  return flat.find((e) => e?.listing_type_id === listingTypeId) ?? (flat.length === 1 ? flat[0] : null);
+}
+
 // Traduce el resultado de publishProduct a un motivo que entienda quien lee el listado.
 export function publishFailureReason(res: any): string {
   if (!res) return 'Sin respuesta';

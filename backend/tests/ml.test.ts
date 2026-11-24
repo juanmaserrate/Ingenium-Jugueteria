@@ -4,7 +4,40 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { matchListings, normSku, normTitle, type InvProduct, type MlListing } from '../src/mercadolibre/match.js';
 import { normalizeQuestion, cleanAnswerText, ANSWER_MAX_CHARS, flexSchedule } from '../src/mercadolibre/questionsPure.js';
-import { classifyForMl, isFanOut, priceWithFactor, publishFailureReason, isHardStop, type MassProduct, type MassVariant } from '../src/mercadolibre/massPure.js';
+import { classifyForMl, isFanOut, priceWithFactor, publishFailureReason, isHardStop, mlProfit, pickListingPrice, type MassProduct, type MassVariant } from '../src/mercadolibre/massPure.js';
+
+test('ganancia ML: comision + costo fijo, con y sin envio a cargo, y recargo para igualar al local', () => {
+  // costo 6.000, precio 10.000 → en el local gana 4.000 (40%)
+  // ML: 13% (1.300) + fijo 200 = 1.500 → gana 2.500 (25%); con envio de 3.000 pierde 500
+  const r = mlProfit({ storePrice: 10000, cost: 6000, mlPrice: 10000, saleFee: 1500, fixedFee: 200, shipping: 3000 });
+  assert.equal(r.storeProfit, 4000); assert.equal(r.storeMarginPct, 40);
+  assert.equal(r.profit, 2500); assert.equal(r.marginPct, 25); assert.equal(r.feePct, 13);
+  assert.equal(r.profitFreeShipping, -500); assert.equal(r.marginFreeShippingPct, -5);
+  // para ganar 4.000: p − 0,13p − 200 − 6.000 = 4.000 → p = 11.724,14 → +17,24%
+  assert.equal(r.equalMarkupPct, 17.24);
+  // con el envio: p = (4.000 + 6.000 + 200 + 3.000) / 0,87 = 15.172,41 → +51,72%
+  assert.equal(r.equalMarkupFreeShippingPct, 51.72);
+  // comprobacion: a ese precio la ganancia iguala a la del local
+  const p = 10000 * (1 + r.equalMarkupPct! / 100);
+  assert.ok(Math.abs((p - (0.13 * p + 200) - 6000) - 4000) < 1);
+});
+
+test('ganancia ML: sin cotizacion de envio no inventa ese escenario', () => {
+  const r = mlProfit({ storePrice: 5000, cost: 2000, mlPrice: 5500, saleFee: 715, fixedFee: 0, shipping: null });
+  assert.equal(r.shipping, null); assert.equal(r.profitFreeShipping, null); assert.equal(r.equalMarkupFreeShippingPct, null);
+  assert.equal(r.profit, 2785);
+  assert.equal(mlProfit({ storePrice: 5000, cost: 2000, mlPrice: 5000, saleFee: 650, shipping: 0 }).shipping, null);
+});
+
+test('ganancia ML: lee listing_prices venga como objeto, lista o lista de listas', () => {
+  const clasica = { listing_type_id: 'gold_special', sale_fee_amount: 887.7 };
+  const premium = { listing_type_id: 'gold_pro', sale_fee_amount: 2000 };
+  assert.equal(pickListingPrice(clasica, 'gold_special'), clasica);
+  assert.equal(pickListingPrice([premium, clasica], 'gold_special'), clasica);
+  assert.equal(pickListingPrice([[premium, clasica]], 'gold_special'), clasica);
+  assert.equal(pickListingPrice([premium], 'gold_special'), premium); // unica opcion devuelta
+  assert.equal(pickListingPrice([], 'gold_special'), null);
+});
 
 const mv = (o: Partial<MassVariant> & { id: string }): MassVariant => ({ value: '', stock: 0, linked: false, price: 1000, hasGtin: true, ...o });
 const mp = (o: Partial<MassProduct> & { variants: MassVariant[] }): MassProduct => ({ id: 'p', name: 'Producto', code: 'C1', hasPicture: true, productLinked: false, ...o });

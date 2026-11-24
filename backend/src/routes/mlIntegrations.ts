@@ -18,6 +18,7 @@ import { isHistoricalOrder } from '../services/pendingMath.js';
 import { listQuestions, countUnanswered, answerQuestion } from '../mercadolibre/questions.js';
 import { flexSchedule } from '../mercadolibre/questionsPure.js';
 import { massStatus, massList, massStop, startAnalysis, startPublish } from '../mercadolibre/massPublish.js';
+import { profitSample } from '../mercadolibre/profit.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -391,6 +392,16 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       return startPublish({ limit: b.limit ?? null, priceFactor: 1 + (b.markupPct ?? 0) / 100, listingTypeId: b.listingTypeId });
     });
     r.post('/ml-mass/stop', adminOnly, async () => massStop());
+    // Simulador de ganancia: muestra de productos sin publicar con la comisión real de ML.
+    r.get('/ml-mass/profit-sample', adminOnly, async (req, reply) => {
+      const q = req.query as { n?: string; markupPct?: string; logistic?: string };
+      try {
+        return await profitSample({ n: q.n ? Number(q.n) : undefined, markupPct: q.markupPct ? Number(q.markupPct) : 0, logistic: q.logistic });
+      } catch (err: any) {
+        if (err instanceof ValidationError) throw err;
+        return reply.status(502).send({ error: 'ml_profit_failed', details: { status: err?.response?.status ?? null, message: err?.response?.data?.message ?? err?.message } });
+      }
+    });
     r.get('/ml-mass/list/:name', adminOnly, async (req) => {
       const { name } = req.params as { name: string };
       if (!['ready', 'on_ml', 'no_picture', 'no_price', 'failed', 'partial'].includes(name)) throw new ValidationError('Listado desconocido');

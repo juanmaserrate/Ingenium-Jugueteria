@@ -133,6 +133,14 @@ export class MlClient {
     return this.req({ method: 'post', url: '/answers', data: { question_id: Number(questionId), text } });
   }
 
+  // --- Costos por vender (solo lectura): comisión + costo fijo, y cotización del envío gratis ---
+  listingPrices(site: string, params: Record<string, any>) {
+    return this.req({ method: 'get', url: `/sites/${site}/listing_prices`, params });
+  }
+  freeShippingQuote(userId: string, params: Record<string, any>) {
+    return this.req({ method: 'get', url: `/users/${userId}/shipping_options/free`, params });
+  }
+
   // --- Envíos Flex (solo lectura): suscripción y rangos de entrega con su horario de corte ---
   flexSubscriptions(site: string, userId: string) {
     return this.req({ method: 'get', url: `/flex/sites/${site}/users/${userId}/subscriptions/v1` });
