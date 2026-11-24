@@ -17,6 +17,7 @@ import { listCategoryMap, suggestForCategory, setCategoryMap, suggestFromListing
 import { isHistoricalOrder } from '../services/pendingMath.js';
 import { listQuestions, countUnanswered, answerQuestion } from '../mercadolibre/questions.js';
 import { flexSchedule } from '../mercadolibre/questionsPure.js';
+import { massStatus, massList, massStop, startAnalysis, startPublish } from '../mercadolibre/massPublish.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -376,6 +377,24 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       if (!ids.length) return { ok: true, dismissed: 0 };
       const upd = await prisma.mlOrderPending.updateMany({ where: { id: { in: ids }, status: 'pending' }, data: { status: 'dismissed' } });
       return { ok: true, dismissed: upd.count };
+    });
+
+    // --- Publicación masiva del stock (la lanza el admin; corre en el servidor) ---
+    r.get('/ml-mass/status', adminOnly, async () => massStatus());
+    r.post('/ml-mass/analyze', adminOnly, async () => startAnalysis());
+    r.post('/ml-mass/publish', adminOnly, async (req) => {
+      const b = z.object({
+        limit: z.number().int().positive().nullable().optional(),
+        markupPct: z.number().min(0).max(200).optional(), // recargo sobre el precio del sistema
+        listingTypeId: z.enum(['gold_special', 'gold_pro', 'free']).optional(),
+      }).parse(req.body ?? {});
+      return startPublish({ limit: b.limit ?? null, priceFactor: 1 + (b.markupPct ?? 0) / 100, listingTypeId: b.listingTypeId });
+    });
+    r.post('/ml-mass/stop', adminOnly, async () => massStop());
+    r.get('/ml-mass/list/:name', adminOnly, async (req) => {
+      const { name } = req.params as { name: string };
+      if (!['ready', 'on_ml', 'no_picture', 'no_price', 'failed', 'partial'].includes(name)) throw new ValidationError('Listado desconocido');
+      return massList(name);
     });
 
     // --- Envíos Flex: cómo está configurado en Mercado Libre (SOLO LECTURA) ---

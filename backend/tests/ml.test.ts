@@ -4,6 +4,68 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { matchListings, normSku, normTitle, type InvProduct, type MlListing } from '../src/mercadolibre/match.js';
 import { normalizeQuestion, cleanAnswerText, ANSWER_MAX_CHARS, flexSchedule } from '../src/mercadolibre/questionsPure.js';
+import { classifyForMl, isFanOut, priceWithFactor, publishFailureReason, isHardStop, type MassProduct, type MassVariant } from '../src/mercadolibre/massPure.js';
+
+const mv = (o: Partial<MassVariant> & { id: string }): MassVariant => ({ value: '', stock: 0, linked: false, price: 1000, hasGtin: true, ...o });
+const mp = (o: Partial<MassProduct> & { variants: MassVariant[] }): MassProduct => ({ id: 'p', name: 'Producto', code: 'C1', hasPicture: true, productLinked: false, ...o });
+const NONE = { product: false, variantIds: new Set<string>() };
+
+test('masivo: producto simple con stock y foto queda listo con una publicacion', () => {
+  const v = classifyForMl(mp({ variants: [mv({ id: 'v1', stock: 3, isDefault: true })] }), NONE);
+  assert.deepEqual(v, { status: 'ready', listings: 1, variantIds: ['v1'], stock: 3, noGtin: false });
+});
+
+test('masivo: sin stock, ya vinculado, sin foto y sin precio no se publican', () => {
+  assert.equal(classifyForMl(mp({ variants: [mv({ id: 'v1', stock: 0, isDefault: true })] }), NONE).status, 'no_stock');
+  assert.equal(classifyForMl(mp({ productLinked: true, variants: [mv({ id: 'v1', stock: 5, isDefault: true })] }), NONE).status, 'linked');
+  assert.equal(classifyForMl(mp({ variants: [mv({ id: 'v1', stock: 5, linked: true, isDefault: true })] }), NONE).status, 'linked');
+  assert.equal(classifyForMl(mp({ hasPicture: false, variants: [mv({ id: 'v1', stock: 5, isDefault: true })] }), NONE).status, 'no_picture');
+  assert.equal(classifyForMl(mp({ variants: [mv({ id: 'v1', stock: 5, price: 0, isDefault: true })] }), NONE).status, 'no_price');
+});
+
+test('masivo: lo que ya esta en ML sin vincular no se publica (evita duplicados)', () => {
+  const p = mp({ variants: [mv({ id: 'v1', stock: 5, isDefault: true })] });
+  assert.equal(classifyForMl(p, { product: true, variantIds: new Set() }).status, 'on_ml');
+  assert.equal(classifyForMl(p, { product: false, variantIds: new Set(['v1']) }).status, 'on_ml');
+});
+
+test('masivo: con variantes sale una publicacion por variante con stock y sin vincular', () => {
+  const p = mp({ variants: [
+    mv({ id: 'r', value: 'Rojo', stock: 2 }),
+    mv({ id: 'a', value: 'Azul', stock: 0 }),            // sin stock: no se publica
+    mv({ id: 'v', value: 'Verde', stock: 4, linked: true }), // ya publicada
+    mv({ id: 'n', value: 'Negro', stock: 1, hasGtin: false }),
+  ] });
+  assert.equal(isFanOut(p.variants), true);
+  assert.deepEqual(classifyForMl(p, NONE), { status: 'ready', listings: 2, variantIds: ['r', 'n'], stock: 3, noGtin: true });
+  // producto ya vinculado pero con variantes nuevas: se completan las que faltan
+  assert.equal(classifyForMl({ ...p, productLinked: true }, NONE).status, 'ready');
+  // todas las que tienen stock ya estan publicadas
+  const done = mp({ productLinked: true, variants: [mv({ id: 'r', value: 'Rojo', stock: 2, linked: true }), mv({ id: 'a', value: 'Azul', stock: 0 })] });
+  assert.equal(classifyForMl(done, NONE).status, 'linked');
+  // una variante a publicar ya existe en ML sin vincular
+  assert.equal(classifyForMl(p, { product: false, variantIds: new Set(['n']) }).status, 'on_ml');
+});
+
+test('masivo: variantes sin valor distintivo = publicacion simple con el stock de la principal', () => {
+  const p = mp({ variants: [mv({ id: 'd', stock: 0, isDefault: true }), mv({ id: 'x', stock: 9 })] });
+  assert.equal(isFanOut(p.variants), false);
+  assert.equal(classifyForMl(p, NONE).status, 'no_stock');
+});
+
+test('masivo: recargo de precio y motivos de rechazo', () => {
+  assert.equal(priceWithFactor(10000, 1.15), 11500);
+  assert.equal(priceWithFactor(9999, 1.1), 10999);
+  assert.equal(priceWithFactor(10000, 1), 10000);
+  assert.equal(priceWithFactor(10000, undefined), 10000);
+  assert.equal(publishFailureReason({ error: 'no_picture' }), 'Sin foto');
+  assert.match(publishFailureReason({ error: 'missing_attributes', missing: [{ id: 'GENDER', name: 'Género' }] }), /Género/);
+  assert.match(publishFailureReason({ error: 'ml_rejected', details: { message: 'Validation error', cause: [{ type: 'warning', message: 'aviso' }, { type: 'error', message: 'El GTIN es obligatorio' }] } }), /GTIN es obligatorio/);
+  assert.doesNotMatch(publishFailureReason({ error: 'ml_rejected', details: { cause: [{ type: 'warning', message: 'aviso' }, { type: 'error', message: 'X' }] } }), /aviso/);
+  assert.equal(isHardStop({ error: 'ml_rejected', details: { status: 429, message: 'too many' } }), true);
+  assert.equal(isHardStop({ error: 'ml_rejected', details: { status: 400 } }), false);
+  assert.equal(isHardStop({ error: 'no_picture' }), false);
+});
 
 test('Flex: arma el horario por dia y marca los dias que no se despacha', () => {
   const s = flexSchedule({ week: [{ capacity: 500, from: 12, to: 21, cutoff: 14 }], saturday: [{ capacity: 100, from: 12, to: 18, cutoff: 12 }], sunday: [] });

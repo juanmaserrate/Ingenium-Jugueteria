@@ -41,6 +41,148 @@ export async function mount(el) {
     }
   });
 
+  // ---------------------------------------------------------------------------------------
+  // Publicar todo el stock: analizar → publicar en tandas. Corre en el servidor, así que la
+  // pantalla solo lanza y va mostrando el avance (se puede cerrar y volver).
+  // ---------------------------------------------------------------------------------------
+  let massTimer = null;
+  const num = (n) => Number(n || 0).toLocaleString('es-AR');
+  const dur = (sec) => {
+    const m = Math.round((sec || 0) / 60);
+    if (m < 1) return 'menos de un minuto';
+    if (m < 60) return `unos ${m} minutos`;
+    const h = Math.floor(m / 60), r = Math.round((m % 60) / 10) * 10;
+    return `unas ${h} h${r ? ` ${r} min` : ''}`;
+  };
+  const MASS_LISTS = {
+    ready: 'listos_para_publicar', on_ml: 'ya_estan_en_mercado_libre', no_picture: 'sin_foto',
+    no_price: 'sin_precio', failed: 'rechazados_por_mercado_libre', partial: 'variantes_que_quedaron_afuera',
+  };
+
+  async function downloadMassList(name) {
+    try {
+      const rows = await api(`/api/ml-mass/list/${name}`);
+      if (!rows.length) { toast('Ese listado está vacío', 'info'); return; }
+      const { exportSimple } = await import('../core/xlsx.js');
+      exportSimple(`ml_${MASS_LISTS[name]}.xlsx`, rows.map((r) => ({
+        Código: r.code, Producto: r.name, Stock: r.stock ?? '',
+        ...(r.listings != null ? { Publicaciones: r.listings } : {}),
+        ...(r.detail ? { Motivo: r.detail } : {}),
+      })));
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  function renderMass(st) {
+    const box = el.querySelector('#ml-mass-out');
+    if (!box) return;
+    const j = st.job, a = st.analysis;
+    const running = j?.status === 'running';
+    const dl = (name, n) => (n > 0 ? ` <button data-dl="${name}" class="underline text-[#d82f1e] font-bold">descargar</button>` : '');
+    let html = '';
+
+    // --- avance del proceso en curso / resultado del último ---
+    if (running && j.kind === 'analyze') {
+      html += `<div class="bg-[#fff8f4] rounded-xl p-4 text-sm"><b>Analizando...</b> ${j.message || ''} Puede tardar unos minutos.</div>`;
+    } else if (j && j.kind === 'publish') {
+      const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
+      const label = running ? 'Publicando' : j.status === 'done' ? 'Publicación terminada' : j.status === 'interrupted' ? 'Publicación interrumpida' : 'Publicación frenada';
+      html += `
+        <div class="bg-[#fff8f4] rounded-xl p-4 text-sm space-y-2">
+          <div class="flex items-center justify-between gap-3 flex-wrap">
+            <b>${label}: ${num(j.done)} de ${num(j.total)} productos (${pct}%)</b>
+            ${running ? '<button id="mass-stop" class="px-3 py-1.5 bg-[#241a0d] text-white rounded-xl font-bold text-xs">Frenar</button>' : ''}
+          </div>
+          <div class="h-2 bg-[#f5dfca] rounded-full overflow-hidden"><div class="h-full bg-[#d82f1e]" style="width:${pct}%"></div></div>
+          <p>Publicados: <b>${num(j.published)}</b> productos (${num(j.listings)} publicaciones) · Ya estaban: ${num(j.skipped)} · Rechazados: <b class="${j.failedCount ? 'text-red-700' : ''}">${num(j.failedCount)}</b>${j.partialCount ? ` · Con variantes afuera: ${num(j.partialCount)}${dl('partial', j.partialCount)}` : ''}</p>
+          ${j.message ? `<p class="text-amber-800 font-bold">${j.message}</p>` : ''}
+        </div>`;
+    } else if (j && j.status === 'error') {
+      html += `<div class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm">${j.message || 'El proceso falló.'}</div>`;
+    }
+
+    // --- resultado del análisis ---
+    if (a) {
+      const c = a.counts;
+      const row = (label, n, extra = '', cls = '') => `<tr class="border-t border-[#fff1e6]"><td class="py-1.5 pr-4">${label}</td><td class="py-1.5 pr-4 text-right font-bold ${cls}">${num(n)}</td><td class="py-1.5 text-xs text-[#7d6c5c]">${extra}</td></tr>`;
+      html += `
+        <div class="text-sm">
+          <p class="text-xs text-[#7d6c5c] mb-1">Análisis del ${new Date(a.at).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' })} · ${num(c.total)} productos activos · ${num(a.scannedListings)} publicaciones tuyas leídas en Mercado Libre${a.stale ? ' · <b class="text-amber-700">está viejo: volvé a analizar</b>' : ''}</p>
+          <table class="w-full"><tbody>
+            ${row('<b>Listos para publicar</b>', c.ready, `${num(c.listings)} publicaciones · ${dur(a.estimateSeconds)}${dl('ready', c.ready)}`, 'text-green-700')}
+            ${row('Ya vinculados con Mercado Libre', c.linked, 'no se tocan')}
+            ${row('Ya están en Mercado Libre sin vincular', c.on_ml, `no se publican para no duplicar: vinculalos con "Sincronizar ML" en Inventario${dl('on_ml', c.on_ml)}`, c.on_ml ? 'text-amber-700' : '')}
+            ${row('Sin foto', c.no_picture, `Mercado Libre exige foto${dl('no_picture', c.no_picture)}`, c.no_picture ? 'text-amber-700' : '')}
+            ${row('Sin precio', c.no_price, dl('no_price', c.no_price).trim())}
+            ${row('Sin stock', c.no_stock, 'no se publican')}
+            ${a.failedCount ? row('Rechazados por Mercado Libre', a.failedCount, `con el motivo de cada uno${dl('failed', a.failedCount)}`, 'text-red-700') : ''}
+          </tbody></table>
+          ${c.noGtin ? `<p class="text-xs text-[#7d6c5c] mt-1">${num(c.noGtin)} de los listos no tienen código de barras real: en algunas categorías Mercado Libre los puede rechazar.</p>` : ''}
+        </div>`;
+    } else if (!running) {
+      html += '<p class="text-sm text-[#7d6c5c]">Todavía no se analizó el stock. El análisis no publica nada: solo cuenta qué se puede subir.</p>';
+    }
+
+    // --- acciones ---
+    const canPublish = a && !a.stale && a.counts.ready > 0 && !running;
+    html += `
+      <div class="flex items-end gap-3 flex-wrap pt-1">
+        <button id="mass-analyze" class="px-4 py-2 bg-gray-100 text-[#241a0d] rounded-xl font-bold text-sm disabled:opacity-50" ${running ? 'disabled' : ''}>${a ? 'Volver a analizar' : 'Analizar mi stock'}</button>
+        ${canPublish ? `
+          <label class="text-xs font-bold text-[#7d6c5c] uppercase">Cuántos
+            <select id="mass-limit" class="ing-input mt-1 normal-case">
+              <option value="20">Los primeros 20 (prueba)</option>
+              <option value="200">Los primeros 200</option>
+              <option value="1000">Los primeros 1.000</option>
+              <option value="">Todos (${num(a.counts.ready)})</option>
+            </select></label>
+          <label class="text-xs font-bold text-[#7d6c5c] uppercase">Recargo sobre el precio (%)
+            <input id="mass-markup" type="number" min="0" max="200" step="1" value="0" class="ing-input mt-1 w-28" /></label>
+          <button id="mass-publish" class="px-4 py-2 bg-[#d82f1e] text-white rounded-xl font-bold text-sm">Publicar en Mercado Libre</button>` : ''}
+      </div>`;
+    box.innerHTML = html;
+
+    box.querySelectorAll('[data-dl]').forEach((b) => b.addEventListener('click', () => downloadMassList(b.dataset.dl)));
+    box.querySelector('#mass-stop')?.addEventListener('click', async () => {
+      try { await api('/api/ml-mass/stop', { method: 'POST', body: {} }); toast('Frenando: termina el producto en curso y para.', 'info'); } catch (err) { toast(err.message, 'error'); }
+    });
+    box.querySelector('#mass-analyze')?.addEventListener('click', async () => {
+      try {
+        const r = await api('/api/ml-mass/analyze', { method: 'POST', body: {} });
+        if (!r.started) toast(r.reason || 'No se pudo iniciar', 'warning');
+        loadMass();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+    box.querySelector('#mass-publish')?.addEventListener('click', async () => {
+      const limitRaw = box.querySelector('#mass-limit').value;
+      const limit = limitRaw ? Number(limitRaw) : null;
+      const markupPct = Math.max(0, Number(box.querySelector('#mass-markup').value) || 0);
+      const n = limit ? Math.min(limit, a.counts.ready) : a.counts.ready;
+      const precio = markupPct > 0 ? `al precio del sistema + ${markupPct}%` : 'al mismo precio del sistema';
+      if (!confirm(`Se van a publicar ${num(n)} productos en Mercado Libre, ${precio}, como publicación Clásica, con retiro en persona y garantía de 30 días.\n\nQuedan visibles para los compradores apenas se crean. ¿Publicar?`)) return;
+      try {
+        const r = await api('/api/ml-mass/publish', { method: 'POST', body: { limit, markupPct } });
+        if (!r.started) toast(r.reason || 'No se pudo iniciar', 'warning');
+        else toast(`Publicando ${num(r.total)} productos. Podés cerrar esta pantalla: sigue en el servidor.`, 'success');
+        loadMass();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+  }
+
+  async function loadMass() {
+    clearTimeout(massTimer);
+    if (!el.isConnected) return;
+    try {
+      const st = await api('/api/ml-mass/status');
+      // No redibujar si el dueño está eligiendo cantidad/recargo y no hay nada corriendo.
+      const editing = el.querySelector('#ml-mass-out')?.contains(document.activeElement) && st.job?.status !== 'running';
+      if (!editing) renderMass(st);
+      if (st.job?.status === 'running') massTimer = setTimeout(loadMass, 4000);
+    } catch (err) {
+      const box = el.querySelector('#ml-mass-out');
+      if (box) box.innerHTML = `<p class="text-sm text-amber-700">No se pudo leer el estado: ${String(err.message).replace(/</g, '&lt;')}</p>`;
+    }
+  }
+
   // Envíos Flex: muestra cómo está configurado en Mercado Libre (solo lectura).
   async function loadFlex() {
     const box = el.querySelector('#ml-flex-out');
@@ -93,9 +235,10 @@ export async function mount(el) {
       el.querySelector('#ml-publish-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-howto-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-flex-box').classList.toggle('hidden', !s.connected);
+      el.querySelector('#ml-mass-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-terms-box').classList.toggle('hidden', !s.connected);
       el.querySelector('#ml-catmap-box').classList.toggle('hidden', !s.connected);
-      if (s.connected) { loadFlex(); await loadMappings(); loadTermsCount(); loadCatMap(); }
+      if (s.connected) { loadFlex(); loadMass(); await loadMappings(); loadTermsCount(); loadCatMap(); }
     } catch (err) {
       if (err instanceof ApiError && err.status === 0) {
         el.querySelector('#status-badge').innerHTML = '<span class="px-2 py-0.5 rounded-full bg-red-100 text-red-800 text-xs font-bold">Backend offline</span>';
@@ -425,6 +568,14 @@ function renderShell() {
             <p class="text-xs text-[#7d6c5c] mt-1">En <b>Ventas Mercado Libre</b>: cada venta entra sola; elegís la sucursal y se registra con su comisión real.</p>
           </a>
         </div>
+      </section>
+
+      <section id="ml-mass-box" class="hidden bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 space-y-3">
+        <div>
+          <h2 class="text-lg font-bold">Publicar todo mi stock</h2>
+          <p class="text-xs text-[#7d6c5c]">Sube a Mercado Libre los productos con stock que todavía no están publicados. Primero se analiza (no publica nada) y después se publica en tandas. Los productos con variantes salen como una publicación por variante, cada una con su stock.</p>
+        </div>
+        <div id="ml-mass-out" class="space-y-3"><p class="text-sm text-[#7d6c5c]">Cargando...</p></div>
       </section>
 
       <section id="ml-flex-box" class="hidden bg-white rounded-2xl shadow-sm border border-[#fff1e6] p-6 space-y-3">

@@ -6,6 +6,7 @@ import { enqueueSync } from '../sync/queue.js';
 import { STORE_SALE_TERMS, applyStoreTermsToItem } from './terms.js';
 import { mappedMlForProduct } from './categoryMap.js';
 import { isValidGtin } from './pure.js';
+import { priceWithFactor } from './massPure.js';
 
 // Publicación de productos del sistema en Mercado Libre (Fase 3). Es la parte más delicada:
 // crea contenido real en la cuenta. NADA se publica solo — lo dispara el usuario desde la UI.
@@ -69,6 +70,9 @@ export type PublishInput = {
   dryRun?: boolean; // valida contra ML sin crear nada
   listingTypeId: string;
   price?: number;
+  // Recargo sobre el precio del sistema (1.15 = +15%). Solo al CREAR la publicación: después
+  // Mercado Libre mantiene su precio. Lo usa la publicación masiva.
+  priceFactor?: number;
   quantity?: number;
   title?: string;
   condition?: string;
@@ -129,11 +133,17 @@ async function publishProductCore(input: PublishInput): Promise<any> {
   const canVary = allVariants.length > 1 && varKeys.size === 1 && !!mlVarAttr;
 
   // Idempotencia: si el producto YA está publicado/mapeado en ML, no creamos otra publicación.
+  // Excepción ("completar"): el producto sale como una publicación POR VARIANTE y le faltan
+  // variantes por publicar (entraron con stock después). Ahí se publican solo las que faltan.
   const already = await prisma.productMeliMapping.findUnique({ where: { productId: product.id } });
-  if (already) return { ok: true, itemId: already.mlItemId, alreadyLinked: true };
+  const varMaps = await prisma.variantMeliMapping.findMany({ where: { variantId: { in: allVariants.map((v) => v.id) } } });
+  const mappedVariantIds = new Set(varMaps.map((m) => m.variantId));
+  const completing = !!already && !input.dryRun && allVariants.length > 1 && varMaps.length > 0
+    && varMaps.every((m) => !m.mlVariationId) && allVariants.some((v) => !mappedVariantIds.has(v.id));
+  if (already && !completing) return { ok: true, itemId: already.mlItemId, alreadyLinked: true };
 
   const title = (input.title || product.name).slice(0, 60); // ML limita el título a 60 chars
-  const price = input.price ?? variant.priceOverride ?? product.price;
+  const price = input.price ?? priceWithFactor(variant.priceOverride ?? product.price, input.priceFactor);
   if (!price || price <= 0) return { error: 'no_price', message: 'El producto no tiene precio' };
   const quantity = input.quantity ?? (await computeMlStockForVariant(variant.id));
 
@@ -293,7 +303,7 @@ async function publishProductCore(input: PublishInput): Promise<any> {
   // A) Variaciones agrupadas de ML (una publicación con `title` + variations[]). Son
   //    INCOMPATIBLES con family_name. Solo en categorías no-catálogo (casi nunca en juguetería).
   // =========================================================================================
-  if (varyMode) {
+  if (varyMode && !completing) {
     const variationBuild: Array<{ variantId: string; value: string }> = [];
     const variations: any[] = [];
     for (const v of allVariants) {
@@ -303,7 +313,7 @@ async function publishProductCore(input: PublishInput): Promise<any> {
       variations.push({
         attribute_combinations: [{ id: mlVarAttr, value_name: value }],
         available_quantity: Math.max(0, Math.round(qty)),
-        price: Number(v.priceOverride ?? product.price),
+        price: priceWithFactor(Number(v.priceOverride ?? product.price), input.priceFactor),
       });
       variationBuild.push({ variantId: v.id, value });
     }
@@ -348,11 +358,14 @@ async function publishProductCore(input: PublishInput): Promise<any> {
   if (canFanOut) {
     const items: Array<{ variantId: string; itemId: string; value: string; permalink: string | null }> = [];
     const failed: Array<{ variantId: string; value: string; error: any }> = [];
+    const noStock: string[] = []; // variantes sin stock: ML no deja crear una publicación en cero
     for (const { v, val } of valued) {
+      if (mappedVariantIds.has(v.id)) continue; // ya publicada
       const famTitle = `${baseName} ${val}`.slice(0, 60).trim();
-      const vprice = Number(v.priceOverride ?? product.price);
+      const vprice = priceWithFactor(Number(v.priceOverride ?? product.price), input.priceFactor);
       if (!vprice || vprice <= 0) { failed.push({ variantId: v.id, value: val, error: 'variante sin precio' }); continue; }
       const qty = await computeMlStockForVariant(v.id);
+      if (qty <= 0) { noStock.push(val); continue; }
       const r = await createWithLtFallback(() => ({
         ...basePayload, attributes: buildAttributes(famTitle, v), family_name: famTitle,
         price: vprice, available_quantity: Math.max(0, Math.round(qty)),
@@ -369,18 +382,29 @@ async function publishProductCore(input: PublishInput): Promise<any> {
         failed.push({ variantId: v.id, value: val, error: r.error?.response?.data ?? r.error?.message });
       }
     }
-    if (!items.length) return { error: 'ml_rejected', details: failed.map((f) => f.error) };
+    if (!items.length) {
+      // Completando y no había nada nuevo para publicar: queda como estaba.
+      if (completing && !failed.length) return { ok: true, itemId: already!.mlItemId, alreadyLinked: true };
+      if (!failed.length) return { error: 'no_stock', message: 'Ninguna variante tiene stock para publicar' };
+      return { error: 'ml_rejected', details: failed.map((f) => f.error) };
+    }
     // El mapeo a nivel producto apunta al primer item (representativo: idempotencia + UI).
-    await prisma.productMeliMapping.upsert({
-      where: { productId: product.id }, update: { mlItemId: items[0].itemId }, create: { productId: product.id, mlItemId: items[0].itemId },
-    }).catch(() => {});
+    // Al completar se conserva el que ya tenía.
+    if (!completing) {
+      await prisma.productMeliMapping.upsert({
+        where: { productId: product.id }, update: { mlItemId: items[0].itemId }, create: { productId: product.id, mlItemId: items[0].itemId },
+      }).catch(() => {});
+    }
     await markPublished();
     for (const it of items) await enqueueSync('ml_push_stock', { variantId: it.variantId });
     return {
       ok: true, itemId: items[0].itemId, permalink: items[0].permalink, mode: 'fanout',
-      count: items.length, items, ...(failed.length ? { failed } : {}),
+      count: items.length, items, ...(failed.length ? { failed } : {}), ...(noStock.length ? { noStock } : {}),
+      ...(completing ? { completed: true } : {}),
     };
   }
+  // Tenía variantes por completar pero ya no aplica el modo "una por variante": no se duplica.
+  if (completing) return { ok: true, itemId: already!.mlItemId, alreadyLinked: true };
 
   // =========================================================================================
   // C) Item simple: una sola variante (o sin dimensión distintiva) → family_name = nombre.
