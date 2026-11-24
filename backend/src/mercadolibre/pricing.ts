@@ -1,5 +1,5 @@
 import { MlClient } from './client.js';
-import { pickListingPrice, freeShippingApplies, solveTargetPrice, type FeeQuote, type TargetPrice } from './massPure.js';
+import { pickListingPrice, freeShippingApplies, solveTargetPrice, packageFor, DEFAULT_PACKAGE, type FeeQuote, type TargetPrice, type Package } from './massPure.js';
 
 // Precio de Mercado Libre "para ganar lo mismo que en el local": se busca el precio al que, una
 // vez descontado lo que cobra ML (comisión + costo fijo, o el envío gratis donde es obligatorio),
@@ -7,8 +7,6 @@ import { pickListingPrice, freeShippingApplies, solveTargetPrice, type FeeQuote,
 // producto (dependen de la categoría, el precio y el peso); se cachean dentro de la corrida.
 
 const SITE = 'MLA';
-const DEFAULT_WEIGHT_G = 1000;
-const DEFAULT_DIM_CM = 20;
 // Si dejar el precio justo debajo del monto de envío gratis conserva al menos esta parte de lo
 // que se gana en el local, se prefiere eso a subirlo mucho para cubrir el envío.
 export const CAP_RATIO = 0.9;
@@ -26,8 +24,9 @@ export async function newPricingCtx(ml: MlClient, userId: string, listingTypeId:
   return { ml, userId, listingTypeId, logistic, threshold: null, cache: new Map() };
 }
 
-export async function feeQuote(ctx: PricingCtx, categoryId: string, price: number, weightG: number, dims?: { h?: number | null; w?: number | null; d?: number | null }): Promise<FeeQuote> {
-  const key = `${categoryId}|${price}|${weightG}`;
+export async function feeQuote(ctx: PricingCtx, categoryId: string, price: number, pkg: Package): Promise<FeeQuote> {
+  const weightG = pkg.weightG;
+  const key = `${categoryId}|${price}|${weightG}|${pkg.heightCm}x${pkg.widthCm}x${pkg.lengthCm}`;
   const hit = ctx.cache.get(key);
   if (hit) return hit;
   const lp = await ctx.ml.listingPrices(SITE, {
@@ -42,9 +41,8 @@ export async function feeQuote(ctx: PricingCtx, categoryId: string, price: numbe
   let shipping: number | null = null;
   if (!(fixedFee > 0) && price >= 5000) {
     try {
-      const dim = (v?: number | null) => Math.max(1, Math.round(v && v > 0 ? v : DEFAULT_DIM_CM));
       const q: any = await ctx.ml.freeShippingQuote(ctx.userId, {
-        dimensions: `${dim(dims?.h)}x${dim(dims?.w)}x${dim(dims?.d)},${weightG}`,
+        dimensions: `${pkg.heightCm}x${pkg.widthCm}x${pkg.lengthCm},${weightG}`,
         item_price: price, listing_type_id: ctx.listingTypeId, mode: 'me2', condition: 'new',
         logistic_type: ctx.logistic, free_shipping: true, verbose: true,
       });
@@ -62,7 +60,8 @@ export async function feeQuote(ctx: PricingCtx, categoryId: string, price: numbe
 export async function detectThreshold(ctx: PricingCtx, categoryId: string): Promise<number | null> {
   if (ctx.threshold != null) return ctx.threshold;
   try {
-    const fixedAt = async (p: number) => (await feeQuote(ctx, categoryId, p, DEFAULT_WEIGHT_G)).fixedFee;
+    const std: Package = { ...DEFAULT_PACKAGE, assumed: true };
+    const fixedAt = async (p: number) => (await feeQuote(ctx, categoryId, p, std)).fixedFee;
     let lo = 10000, hi = 150000;
     if (!((await fixedAt(lo)) > 0) || (await fixedAt(hi)) > 0) return null;
     while (hi - lo > 10) {
@@ -74,16 +73,12 @@ export async function detectThreshold(ctx: PricingCtx, categoryId: string): Prom
   } catch { return null; }
 }
 
-export function weightGrams(weightKg: number | null | undefined): number {
-  return weightKg && weightKg > 0 ? Math.round(weightKg * 1000) : DEFAULT_WEIGHT_G;
-}
-
-export async function targetPriceFor(ctx: PricingCtx, input: { categoryId: string; storePrice: number; weightKg?: number | null; dims?: { h?: number | null; w?: number | null; d?: number | null } }): Promise<TargetPrice> {
-  const w = weightGrams(input.weightKg);
+export async function targetPriceFor(ctx: PricingCtx, input: { categoryId: string; storePrice: number; product: { weight?: number | null; height?: number | null; width?: number | null; depth?: number | null } }): Promise<TargetPrice> {
+  const pkg = packageFor(input.product);
   const threshold = await detectThreshold(ctx, input.categoryId);
   return solveTargetPrice({
     target: input.storePrice,
-    quote: (p) => feeQuote(ctx, input.categoryId, p, w, input.dims),
+    quote: (p) => feeQuote(ctx, input.categoryId, p, pkg),
     threshold, capRatio: CAP_RATIO,
   });
 }

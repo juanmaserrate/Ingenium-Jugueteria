@@ -3,7 +3,7 @@ import { buildSyncPlan } from './syncExisting.js';
 import { publishProduct } from './publish.js';
 import { variantValue } from './match.js';
 import { isValidGtin } from './pure.js';
-import { classifyForMl, publishFailureReason, isHardStop, type MassProduct, type MassStatus } from './massPure.js';
+import { classifyForMl, publishFailureReason, isHardStop, packageFor, packageAttributes, type MassProduct, type MassStatus } from './massPure.js';
 import { requireMlClient } from './client.js';
 import { mappedMlForProduct } from './categoryMap.js';
 import { predictCategory } from './publish.js';
@@ -284,14 +284,15 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
         const bases = [...new Set([p.price, ...p.variants.map((v) => Number(v.priceOverride) || 0)].filter((x) => x > 0))];
         priceByBase = {};
         for (const base of bases) {
-          const t = await targetPriceFor(ctx, { categoryId, storePrice: base, weightKg: p.weight, dims: { h: p.height, w: p.width, d: p.depth } });
+          const t = await targetPriceFor(ctx, { categoryId, storePrice: base, product: p });
           priceByBase[String(base)] = t.price;
         }
         mlPrice = priceByBase[String(p.price)];
       } else {
         mlPrice = Math.round(p.price * priceFactor);
       }
-      res = await publishProduct({ productId: item.productId, listingTypeId, priceFactor, priceByBase });
+      // ML exige peso y medidas del paquete: los del producto o, si no los tiene, el estándar.
+      res = await publishProduct({ productId: item.productId, listingTypeId, priceFactor, priceByBase, attributes: packageAttributes(packageFor(p)) });
     } catch (err: any) {
       const data = err?.response?.data;
       res = { error: 'ml_rejected', details: data ?? { message: err?.message, status: err?.response?.status } };
@@ -460,8 +461,8 @@ export async function pricePreview(n = 10, minPrice = 0) {
       const mapped = await mappedMlForProduct(p.id).catch(() => null);
       const categoryId = mapped?.categoryId ?? (await predictCategory(p.name.slice(0, 60)))[0]?.categoryId;
       if (!categoryId) { rows.push({ code: p.code, name: p.name, storePrice: p.price, error: 'sin categoría' }); continue; }
-      const t = await targetPriceFor(ctx, { categoryId, storePrice: p.price, weightKg: p.weight, dims: { h: p.height, w: p.width, d: p.depth } });
-      rows.push({ productId: p.id, code: p.code, name: p.name, cost: p.cost, storePrice: p.price, categoryId, mlPrice: t.price, net: t.net, freeShipping: t.freeShipping, capped: t.capped, upPct: Math.round((t.price / p.price - 1) * 1000) / 10 });
+      const t = await targetPriceFor(ctx, { categoryId, storePrice: p.price, product: p });
+      rows.push({ productId: p.id, code: p.code, name: p.name, cost: p.cost, storePrice: p.price, categoryId, package: packageAttributes(packageFor(p)), mlPrice: t.price, net: t.net, freeShipping: t.freeShipping, capped: t.capped, upPct: Math.round((t.price / p.price - 1) * 1000) / 10 });
     } catch (err: any) {
       rows.push({ code: p.code, name: p.name, storePrice: p.price, error: String(err?.response?.data?.message ?? err?.message ?? 'error').slice(0, 160) });
     }

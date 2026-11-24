@@ -256,7 +256,7 @@ export async function mount(el) {
         if (!x.result) return `<tr class="border-t border-[#fff1e6]"><td class="py-1.5 pr-3">${safe(x.name)}<div class="text-xs text-[#7d6c5c]">${safe(x.code)}</div></td><td colspan="6" class="py-1.5 text-amber-700">${safe(x.error || 'Sin datos')}</td></tr>`;
         const g = x.result;
         return `<tr class="border-t border-[#fff1e6] align-top">
-          <td class="py-1.5 pr-3">${safe(x.name)}<div class="text-xs text-[#7d6c5c]">${safe(x.code)} · stock ${x.stock}${x.weightAssumed ? ' · peso supuesto 1 kg' : ''}</div></td>
+          <td class="py-1.5 pr-3">${safe(x.name)}<div class="text-xs text-[#7d6c5c]">${safe(x.code)} · stock ${x.stock}${x.weightAssumed ? ' · paquete estándar' : ''}</div></td>
           <td class="py-1.5 pr-3 text-right">${$(x.cost)}</td>
           <td class="py-1.5 pr-3 text-right">${$(g.mlPrice)}</td>
           <td class="py-1.5 pr-3 text-right">${$(g.saleFee)}<div class="text-xs text-[#7d6c5c]">${pc(g.feePct)}${g.fixedFee ? ` + ${$(g.fixedFee)} fijo` : ''}</div></td>

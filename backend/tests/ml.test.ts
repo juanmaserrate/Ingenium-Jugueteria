@@ -6,6 +6,20 @@ import { matchListings, normSku, normTitle, type InvProduct, type MlListing } fr
 import { normalizeQuestion, cleanAnswerText, ANSWER_MAX_CHARS, flexSchedule } from '../src/mercadolibre/questionsPure.js';
 import { classifyForMl, isFanOut, priceWithFactor, publishFailureReason, isHardStop, mlProfit, pickListingPrice, freeShippingApplies, solveTargetPrice, netOf, type FeeQuote, type MassProduct, type MassVariant } from '../src/mercadolibre/massPure.js';
 
+test('paquete: usa las medidas del producto y, si faltan, el paquete estandar', async () => {
+  const { packageFor, packageAttributes } = await import('../src/mercadolibre/massPure.js');
+  const std = packageFor({});
+  assert.deepEqual(std, { weightG: 500, heightCm: 15, widthCm: 20, lengthCm: 20, assumed: true });
+  assert.deepEqual(packageAttributes(std), [
+    { id: 'SELLER_PACKAGE_WEIGHT', value_name: '500 g' }, { id: 'SELLER_PACKAGE_HEIGHT', value_name: '15 cm' },
+    { id: 'SELLER_PACKAGE_WIDTH', value_name: '20 cm' }, { id: 'SELLER_PACKAGE_LENGTH', value_name: '20 cm' },
+  ]);
+  // el sistema guarda el peso en kg
+  assert.deepEqual(packageFor({ weight: 1.25, height: 30, width: 40.4, depth: 12 }), { weightG: 1250, heightCm: 30, widthCm: 40, lengthCm: 12, assumed: false });
+  // dato parcial: se completa lo que falta y se marca como supuesto
+  assert.deepEqual(packageFor({ weight: 0.2, height: null, width: 0, depth: undefined }), { weightG: 200, heightCm: 15, widthCm: 20, lengthCm: 20, assumed: true });
+});
+
 // Modelo de lo que cobra ML medido el 2026-11-24: 13,5% + fijo por tramos; desde $33.000 no hay
 // fijo pero el envio gratis ($8.091) corre por cuenta del vendedor.
 const TH = 33000;

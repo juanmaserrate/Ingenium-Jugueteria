@@ -141,6 +141,34 @@ export function freeShippingApplies(input: { mlPrice: number; saleFee: number; f
   return input.shipping != null && input.shipping > 0 && input.saleFee > 0 && !(input.fixedFee > 0) && input.mlPrice >= 5000;
 }
 
+// --- Paquete: Mercado Libre exige peso y medidas en TODA publicación ---
+// Mismo paquete estándar que propone la pantalla de Inventario al publicar. Se usa cuando el
+// producto no tiene sus propias medidas cargadas (hoy, casi todos).
+export const DEFAULT_PACKAGE = { weightG: 500, heightCm: 15, widthCm: 20, lengthCm: 20 };
+
+export type Package = { weightG: number; heightCm: number; widthCm: number; lengthCm: number; assumed: boolean };
+
+export function packageFor(p: { weight?: number | null; height?: number | null; width?: number | null; depth?: number | null }): Package {
+  const pos = (v: unknown) => (Number(v) > 0 ? Number(v) : 0);
+  const w = pos(p.weight), h = pos(p.height), wd = pos(p.width), d = pos(p.depth);
+  return {
+    weightG: w ? Math.max(1, Math.round(w * 1000)) : DEFAULT_PACKAGE.weightG, // el sistema guarda kg
+    heightCm: h ? Math.max(1, Math.round(h)) : DEFAULT_PACKAGE.heightCm,
+    widthCm: wd ? Math.max(1, Math.round(wd)) : DEFAULT_PACKAGE.widthCm,
+    lengthCm: d ? Math.max(1, Math.round(d)) : DEFAULT_PACKAGE.lengthCm,
+    assumed: !(w && h && wd && d),
+  };
+}
+
+export function packageAttributes(pkg: Package): Array<{ id: string; value_name: string }> {
+  return [
+    { id: 'SELLER_PACKAGE_WEIGHT', value_name: `${pkg.weightG} g` },
+    { id: 'SELLER_PACKAGE_HEIGHT', value_name: `${pkg.heightCm} cm` },
+    { id: 'SELLER_PACKAGE_WIDTH', value_name: `${pkg.widthCm} cm` },
+    { id: 'SELLER_PACKAGE_LENGTH', value_name: `${pkg.lengthCm} cm` },
+  ];
+}
+
 // --- Precio objetivo: que en Mercado Libre quede lo mismo que vendiendo en el local ---
 export type FeeQuote = { saleFee: number; fixedFee: number; shipping: number | null; applies: boolean };
 export type TargetPrice = {

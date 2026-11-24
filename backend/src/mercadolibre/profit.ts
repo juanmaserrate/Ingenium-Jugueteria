@@ -2,7 +2,7 @@ import { prisma } from '../db.js';
 import { requireMlClient } from './client.js';
 import { predictCategory } from './publish.js';
 import { pickSpread } from './pure.js';
-import { mlProfit, pickListingPrice, priceWithFactor, freeShippingApplies, type MlProfit } from './massPure.js';
+import { mlProfit, pickListingPrice, priceWithFactor, freeShippingApplies, packageFor, type MlProfit } from './massPure.js';
 import { ValidationError } from '../utils/errors.js';
 
 // Simulador: toma una muestra de productos con stock que NO están en Mercado Libre y, con la
@@ -11,8 +11,6 @@ import { ValidationError } from '../utils/errors.js';
 
 const SITE = 'MLA';
 const LISTING = 'gold_special'; // Clásica
-const DEFAULT_WEIGHT_G = 1000;  // si el producto no tiene peso cargado
-const DEFAULT_DIM_CM = 20;      // ídem medidas (caja de 20 cm de lado)
 const MIN_PRICE = 1000;         // por debajo son datos de carga (precios de prueba, centavos)
 export const LOGISTICS = ['drop_off', 'xd_drop_off', 'cross_docking', 'self_service'] as const;
 
@@ -52,8 +50,9 @@ export async function profitSample(opts: { n?: number; markupPct?: number; logis
   const rows: ProfitRow[] = [];
   for (const p of sample) {
     const stock = p.variants.reduce((s, v) => s + v.stocks.reduce((a, st) => a + Math.max(0, st.qty - st.reservedQty), 0), 0);
-    const weightAssumed = !(p.weight && p.weight > 0);
-    const weightG = weightAssumed ? DEFAULT_WEIGHT_G : Math.round(p.weight! * 1000);
+    const pkg = packageFor(p);
+    const weightAssumed = pkg.assumed;
+    const weightG = pkg.weightG;
     const row: ProfitRow = {
       productId: p.id, code: p.code, name: p.name, stock, cost: p.cost, storePrice: p.price,
       mlCategoryId: null, categorySource: null, weightG, weightAssumed, result: null, error: null,
@@ -81,9 +80,8 @@ export async function profitSample(opts: { n?: number; markupPct?: number; logis
       // Envío gratis a cargo del vendedor (obligatorio desde cierto precio). Es una cotización.
       let shipping: number | null = null;
       try {
-        const dim = (v: number | null) => Math.max(1, Math.round(v && v > 0 ? v : DEFAULT_DIM_CM));
         const q: any = await ml.freeShippingQuote(integ.mlUserId, {
-          dimensions: `${dim(p.height)}x${dim(p.width)}x${dim(p.depth)},${weightG}`,
+          dimensions: `${pkg.heightCm}x${pkg.widthCm}x${pkg.lengthCm},${weightG}`,
           item_price: mlPrice, listing_type_id: LISTING, mode: 'me2', condition: 'new',
           logistic_type: logistic, free_shipping: true, verbose: true,
         });
