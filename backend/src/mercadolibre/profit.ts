@@ -2,7 +2,7 @@ import { prisma } from '../db.js';
 import { requireMlClient } from './client.js';
 import { predictCategory } from './publish.js';
 import { pickSpread } from './pure.js';
-import { mlProfit, pickListingPrice, priceWithFactor, type MlProfit } from './massPure.js';
+import { mlProfit, pickListingPrice, priceWithFactor, freeShippingApplies, type MlProfit } from './massPure.js';
 import { ValidationError } from '../utils/errors.js';
 
 // Simulador: toma una muestra de productos con stock que NO están en Mercado Libre y, con la
@@ -13,6 +13,7 @@ const SITE = 'MLA';
 const LISTING = 'gold_special'; // Clásica
 const DEFAULT_WEIGHT_G = 1000;  // si el producto no tiene peso cargado
 const DEFAULT_DIM_CM = 20;      // ídem medidas (caja de 20 cm de lado)
+const MIN_PRICE = 1000;         // por debajo son datos de carga (precios de prueba, centavos)
 export const LOGISTICS = ['drop_off', 'xd_drop_off', 'cross_docking', 'self_service'] as const;
 
 export type ProfitRow = {
@@ -35,7 +36,7 @@ export async function profitSample(opts: { n?: number; markupPct?: number; logis
   // Candidatos: activos, con costo y precio, con stock, sin vínculo con ML.
   const products = await prisma.product.findMany({
     where: {
-      active: true, cost: { gt: 0 }, price: { gt: 0 }, mlMapping: null,
+      active: true, cost: { gt: 0 }, price: { gte: MIN_PRICE }, mlMapping: null,
       variants: { some: { stocks: { some: { qty: { gt: 0 } } } }, every: { mlMapping: null } },
     },
     select: {
@@ -44,7 +45,6 @@ export async function profitSample(opts: { n?: number; markupPct?: number; logis
       variants: { select: { stocks: { select: { qty: true, reservedQty: true } } } },
     },
     orderBy: { price: 'asc' },
-    take: 5000,
   });
   // Muestra repartida a lo largo de todo el rango de precios (baratos, medios y caros).
   const sample = pickSpread(products, n);
@@ -91,9 +91,11 @@ export async function profitSample(opts: { n?: number; markupPct?: number; logis
         shipping = Number.isFinite(cost) && cost > 0 ? cost : null;
       } catch { /* sin cotización: se informa solo la comisión */ }
 
+      const saleFee = Number(entry.sale_fee_amount) || 0;
+      const fixedFee = Number(entry.sale_fee_details?.fixed_fee) || 0;
       row.result = mlProfit({
-        storePrice: p.price, cost: p.cost, mlPrice,
-        saleFee: Number(entry.sale_fee_amount) || 0, fixedFee: Number(entry.sale_fee_details?.fixed_fee) || 0, shipping,
+        storePrice: p.price, cost: p.cost, mlPrice, saleFee, fixedFee, shipping,
+        freeShippingApplies: freeShippingApplies({ mlPrice, saleFee, fixedFee, shipping }),
       });
     } catch (err: any) {
       row.error = String(err?.response?.data?.message ?? err?.message ?? 'Error de Mercado Libre').slice(0, 200);
@@ -110,6 +112,13 @@ export async function profitSample(opts: { n?: number; markupPct?: number; logis
       calculated: ok.length,
       storeMarginPct: avg(ok.map((r) => r.result.storeMarginPct)),
       mlMarginPct: avg(ok.map((r) => r.result.marginPct)),
+      // Escenario real (envío gratis a cargo del vendedor solo donde ML lo exige).
+      realMarginPct: avg(ok.map((r) => r.result.realMarginPct)),
+      losingReal: ok.filter((r) => r.result.realProfit < 0).length,
+      equalMarkupRealPct: avg(ok.map((r) => r.result.equalMarkupRealPct)),
+      withFreeShipping: ok.filter((r) => r.result.freeShippingApplies).length,
+      realMarginBelowPct: avg(ok.filter((r) => !r.result.freeShippingApplies).map((r) => r.result.realMarginPct)),
+      realMarginAbovePct: avg(ok.filter((r) => r.result.freeShippingApplies).map((r) => r.result.realMarginPct)),
       mlMarginFreeShippingPct: avg(ok.map((r) => r.result.marginFreeShippingPct)),
       losing: ok.filter((r) => r.result.profit < 0).length,
       losingFreeShipping: ok.filter((r) => r.result.profitFreeShipping != null && r.result.profitFreeShipping < 0).length,

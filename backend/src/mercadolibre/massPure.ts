@@ -91,11 +91,17 @@ export type MlProfit = {
   // Recargo (%) sobre el precio del sistema para ganar lo MISMO que en el local.
   equalMarkupPct: number | null;
   equalMarkupFreeShippingPct: number | null;
+  // Lo que pasa DE VERDAD: desde cierto precio Mercado Libre obliga al envío gratis (lo paga
+  // el vendedor y a cambio no cobra costo fijo); por debajo, el envío lo paga el comprador.
+  freeShippingApplies: boolean;
+  realProfit: number;
+  realMarginPct: number;
+  equalMarkupRealPct: number | null;
 };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
-export function mlProfit(input: { storePrice: number; cost: number; mlPrice: number; saleFee: number; fixedFee?: number | null; shipping?: number | null }): MlProfit {
+export function mlProfit(input: { storePrice: number; cost: number; mlPrice: number; saleFee: number; fixedFee?: number | null; shipping?: number | null; freeShippingApplies?: boolean }): MlProfit {
   const storePrice = Number(input.storePrice) || 0;
   const cost = Number(input.cost) || 0;
   const mlPrice = Number(input.mlPrice) || 0;
@@ -110,6 +116,8 @@ export function mlProfit(input: { storePrice: number; cost: number; mlPrice: num
   // precio' tal que precio' − (pct·precio' + fijo) − envío − costo = ganancia del local
   const equalPrice = (ship: number) => (pct < 1 ? (storeProfit + cost + fixedFee + ship) / (1 - pct) : NaN);
   const asMarkup = (p: number) => (storePrice > 0 && Number.isFinite(p) ? r2((p / storePrice - 1) * 100) : null);
+  const applies = !!input.freeShippingApplies && shipping != null;
+  const real = applies ? profit - shipping! : profit;
 
   return {
     mlPrice: r2(mlPrice), saleFee: r2(saleFee), feePct: r2(pct * 100), fixedFee: r2(fixedFee), shipping: shipping != null ? r2(shipping) : null,
@@ -119,7 +127,18 @@ export function mlProfit(input: { storePrice: number; cost: number; mlPrice: num
     storeProfit: r2(storeProfit), storeMarginPct: storePrice > 0 ? r2((storeProfit / storePrice) * 100) : 0,
     equalMarkupPct: asMarkup(equalPrice(0)),
     equalMarkupFreeShippingPct: shipping != null ? asMarkup(equalPrice(shipping)) : null,
+    freeShippingApplies: applies,
+    realProfit: r2(real),
+    realMarginPct: mlPrice > 0 ? r2((real / mlPrice) * 100) : 0,
+    equalMarkupRealPct: asMarkup(equalPrice(applies ? shipping! : 0)),
   };
+}
+
+// ¿A este precio Mercado Libre obliga al envío gratis? No hay un dato directo: se deduce de
+// que ML deja de cobrar el costo fijo (lo cobra solo por debajo del monto de envío gratis).
+// El piso de precio evita confundirlo con productos casi regalados, donde el fijo también es 0.
+export function freeShippingApplies(input: { mlPrice: number; saleFee: number; fixedFee: number; shipping: number | null }): boolean {
+  return input.shipping != null && input.shipping > 0 && input.saleFee > 0 && !(input.fixedFee > 0) && input.mlPrice >= 5000;
 }
 
 // La respuesta de listing_prices puede venir como objeto, lista o lista de listas.

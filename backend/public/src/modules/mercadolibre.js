@@ -200,31 +200,31 @@ export async function mount(el) {
       if (!r.rows.length) { out.innerHTML = '<p class="text-sm text-[#7d6c5c]">No hay productos con stock, costo y precio cargados que estén sin publicar.</p>'; return; }
       const sm = r.summary;
       const body = r.rows.map((x) => {
-        if (!x.result) return `<tr class="border-t border-[#fff1e6]"><td class="py-1.5 pr-3">${safe(x.name)}<div class="text-xs text-[#7d6c5c]">${safe(x.code)}</div></td><td colspan="7" class="py-1.5 text-amber-700">${safe(x.error || 'Sin datos')}</td></tr>`;
+        if (!x.result) return `<tr class="border-t border-[#fff1e6]"><td class="py-1.5 pr-3">${safe(x.name)}<div class="text-xs text-[#7d6c5c]">${safe(x.code)}</div></td><td colspan="6" class="py-1.5 text-amber-700">${safe(x.error || 'Sin datos')}</td></tr>`;
         const g = x.result;
         return `<tr class="border-t border-[#fff1e6] align-top">
           <td class="py-1.5 pr-3">${safe(x.name)}<div class="text-xs text-[#7d6c5c]">${safe(x.code)} · stock ${x.stock}${x.weightAssumed ? ' · peso supuesto 1 kg' : ''}</div></td>
           <td class="py-1.5 pr-3 text-right">${$(x.cost)}</td>
           <td class="py-1.5 pr-3 text-right">${$(g.mlPrice)}</td>
           <td class="py-1.5 pr-3 text-right">${$(g.saleFee)}<div class="text-xs text-[#7d6c5c]">${pc(g.feePct)}${g.fixedFee ? ` + ${$(g.fixedFee)} fijo` : ''}</div></td>
-          <td class="py-1.5 pr-3 text-right ${tone(g.profit)}">${$(g.profit)}<div class="text-xs font-normal text-[#7d6c5c]">${pc(g.marginPct)}</div></td>
-          <td class="py-1.5 pr-3 text-right">${$(g.shipping)}</td>
-          <td class="py-1.5 pr-3 text-right ${tone(g.profitFreeShipping)}">${$(g.profitFreeShipping)}<div class="text-xs font-normal text-[#7d6c5c]">${pc(g.marginFreeShippingPct)}</div></td>
+          <td class="py-1.5 pr-3 text-right">${g.freeShippingApplies ? $(g.shipping) : '<span class="text-[#7d6c5c]">lo paga el comprador</span>'}</td>
+          <td class="py-1.5 pr-3 text-right ${tone(g.realProfit)}">${$(g.realProfit)}<div class="text-xs font-normal text-[#7d6c5c]">${pc(g.realMarginPct)}</div></td>
           <td class="py-1.5 text-right">${$(g.storeProfit)}<div class="text-xs text-[#7d6c5c]">${pc(g.storeMarginPct)}</div></td>
         </tr>`;
       }).join('');
       out.innerHTML = `
         <div class="bg-[#fff8f4] rounded-xl p-4 text-sm space-y-1">
-          <p>Sobre ${sm.calculated} productos${markupPct ? ` con recargo del ${markupPct}%` : ' al precio del sistema'}: en el local ganás en promedio <b>${pc(sm.storeMarginPct)}</b> del precio; en Mercado Libre, <b>${pc(sm.mlMarginPct)}</b> si el envío lo paga el comprador${sm.mlMarginFreeShippingPct != null ? ` y <b>${pc(sm.mlMarginFreeShippingPct)}</b> si el envío gratis corre por tu cuenta` : ''}.</p>
-          ${sm.losing || sm.losingFreeShipping ? `<p class="text-red-700 font-bold">Dan pérdida: ${sm.losing} con envío a cargo del comprador${sm.losingFreeShipping ? ` y ${sm.losingFreeShipping} con envío gratis a tu cargo` : ''}.</p>` : ''}
-          ${sm.equalMarkupPct != null ? `<p>Para ganar lo mismo que en el local, el recargo promedio tendría que ser de <b>${pc(sm.equalMarkupPct)}</b>${sm.equalMarkupFreeShippingPct != null ? ` (o <b>${pc(sm.equalMarkupFreeShippingPct)}</b> si además pagás vos el envío gratis)` : ''}.</p>` : ''}
+          <p>Sobre ${sm.calculated} productos${markupPct ? ` con recargo del ${markupPct}%` : ' al precio del sistema'}: en el local te queda en promedio <b>${pc(sm.storeMarginPct)}</b> del precio y en Mercado Libre <b>${pc(sm.realMarginPct)}</b>.</p>
+          ${sm.withFreeShipping && sm.realMarginBelowPct != null ? `<p>Los que no llegan al monto de envío gratis dejan <b>${pc(sm.realMarginBelowPct)}</b>; los ${sm.withFreeShipping} que lo superan (el envío lo pagás vos) dejan <b>${pc(sm.realMarginAbovePct)}</b>.</p>` : ''}
+          ${sm.losingReal ? `<p class="text-red-700 font-bold">${sm.losingReal} de ${sm.calculated} dan pérdida.</p>` : ''}
+          ${sm.equalMarkupRealPct != null ? `<p>Para ganar lo mismo que en el local, el recargo promedio tendría que ser de <b>${pc(sm.equalMarkupRealPct)}</b>.</p>` : ''}
         </div>
         <div class="overflow-x-auto"><table class="w-full text-sm mt-2">
           <thead><tr class="text-xs uppercase text-[#7d6c5c] text-right">
             <th class="text-left pb-1 pr-3">Producto</th><th class="pb-1 pr-3">Costo</th><th class="pb-1 pr-3">Precio en ML</th><th class="pb-1 pr-3">Cobra ML</th>
-            <th class="pb-1 pr-3">Ganancia</th><th class="pb-1 pr-3">Envío gratis</th><th class="pb-1 pr-3">Ganancia pagando el envío</th><th class="pb-1">En el local</th>
+            <th class="pb-1 pr-3">Envío a tu cargo</th><th class="pb-1 pr-3">Ganancia en ML</th><th class="pb-1">Ganancia en el local</th>
           </tr></thead><tbody>${body}</tbody></table></div>
-        <p class="text-xs text-[#7d6c5c]">Publicación Clásica. "Cobra ML" es la comisión más el costo fijo que informa Mercado Libre. El envío gratis es una cotización y solo lo pagás vos en los productos que superan el monto desde el que Mercado Libre lo exige. No incluye impuestos ni retenciones, ni el costo de tu propio reparto si usás Flex. La muestra sale de ${Number(r.candidates).toLocaleString('es-AR')} productos con stock, costo y precio que no están publicados.</p>`;
+        <p class="text-xs text-[#7d6c5c]">Publicación Clásica. "Cobra ML" es la comisión más el costo fijo que informa Mercado Libre. Desde cierto precio Mercado Libre obliga al envío gratis: ahí no cobra costo fijo pero el envío (una cotización) lo pagás vos. No incluye impuestos ni retenciones, ni el costo de tu propio reparto si usás Flex. La muestra sale de ${Number(r.candidates).toLocaleString('es-AR')} productos con stock, costo y precio que no están publicados.</p>`;
     } catch (err) {
       const d = err.details || {};
       out.innerHTML = `<p class="text-sm text-amber-700">No se pudo calcular: ${safe(d.message || err.message)}</p>`;

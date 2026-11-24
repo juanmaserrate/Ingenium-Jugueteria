@@ -4,7 +4,23 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { matchListings, normSku, normTitle, type InvProduct, type MlListing } from '../src/mercadolibre/match.js';
 import { normalizeQuestion, cleanAnswerText, ANSWER_MAX_CHARS, flexSchedule } from '../src/mercadolibre/questionsPure.js';
-import { classifyForMl, isFanOut, priceWithFactor, publishFailureReason, isHardStop, mlProfit, pickListingPrice, type MassProduct, type MassVariant } from '../src/mercadolibre/massPure.js';
+import { classifyForMl, isFanOut, priceWithFactor, publishFailureReason, isHardStop, mlProfit, pickListingPrice, freeShippingApplies, type MassProduct, type MassVariant } from '../src/mercadolibre/massPure.js';
+
+test('ganancia ML: el envio gratis corre por cuenta del vendedor solo donde ML lo exige', () => {
+  // datos reales del 2026-11-24: por debajo del monto ML cobra costo fijo y el envio lo paga el comprador
+  assert.equal(freeShippingApplies({ mlPrice: 29910, saleFee: 7357.85, fixedFee: 3320, shipping: 8990 }), false);
+  // por encima no cobra fijo pero el envio gratis es obligatorio
+  assert.equal(freeShippingApplies({ mlPrice: 34850, saleFee: 5053.25, fixedFee: 0, shipping: 8091 }), true);
+  // producto casi regalado: fijo en 0 pero no hay envio gratis obligatorio
+  assert.equal(freeShippingApplies({ mlPrice: 22, saleFee: 3.3, fixedFee: 0, shipping: 8990 }), false);
+  assert.equal(freeShippingApplies({ mlPrice: 40000, saleFee: 5800, fixedFee: 0, shipping: null }), false);
+
+  const abajo = mlProfit({ storePrice: 29910, cost: 16619.4, mlPrice: 29910, saleFee: 7357.85, fixedFee: 3320, shipping: 8990, freeShippingApplies: false });
+  assert.equal(abajo.realProfit, abajo.profit); assert.equal(abajo.equalMarkupRealPct, abajo.equalMarkupPct);
+  const arriba = mlProfit({ storePrice: 34850, cost: 17000, mlPrice: 34850, saleFee: 5053.25, fixedFee: 0, shipping: 8091, freeShippingApplies: true });
+  assert.equal(arriba.realProfit, 4705.75); assert.equal(arriba.realProfit, arriba.profitFreeShipping);
+  assert.equal(arriba.equalMarkupRealPct, arriba.equalMarkupFreeShippingPct);
+});
 
 test('ganancia ML: comision + costo fijo, con y sin envio a cargo, y recargo para igualar al local', () => {
   // costo 6.000, precio 10.000 → en el local gana 4.000 (40%)
