@@ -109,7 +109,9 @@ export async function publishOne(productId: string, o: PublishOneOpts, holder: P
   // Nada va a una categoría "Otros": Mercado Libre lo da de baja a las horas.
   if (o.requireSpecific && !o.categoryId) {
     const info = await resolveMlCategoryInfo(productId, p.name);
-    if (info?.generic) return { res: { error: 'generic_category', message: 'Mercado Libre no sugiere una categoría específica para este producto (solo "Otros"): hay que elegirla a mano' }, storePrice };
+    // Sin categoría mapeada tampoco: la predicción por nombre sola no es confiable.
+    if (!info || info.source !== 'mapeada') return { res: { error: 'generic_category', message: 'Sin categoría de Mercado Libre asignada: hay que elegirla a mano' }, storePrice };
+    if (info.generic) return { res: { error: 'generic_category', message: 'Mercado Libre no sugiere una categoría específica para este producto (solo "Otros"): hay que elegirla a mano' }, storePrice };
   }
   let mlPrice: number | undefined;
   // Un intento = calcular el precio para ese paquete y publicar.
@@ -130,7 +132,7 @@ export async function publishOne(productId: string, o: PublishOneOpts, holder: P
       mlPrice = Math.round(p.price * o.priceFactor);
     }
     // ML exige peso y medidas del paquete en toda publicación.
-    return publishProduct({ productId, listingTypeId: o.listingTypeId, priceFactor: o.priceFactor, priceByBase, attributes: packageAttributes(packageFor(dims)), ...(o.categoryId ? { categoryId: o.categoryId } : {}) });
+    return publishProduct({ productId, listingTypeId: o.listingTypeId, priceFactor: o.priceFactor, priceByBase, attributes: packageAttributes(packageFor(dims)), strictCategory: !!o.requireSpecific, ...(o.categoryId ? { categoryId: o.categoryId } : {}) });
   };
   // Paquete: lo del producto, o lo de Tienda Nube. Si ML no acepta esas medidas (pasa con
   // valores muy chicos, ej. 15 g / 4×2×2 cm), se reintenta una vez con el paquete estándar.
