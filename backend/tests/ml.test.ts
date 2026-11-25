@@ -32,6 +32,32 @@ test('paquete: lo que falta en el sistema se toma de Tienda Nube', async () => {
   assert.deepEqual(tnDimensions(null), { weight: 0, height: 0, width: 0, depth: 0 });
 });
 
+test('categorias genericas: "Otros" no se usa para publicar', async () => {
+  const { isGenericCategory, pickPrediction, summarizeAudit } = await import('../src/mercadolibre/massPure.js');
+  assert.equal(isGenericCategory('Juegos y Juguetes > Otros'), true);
+  assert.equal(isGenericCategory('Juegos y Juguetes > Arte y Manualidades > Otros'), true);
+  assert.equal(isGenericCategory('Otras'), true);
+  assert.equal(isGenericCategory('Juegos y Juguetes > Vehículos de Juguete > Autos'), false);
+  assert.equal(isGenericCategory('Juegos y Juguetes > Otros Juegos de Mesa'), true); // ultimo tramo empieza con "Otros"
+  assert.equal(isGenericCategory(null), false);
+  const preds = [{ categoryId: 'MLA1910', categoryName: 'Otros' }, { categoryId: 'MLA3655', categoryName: 'Autos de Juguete' }];
+  assert.equal(pickPrediction(preds)?.categoryId, 'MLA3655');
+  assert.equal(pickPrediction([{ categoryId: 'MLA1910', categoryName: 'Otros' }])?.categoryId, 'MLA1910'); // si solo hay generica, esa
+  assert.equal(pickPrediction([]), null);
+
+  const row = (o: any) => ({ itemId: 'i', productId: 'p', name: 'n', code: 'c', status: 'active', subStatus: [], finalized: false, categoryId: 'A', categoryName: 'X > Autos', genericCategory: false, shippingMode: 'me2', logisticType: 'drop_off', freeShipping: false, localPickUp: true, pictures: 1, attributes: 4, price: 1, qty: 1, listingType: 'gold_special', catalogListing: false, health: null, permalink: null, titleLength: 30, tags: [], ...o });
+  const s = summarizeAudit([
+    row({}),
+    row({ categoryId: 'G', categoryName: 'X > Otros', genericCategory: true }),
+    row({ status: 'under_review', subStatus: ['forbidden'], finalized: true, categoryId: 'G', categoryName: 'X > Otros', genericCategory: true }),
+    row({ status: 'paused', subStatus: ['picture_download_pending'], pictures: 4 }),
+  ]);
+  assert.equal(s.total, 4); assert.equal(s.finalized, 1); assert.equal(s.finalizedGeneric, 1);
+  assert.equal(s.live, 3); assert.equal(s.liveInGeneric, 1); assert.equal(s.picturePending, 1);
+  assert.deepEqual(s.pictures, { one: 2, twoOrThree: 0, fourPlus: 1, none: 0 });
+  assert.equal(s.finalizedByCategory[0].categoryId, 'G');
+});
+
 // Modelo de lo que cobra ML medido el 2026-11-24: 13,5% + fijo por tramos; desde $33.000 no hay
 // fijo pero el envio gratis ($8.091) corre por cuenta del vendedor.
 const TH = 33000;

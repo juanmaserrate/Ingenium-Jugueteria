@@ -283,3 +283,57 @@ export function isHardStop(res: any): boolean {
   const list = Array.isArray(res?.details) ? res.details : [res?.details];
   return list.some((d: any) => d && typeof d === 'object' && [401, 403, 429].includes(Number(d.status)));
 }
+
+// --- Categorías genéricas ---
+// Mercado Libre da de baja ("categoría incorrecta") lo publicado en una categoría "Otros" cuando
+// existe una específica. Una categoría es genérica si su último tramo es "Otros/Otras".
+export function isGenericCategory(pathOrName: string | null | undefined): boolean {
+  const last = String(pathOrName ?? '').split('>').pop()!.trim();
+  return /^otr[oa]s\b/i.test(last);
+}
+
+// De las categorías que predice ML para un título, la primera que no sea genérica.
+export function pickPrediction<T extends { categoryId?: string; categoryName?: string | null }>(preds: T[] | null | undefined): T | null {
+  const list = (preds || []).filter((p) => p && p.categoryId);
+  return list.find((p) => !isGenericCategory(p.categoryName)) ?? list[0] ?? null;
+}
+
+// --- Auditoría de publicaciones ---
+export type AuditRow = {
+  itemId: string; productId: string; name: string; code: string;
+  status: string; subStatus: string[]; finalized: boolean;
+  categoryId: string; categoryName: string; genericCategory: boolean;
+  shippingMode: string | null; logisticType: string | null; freeShipping: boolean; localPickUp: boolean;
+  pictures: number; attributes: number; price: number; qty: number;
+  listingType: string | null; catalogListing: boolean; health: number | null; permalink: string | null; titleLength: number; tags: string[];
+};
+
+export function summarizeAudit(rows: AuditRow[]) {
+  const count = (keyOf: (r: AuditRow) => string) => {
+    const m: Record<string, number> = {};
+    for (const r of rows) { const k = keyOf(r); m[k] = (m[k] || 0) + 1; }
+    return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([key, n]) => ({ key, n }));
+  };
+  const live = rows.filter((r) => r.status === 'active' || r.status === 'paused');
+  const finalized = rows.filter((r) => r.finalized);
+  const byCat = (list: AuditRow[]) => {
+    const m = new Map<string, { categoryId: string; categoryName: string; n: number }>();
+    for (const r of list) { const e = m.get(r.categoryId) ?? { categoryId: r.categoryId, categoryName: r.categoryName, n: 0 }; e.n++; m.set(r.categoryId, e); }
+    return [...m.values()].sort((a, b) => b.n - a.n);
+  };
+  return {
+    total: rows.length,
+    byStatus: count((r) => r.status + (r.subStatus.length ? ` (${r.subStatus.join(' ')})` : '')),
+    finalized: finalized.length,
+    finalizedGeneric: finalized.filter((r) => r.genericCategory).length,
+    finalizedByCategory: byCat(finalized).slice(0, 30),
+    // Siguen vivas pero en una categoría genérica: en riesgo de que ML también las dé de baja.
+    liveInGeneric: live.filter((r) => r.genericCategory).length,
+    liveInGenericByCategory: byCat(live.filter((r) => r.genericCategory)).slice(0, 30),
+    shipping: count((r) => (r.status === 'active' || r.status === 'paused' ? `${r.shippingMode ?? 'sin dato'}${r.logisticType ? ' / ' + r.logisticType : ''}${r.freeShipping ? ' / envío gratis' : ''}` : 'no aplica')),
+    pictures: { one: live.filter((r) => r.pictures === 1).length, twoOrThree: live.filter((r) => r.pictures === 2 || r.pictures === 3).length, fourPlus: live.filter((r) => r.pictures >= 4).length, none: live.filter((r) => r.pictures === 0).length },
+    fewAttributes: live.filter((r) => r.attributes <= 5).length,
+    live: live.length,
+    picturePending: rows.filter((r) => r.subStatus.includes('picture_download_pending')).length,
+  };
+}

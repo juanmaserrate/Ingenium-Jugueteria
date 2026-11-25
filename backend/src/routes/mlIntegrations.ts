@@ -19,6 +19,7 @@ import { listQuestions, countUnanswered, answerQuestion } from '../mercadolibre/
 import { flexSchedule } from '../mercadolibre/questionsPure.js';
 import { massStatus, massList, massStop, startAnalysis, startPublish, setSchedule, cancelSchedule, pricePreview } from '../mercadolibre/massPublish.js';
 import { profitSample } from '../mercadolibre/profit.js';
+import { startAudit, auditStatus, auditRows, unlinkFinalized } from '../mercadolibre/audit.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -409,6 +410,16 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       catch (err: any) { return reply.status(502).send({ error: 'ml_preview_failed', details: { status: err?.response?.status ?? null, message: err?.response?.data?.message ?? err?.message } }); }
     });
     r.post('/ml-mass/stop', adminOnly, async () => massStop());
+    // Auditoría: estado real en ML de las publicaciones vinculadas (solo lee).
+    r.post('/ml-mass/audit', adminOnly, async (req) => {
+      const b = z.object({ since: z.string().optional() }).parse(req.body ?? {});
+      const since = b.since ? new Date(b.since) : null;
+      return startAudit(since && Number.isFinite(since.getTime()) ? since : null);
+    });
+    r.get('/ml-mass/audit', adminOnly, async () => auditStatus());
+    r.get('/ml-mass/audit/rows', adminOnly, async (req) => auditRows((req.query as any).filter));
+    // Desvincula lo que ML dio de baja para poder publicarlo de nuevo bien categorizado.
+    r.post('/ml-mass/unlink-finalized', adminOnly, async () => unlinkFinalized());
     // Simulador de ganancia: muestra de productos sin publicar con la comisión real de ML.
     r.get('/ml-mass/profit-sample', adminOnly, async (req, reply) => {
       const q = req.query as { n?: string; markupPct?: string; logistic?: string };

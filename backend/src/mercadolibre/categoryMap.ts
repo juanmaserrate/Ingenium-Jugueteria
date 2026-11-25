@@ -10,6 +10,7 @@ import { ValidationError } from '../utils/errors.js';
 const SITE = 'MLA';
 
 export { tallyPredictions } from './pure.js';
+import { isGenericCategory } from './massPure.js';
 import { tallyPredictions, pickSpread, tallyListingCategories } from './pure.js';
 import { buildSyncPlan } from './syncExisting.js';
 
@@ -130,20 +131,21 @@ export async function mappedMlCategoryForProduct(productId: string): Promise<str
 }
 
 // Categoría ML mapeada + los datos fijos que ML exige ahí (si se cargaron).
-export async function mappedMlForProduct(productId: string): Promise<{ categoryId: string; attributes: Array<{ id: string; value_name: string }> } | null> {
+export async function mappedMlForProduct(productId: string): Promise<{ categoryId: string; attributes: Array<{ id: string; value_name: string }>; generic: boolean } | null> {
   const p = await prisma.product.findUnique({
     where: { id: productId },
     select: {
-      category: { select: { mlCategoryId: true, mlDefaultAttrs: true } },
-      subcategory: { select: { mlCategoryId: true } },
+      category: { select: { mlCategoryId: true, mlCategoryName: true, mlDefaultAttrs: true } },
+      subcategory: { select: { mlCategoryId: true, mlCategoryName: true } },
     },
   });
-  if (p?.subcategory?.mlCategoryId) return { categoryId: p.subcategory.mlCategoryId, attributes: [] };
+  if (p?.subcategory?.mlCategoryId) return { categoryId: p.subcategory.mlCategoryId, attributes: [], generic: isGenericCategory(p.subcategory.mlCategoryName) };
   if (!p?.category?.mlCategoryId) return null;
   const raw = Array.isArray(p.category.mlDefaultAttrs) ? (p.category.mlDefaultAttrs as any[]) : [];
   return {
     categoryId: p.category.mlCategoryId,
     attributes: raw.filter((a) => a?.id && a?.value_name).map((a) => ({ id: String(a.id), value_name: String(a.value_name) })),
+    generic: isGenericCategory(p.category.mlCategoryName),
   };
 }
 

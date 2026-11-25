@@ -6,7 +6,7 @@ import { enqueueSync } from '../sync/queue.js';
 import { STORE_SALE_TERMS, applyStoreTermsToItem } from './terms.js';
 import { mappedMlForProduct } from './categoryMap.js';
 import { isValidGtin } from './pure.js';
-import { priceWithFactor } from './massPure.js';
+import { priceWithFactor, pickPrediction } from './massPure.js';
 
 // Publicación de productos del sistema en Mercado Libre (Fase 3). Es la parte más delicada:
 // crea contenido real en la cuenta. NADA se publica solo — lo dispara el usuario desde la UI.
@@ -95,7 +95,9 @@ export async function publishProduct(input: PublishInput): Promise<any> {
     productId = v?.productId;
   }
   const mapped = productId ? await mappedMlForProduct(productId).catch(() => null) : null;
-  if (!mapped) return publishProductCore(input);
+  // Sin mapeo, o mapeada a una categoría genérica ("... > Otros"): ML da de baja lo publicado
+  // ahí por "categoría incorrecta", así que se usa la que predice ML para ese producto.
+  if (!mapped || mapped.generic) return publishProductCore(input);
   // Datos fijos de la categoría (ej. "Tipo de mochila"): lo que mande el form tiene prioridad.
   const sent = new Set((input.attributes || []).map((a) => a.id));
   const attributes = [...(input.attributes || []), ...mapped.attributes.filter((a) => !sent.has(a.id))];
@@ -160,7 +162,7 @@ async function publishProductCore(input: PublishInput): Promise<any> {
   let categoryId = input.categoryId;
   if (!categoryId) {
     const preds = await predictCategory(title);
-    categoryId = preds[0]?.categoryId;
+    categoryId = pickPrediction(preds)?.categoryId;
   }
   if (!categoryId) return { error: 'no_category', message: 'No se pudo determinar la categoría; elegila manualmente' };
 
@@ -436,4 +438,12 @@ async function publishProductCore(input: PublishInput): Promise<any> {
     await enqueueSync('ml_push_stock', { variantId: variant.id });
     return { ok: true, itemId, permalink: r.created.permalink ?? null, status: r.created.status ?? null, variations: 0, mode: 'simple' };
   }
+}
+
+// Categoría de ML que va a usar la publicación de un producto (misma regla que publishProduct):
+// la mapeada si es específica; si no hay o es genérica, la que predice ML por el título.
+export async function resolveMlCategory(productId: string, title: string): Promise<string | null> {
+  const mapped = await mappedMlForProduct(productId).catch(() => null);
+  if (mapped && !mapped.generic) return mapped.categoryId;
+  return pickPrediction(await predictCategory(title.slice(0, 60)))?.categoryId ?? null;
 }

@@ -6,8 +6,7 @@ import { isValidGtin } from './pure.js';
 import { classifyForMl, publishFailureReason, isHardStop, packageFor, packageAttributes, tnDimensions, mergeDimensions, type MassProduct, type MassStatus } from './massPure.js';
 import { getTnClient } from '../tiendanube/client.js';
 import { requireMlClient } from './client.js';
-import { mappedMlForProduct } from './categoryMap.js';
-import { predictCategory } from './publish.js';
+import { resolveMlCategory } from './publish.js';
 import { newPricingCtx, targetPriceFor, type PricingCtx } from './pricing.js';
 
 // Publicación MASIVA del stock en Mercado Libre. Dos pasos, los dos lanzados por el dueño:
@@ -299,8 +298,7 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
             if (!integ?.mlUserId) throw new Error('Mercado Libre no está conectado');
             ctx = await newPricingCtx(await requireMlClient(), integ.mlUserId, listingTypeId);
           }
-          const mapped = await mappedMlForProduct(item.productId).catch(() => null);
-          const categoryId = mapped?.categoryId ?? (await predictCategory(p.name.slice(0, 60)))[0]?.categoryId;
+          const categoryId = await resolveMlCategory(item.productId, p.name);
           if (!categoryId) throw new Error('No se pudo determinar la categoría para calcular el precio');
           const bases = [...new Set([p.price, ...p.variants.map((v) => Number(v.priceOverride) || 0)].filter((x) => x > 0))];
           priceByBase = {};
@@ -485,8 +483,7 @@ export async function pricePreview(n = 10, minPrice = 0) {
   const rows: any[] = [];
   for (const p of sample) {
     try {
-      const mapped = await mappedMlForProduct(p.id).catch(() => null);
-      const categoryId = mapped?.categoryId ?? (await predictCategory(p.name.slice(0, 60)))[0]?.categoryId;
+      const categoryId = await resolveMlCategory(p.id, p.name);
       if (!categoryId) { rows.push({ code: p.code, name: p.name, storePrice: p.price, error: 'sin categoría' }); continue; }
       const dims = await dimensionsFor(p);
       const pkg = packageFor(dims);
