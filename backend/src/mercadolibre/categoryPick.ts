@@ -56,3 +56,23 @@ export async function pickSpecificCategory(genericCategoryId: string, title: str
   const best = chooseSpecificCategory(parentIds, cands);
   return best ? { categoryId: best.categoryId, path: best.pathNames.join(' > ') } : null;
 }
+
+// Categorías específicas que sugiere ML para un nombre (sin filtrar por rama), para que una
+// persona elija. Las genéricas ("Otros") se descartan.
+export async function categoryCandidates(title: string, n = 4): Promise<Array<{ categoryId: string; path: string }>> {
+  const name = String(title || '').slice(0, 60).trim();
+  if (!name) return [];
+  const ml = await requireMlClient();
+  let preds: any[] = [];
+  try { const res = await ml.predictCategory(SITE, name, 8); preds = Array.isArray(res) ? res : []; } catch { return []; }
+  const out: Array<{ categoryId: string; path: string }> = [];
+  for (const p of preds) {
+    const id = String(p?.category_id ?? '');
+    if (!id || out.some((o) => o.categoryId === id)) continue;
+    const info = await catInfo(id);
+    if (!info || /^otr[oa]s/i.test(info.pathNames[info.pathNames.length - 1])) continue;
+    out.push({ categoryId: id, path: info.pathNames.join(' > ') });
+    if (out.length >= n) break;
+  }
+  return out;
+}

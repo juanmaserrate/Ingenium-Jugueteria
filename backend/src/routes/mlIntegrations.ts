@@ -441,6 +441,15 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       try { const { requireMlClient } = await import('../mercadolibre/client.js'); return await (await requireMlClient()).getItem(id); }
       catch (err: any) { return reply.status(502).send({ error: 'ml_error', status: err?.response?.status ?? null, details: err?.response?.data ?? err?.message }); }
     });
+    // Categorías candidatas de ML para una lista de productos (solo lee): para elegir a mano.
+    r.post('/ml-mass/category-candidates', adminOnly, async (req) => {
+      const b = z.object({ productIds: z.array(z.string().max(60)).min(1).max(80) }).parse(req.body ?? {});
+      const { categoryCandidates } = await import('../mercadolibre/categoryPick.js');
+      const prods = await prisma.product.findMany({ where: { id: { in: b.productIds } }, select: { id: true, name: true } });
+      const out: Array<{ productId: string; name: string; candidates: Array<{ categoryId: string; path: string }> }> = [];
+      for (const p of prods) out.push({ productId: p.id, name: p.name, candidates: await categoryCandidates(p.name, 4) });
+      return out;
+    });
     r.get('/ml-mass/repair', adminOnly, async (req) => repairStatus((req.query as any).rows === '1'));
     r.post('/ml-mass/repair/stop', adminOnly, async () => repairStop());
     // Simulador de ganancia: muestra de productos sin publicar con la comisión real de ML.
