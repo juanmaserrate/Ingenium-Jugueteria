@@ -200,7 +200,8 @@ export async function integrationsRoutes(app: FastifyInstance) {
       const p = await tn.getProduct(tnId).catch((e: any) => ({ error: e?.response?.status || String(e?.message || e) }));
       if ((p as any)?.error) return p;
       const variants = ((p as any).variants || []).map((v: any) => ({ id: v.id, price: v.price, promotional_price: v.promotional_price, sku: v.sku, barcode: v.barcode }));
-      return { tnProductId: tnId, name: (p as any).name, variants };
+      const images = Array.isArray((p as any).images) ? (p as any).images.length : 0;
+      return { tnProductId: tnId, name: (p as any).name, variants, images };
     });
     // Diagnóstico: fulfillment-orders de una orden TN (para verificar el modelo de armado/envío).
     r.get('/integrations/tiendanube/order/:id/fulfillment-orders', adminOnly, async (req) => {
