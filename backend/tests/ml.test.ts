@@ -58,6 +58,44 @@ test('categorias genericas: "Otros" no se usa para publicar', async () => {
   assert.equal(s.finalizedByCategory[0].categoryId, 'G');
 });
 
+test('arreglos: que publicaciones entran en cada accion y que datos faltan para cambiar de categoria', async () => {
+  const { repairTargets, missingForCategory, mlErrorText } = await import('../src/mercadolibre/repairPure.js');
+  const row = (o: any) => ({ itemId: 'i', productId: 'p', name: 'n', code: 'c', status: 'active', subStatus: [], finalized: false, categoryId: 'A', categoryName: 'X > Autos', genericCategory: false, shippingMode: 'me2', logisticType: 'drop_off', freeShipping: false, localPickUp: true, pictures: 1, attributes: 4, price: 1, qty: 1, listingType: 'gold_special', catalogListing: false, health: null, permalink: null, titleLength: 30, tags: [], ...o });
+  const rows = [
+    row({ itemId: 'ok' }),
+    row({ itemId: 'otros', genericCategory: true }),
+    row({ itemId: 'otrosPausada', status: 'paused', subStatus: ['picture_download_pending'], genericCategory: true }),
+    row({ itemId: 'pausada', status: 'paused', subStatus: ['picture_download_pending'] }),
+    row({ itemId: 'pausadaPorMi', status: 'paused', subStatus: [] }),
+    row({ itemId: 'baja', status: 'under_review', subStatus: ['forbidden'], finalized: true, genericCategory: true }),
+    row({ itemId: 'parche', status: 'under_review', subStatus: ['waiting_for_patch'], genericCategory: true }),
+  ];
+  assert.deepEqual(repairTargets(rows, 'reactivate').map((r) => r.itemId), ['otrosPausada', 'pausada']); // no las que pauso el dueño
+  assert.deepEqual(repairTargets(rows, 'recategorize').map((r) => r.itemId), ['otros', 'otrosPausada']); // ni las dadas de baja ni en revision
+  assert.deepEqual(repairTargets(rows, 'republish').map((r) => r.itemId), ['baja']);
+
+  const schema = [
+    { id: 'BRAND', name: 'Marca', value_type: 'string', tags: { required: true }, values: [{ id: '1', name: 'Mattel' }] },
+    { id: 'MODEL', name: 'Modelo', value_type: 'string', tags: { catalog_required: true } },
+    { id: 'GENDER', name: 'Género', value_type: 'list', tags: { required: true }, values: [{ id: '1', name: 'Niñas' }] },
+    { id: 'COLOR', name: 'Color', value_type: 'string', tags: {} }, // opcional: no cuenta
+    { id: 'SELLER_PACKAGE_WEIGHT', name: 'Peso', value_type: 'number_unit', tags: { required: true }, allowed_units: [{ id: 'g' }] },
+    { id: 'GTIN', name: 'Código', value_type: 'string', tags: { required: true } },
+  ];
+  // La publicacion ya tiene genero: se completa marca (del producto) y modelo (con el nombre).
+  const a = missingForCategory(schema, [{ id: 'GENDER', value_name: 'Niñas' }], { title: 'Auto rojo', brand: 'Mattel' });
+  assert.deepEqual(a.fill, [{ id: 'BRAND', value_name: 'Mattel' }, { id: 'MODEL', value_name: 'Auto rojo' }]);
+  assert.deepEqual(a.blocking, []);
+  // Sin genero y sin marca: no se puede pasar sola.
+  const b = missingForCategory(schema, [{ id: 'GENDER', value_name: null }], { title: 'Auto rojo', brand: null });
+  assert.deepEqual(b.blocking, ['Marca', 'Género']);
+  assert.deepEqual(missingForCategory(null, null, { title: 'x' }), { fill: [], blocking: [] });
+
+  assert.equal(mlErrorText({ response: { status: 400, data: { message: 'Validation error', cause: [{ type: 'warning', message: 'aviso' }, { type: 'error', message: 'Category is not modifiable' }] } } }), 'Category is not modifiable (400)');
+  assert.equal(mlErrorText({ response: { status: 403, data: { message: 'forbidden' } } }), 'forbidden (403)');
+  assert.equal(mlErrorText(new Error('timeout')), 'timeout');
+});
+
 // Modelo de lo que cobra ML medido el 2026-11-24: 13,5% + fijo por tramos; desde $33.000 no hay
 // fijo pero el envio gratis ($8.091) corre por cuenta del vendedor.
 const TH = 33000;

@@ -6,7 +6,7 @@ import { isValidGtin } from './pure.js';
 import { classifyForMl, publishFailureReason, isHardStop, packageFor, packageAttributes, tnDimensions, mergeDimensions, type MassProduct, type MassStatus } from './massPure.js';
 import { getTnClient } from '../tiendanube/client.js';
 import { requireMlClient } from './client.js';
-import { resolveMlCategory } from './publish.js';
+import { resolveMlCategory, resolveMlCategoryInfo } from './publish.js';
 import { newPricingCtx, targetPriceFor, type PricingCtx } from './pricing.js';
 
 // Publicación MASIVA del stock en Mercado Libre. Dos pasos, los dos lanzados por el dueño:
@@ -75,7 +75,7 @@ export function isPackageRejection(res: any): boolean {
 
 // Peso y medidas del paquete: los del producto; lo que falte, de su publicación de Tienda Nube.
 type Dims = { weight?: number | null; height?: number | null; width?: number | null; depth?: number | null };
-async function dimensionsFor(p: Dims & { tnMapping?: { tnProductId: string } | null }) {
+export async function dimensionsFor(p: Dims & { tnMapping?: { tnProductId: string } | null }) {
   const complete = [p.weight, p.height, p.width, p.depth].every((x) => Number(x) > 0);
   if (complete || !p.tnMapping?.tnProductId) return mergeDimensions(p, null);
   try {
@@ -83,6 +83,61 @@ async function dimensionsFor(p: Dims & { tnMapping?: { tnProductId: string } | n
     if (!tn) return mergeDimensions(p, null);
     return mergeDimensions(p, tnDimensions(await tn.getProduct(p.tnMapping.tnProductId)));
   } catch { return mergeDimensions(p, null); }
+}
+
+// Publica UN producto con las reglas de la publicación masiva: precio (para ganar lo mismo que
+// en el local, o con recargo fijo), paquete (el del producto → Tienda Nube → estándar) y, si se
+// pide, solo en una categoría específica. Lo usan la publicación masiva y los arreglos.
+export type PublishOneOpts = { listingTypeId: string; pricing: 'target' | 'factor'; priceFactor: number; minPrice?: number; requireSpecific?: boolean };
+export type PricingHolder = { ctx: PricingCtx | null };
+export async function pricingCtxOf(holder: PricingHolder, listingTypeId: string): Promise<PricingCtx> {
+  if (!holder.ctx) {
+    const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
+    if (!integ?.mlUserId) throw new Error('Mercado Libre no está conectado');
+    holder.ctx = await newPricingCtx(await requireMlClient(), integ.mlUserId, listingTypeId);
+  }
+  return holder.ctx;
+}
+export async function publishOne(productId: string, o: PublishOneOpts, holder: PricingHolder): Promise<{ res: any; storePrice?: number; mlPrice?: number; belowMin?: boolean }> {
+  const p = await prisma.product.findUnique({
+    where: { id: productId },
+    select: { name: true, price: true, weight: true, width: true, height: true, depth: true, tnMapping: { select: { tnProductId: true } }, variants: { select: { priceOverride: true } } },
+  });
+  if (!p) throw new Error('Producto no encontrado');
+  const storePrice = p.price;
+  if (o.minPrice && p.price < o.minPrice) return { res: null, storePrice, belowMin: true };
+  // Nada va a una categoría "Otros": Mercado Libre lo da de baja a las horas.
+  if (o.requireSpecific) {
+    const info = await resolveMlCategoryInfo(productId, p.name);
+    if (info?.generic) return { res: { error: 'generic_category', message: 'Mercado Libre no sugiere una categoría específica para este producto (solo "Otros"): hay que elegirla a mano' }, storePrice };
+  }
+  let mlPrice: number | undefined;
+  // Un intento = calcular el precio para ese paquete y publicar.
+  const attempt = async (dims: Dims) => {
+    let priceByBase: Record<string, number> | undefined;
+    if (o.pricing === 'target') {
+      const ctx = await pricingCtxOf(holder, o.listingTypeId);
+      const categoryId = await resolveMlCategory(productId, p.name);
+      if (!categoryId) throw new Error('No se pudo determinar la categoría para calcular el precio');
+      const bases = [...new Set([p.price, ...p.variants.map((v) => Number(v.priceOverride) || 0)].filter((x) => x > 0))];
+      priceByBase = {};
+      for (const base of bases) {
+        const t = await targetPriceFor(ctx, { categoryId, storePrice: base, product: dims });
+        priceByBase[String(base)] = t.price;
+      }
+      mlPrice = priceByBase[String(p.price)];
+    } else {
+      mlPrice = Math.round(p.price * o.priceFactor);
+    }
+    // ML exige peso y medidas del paquete en toda publicación.
+    return publishProduct({ productId, listingTypeId: o.listingTypeId, priceFactor: o.priceFactor, priceByBase, attributes: packageAttributes(packageFor(dims)) });
+  };
+  // Paquete: lo del producto, o lo de Tienda Nube. Si ML no acepta esas medidas (pasa con
+  // valores muy chicos, ej. 15 g / 4×2×2 cm), se reintenta una vez con el paquete estándar.
+  const dims = await dimensionsFor(p);
+  let res = await attempt(dims);
+  if (isPackageRejection(res) && !packageFor(dims).assumed) res = await attempt({});
+  return { res, storePrice, mlPrice };
 }
 
 async function kvGet<T>(key: string): Promise<T | null> {
@@ -268,7 +323,7 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
   const publishedIds = new Set<string>();
   const rejected = new Map<string, Row>(); // rechazos propios del producto (no por límite de la cuenta)
   const belowMin = new Map<string, Row>();
-  let ctx: PricingCtx | null = null;
+  const holder: PricingHolder = { ctx: null };
   await kvSet(KV.report, j);
 
   for (const item of queue) {
@@ -277,47 +332,15 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
     let storePrice: number | undefined;
     let mlPrice: number | undefined;
     try {
-      const p = await prisma.product.findUnique({
-        where: { id: item.productId },
-        select: { name: true, price: true, weight: true, width: true, height: true, depth: true, tnMapping: { select: { tnProductId: true } }, variants: { select: { priceOverride: true } } },
-      });
-      if (!p) throw new Error('Producto no encontrado');
-      storePrice = p.price;
+      const one = await publishOne(item.productId, { listingTypeId, pricing, priceFactor, minPrice, requireSpecific: true }, holder);
+      storePrice = one.storePrice;
       // Los baratos no se publican sueltos: el costo fijo de ML se come la ganancia.
-      if (minPrice && p.price < minPrice) {
-        belowMin.set(item.productId, { productId: item.productId, name: item.name, code: item.code, stock: item.stock, storePrice: p.price, detail: `Precio menor al mínimo ($${minPrice.toLocaleString('es-AR')})` });
+      if (one.belowMin) {
+        belowMin.set(item.productId, { productId: item.productId, name: item.name, code: item.code, stock: item.stock, storePrice, detail: `Precio menor al mínimo ($${minPrice.toLocaleString('es-AR')})` });
         j.belowMin++; j.done++;
         continue;
       }
-      // Un intento = calcular el precio para ese paquete y publicar.
-      const attempt = async (dims: Dims) => {
-        let priceByBase: Record<string, number> | undefined;
-        if (pricing === 'target') {
-          if (!ctx) {
-            const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
-            if (!integ?.mlUserId) throw new Error('Mercado Libre no está conectado');
-            ctx = await newPricingCtx(await requireMlClient(), integ.mlUserId, listingTypeId);
-          }
-          const categoryId = await resolveMlCategory(item.productId, p.name);
-          if (!categoryId) throw new Error('No se pudo determinar la categoría para calcular el precio');
-          const bases = [...new Set([p.price, ...p.variants.map((v) => Number(v.priceOverride) || 0)].filter((x) => x > 0))];
-          priceByBase = {};
-          for (const base of bases) {
-            const t = await targetPriceFor(ctx, { categoryId, storePrice: base, product: dims });
-            priceByBase[String(base)] = t.price;
-          }
-          mlPrice = priceByBase[String(p.price)];
-        } else {
-          mlPrice = Math.round(p.price * priceFactor);
-        }
-        // ML exige peso y medidas del paquete en toda publicación.
-        return publishProduct({ productId: item.productId, listingTypeId, priceFactor, priceByBase, attributes: packageAttributes(packageFor(dims)) });
-      };
-      // Paquete: lo del producto, o lo de Tienda Nube. Si ML no acepta esas medidas (pasa con
-      // valores muy chicos, ej. 15 g / 4×2×2 cm), se reintenta una vez con el paquete estándar.
-      const dims = await dimensionsFor(p);
-      res = await attempt(dims);
-      if (isPackageRejection(res) && !packageFor(dims).assumed) res = await attempt({});
+      res = one.res; mlPrice = one.mlPrice;
     } catch (err: any) {
       const data = err?.response?.data;
       res = { error: 'ml_rejected', details: data ?? { message: err?.message, status: err?.response?.status } };

@@ -20,6 +20,7 @@ import { flexSchedule } from '../mercadolibre/questionsPure.js';
 import { massStatus, massList, massStop, startAnalysis, startPublish, setSchedule, cancelSchedule, pricePreview } from '../mercadolibre/massPublish.js';
 import { profitSample } from '../mercadolibre/profit.js';
 import { startAudit, auditStatus, auditRows, unlinkFinalized } from '../mercadolibre/audit.js';
+import { startRepair, repairStatus, repairStop } from '../mercadolibre/repair.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -420,6 +421,20 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
     r.get('/ml-mass/audit/rows', adminOnly, async (req) => auditRows((req.query as any).filter));
     // Desvincula lo que ML dio de baja para poder publicarlo de nuevo bien categorizado.
     r.post('/ml-mass/unlink-finalized', adminOnly, async () => unlinkFinalized());
+    // Arreglos sobre lo publicado (a partir de la última auditoría): reactivar las pausadas por
+    // fotos, pasar a su categoría las que están en "Otros", republicar las dadas de baja.
+    // dryRun = solo muestra qué haría.
+    r.post('/ml-mass/repair', adminOnly, async (req) => {
+      const b = z.object({
+        action: z.enum(['reactivate', 'recategorize', 'republish']),
+        dryRun: z.boolean().optional(),
+        limit: z.number().int().positive().max(5000).nullable().optional(),
+        itemIds: z.array(z.string().max(30)).max(2000).optional(),
+      }).parse(req.body ?? {});
+      return startRepair(b);
+    });
+    r.get('/ml-mass/repair', adminOnly, async (req) => repairStatus((req.query as any).rows === '1'));
+    r.post('/ml-mass/repair/stop', adminOnly, async () => repairStop());
     // Simulador de ganancia: muestra de productos sin publicar con la comisión real de ML.
     r.get('/ml-mass/profit-sample', adminOnly, async (req, reply) => {
       const q = req.query as { n?: string; markupPct?: string; logistic?: string };

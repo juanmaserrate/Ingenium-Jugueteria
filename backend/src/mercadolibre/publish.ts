@@ -6,7 +6,7 @@ import { enqueueSync } from '../sync/queue.js';
 import { STORE_SALE_TERMS, applyStoreTermsToItem } from './terms.js';
 import { mappedMlForProduct } from './categoryMap.js';
 import { isValidGtin } from './pure.js';
-import { priceWithFactor, pickPrediction } from './massPure.js';
+import { priceWithFactor, pickPrediction, isGenericCategory } from './massPure.js';
 
 // Publicación de productos del sistema en Mercado Libre (Fase 3). Es la parte más delicada:
 // crea contenido real en la cuenta. NADA se publica solo — lo dispara el usuario desde la UI.
@@ -443,7 +443,15 @@ async function publishProductCore(input: PublishInput): Promise<any> {
 // Categoría de ML que va a usar la publicación de un producto (misma regla que publishProduct):
 // la mapeada si es específica; si no hay o es genérica, la que predice ML por el título.
 export async function resolveMlCategory(productId: string, title: string): Promise<string | null> {
+  return (await resolveMlCategoryInfo(productId, title))?.categoryId ?? null;
+}
+
+// Igual, pero avisa si lo único que hay es una categoría genérica ("Otros"): ahí conviene no
+// publicar, porque Mercado Libre da de baja lo que cae en esas categorías.
+export async function resolveMlCategoryInfo(productId: string, title: string): Promise<{ categoryId: string; generic: boolean; source: 'mapeada' | 'predicha' } | null> {
   const mapped = await mappedMlForProduct(productId).catch(() => null);
-  if (mapped && !mapped.generic) return mapped.categoryId;
-  return pickPrediction(await predictCategory(title.slice(0, 60)))?.categoryId ?? null;
+  if (mapped && !mapped.generic) return { categoryId: mapped.categoryId, generic: false, source: 'mapeada' };
+  const pred = pickPrediction(await predictCategory(title.slice(0, 60)));
+  if (!pred?.categoryId) return null;
+  return { categoryId: pred.categoryId, generic: isGenericCategory(pred.categoryName), source: 'predicha' };
 }

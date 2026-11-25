@@ -1,0 +1,251 @@
+import { prisma } from '../db.js';
+import { requireMlClient, type MlClient } from './client.js';
+import { auditRows, auditStatus } from './audit.js';
+import { resolveMlCategoryInfo } from './publish.js';
+import { massStatus, publishOne, pricingCtxOf, dimensionsFor, type PricingHolder } from './massPublish.js';
+import { targetPriceFor } from './pricing.js';
+import { isGenericCategory, isHardStop, publishFailureReason, type AuditRow } from './massPure.js';
+import { missingForCategory, mlErrorText, repairTargets, type RepairAction } from './repairPure.js';
+
+// ARREGLOS sobre las publicaciones que dejó la publicación masiva, a partir de la última
+// auditoría. Tres acciones, todas lanzadas por el dueño y con modo de prueba (dryRun):
+//   reactivate   → las que quedaron pausadas esperando las fotos: se vuelven a activar.
+//   recategorize → las vivas en una categoría "Otros": se pasan a la que predice ML.
+//   republish    → las que ML dio de baja: se desvinculan y se publican de nuevo, bien categorizadas.
+// Antes de tocar cada publicación se la vuelve a leer en vivo: si ya cambió, no se la toca.
+
+const KV = { collection: 'ml_mass', key: 'repair' };
+const PAUSE_MS = 250;
+const MAX_CONSECUTIVE_FAILS = 15;
+const LISTING = 'gold_special';
+
+export type RepairRow = {
+  itemId: string; productId: string; name: string;
+  result: 'ok' | 'skipped' | 'failed' | 'preview';
+  detail: string; from?: string; to?: string; newItemId?: string; link?: string | null;
+};
+type RepairJob = {
+  action: RepairAction; dryRun: boolean;
+  status: 'running' | 'done' | 'stopped' | 'error';
+  startedAt: string; finishedAt: string | null; message: string | null;
+  total: number; done: number; ok: number; skipped: number; failed: number;
+  rows: RepairRow[];
+};
+
+let job: RepairJob | null = null;
+let stopRequested = false;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function save(j: RepairJob) {
+  await prisma.kvItem.upsert({
+    where: { collection_key: { collection: KV.collection, key: KV.key } },
+    update: { value: j as any }, create: { collection: KV.collection, key: KV.key, value: j as any },
+  }).catch(() => {});
+}
+
+export async function repairStatus(withRows = false) {
+  let j: RepairJob | null = job;
+  if (!j) {
+    const row = await prisma.kvItem.findUnique({ where: { collection_key: { collection: KV.collection, key: KV.key } } }).catch(() => null);
+    const v = (row?.value as RepairJob) ?? null;
+    j = v && v.status === 'running' ? { ...v, status: 'error', message: 'Se interrumpió (el servidor se reinició). Se puede volver a lanzar.' } : v;
+  }
+  if (!j) return null;
+  return withRows ? j : { ...j, rows: undefined };
+}
+
+export function repairStop() {
+  if (job?.status === 'running') stopRequested = true;
+  return { ok: true };
+}
+
+export async function startRepair(input: { action: RepairAction; dryRun?: boolean; limit?: number | null; itemIds?: string[] }) {
+  if (job?.status === 'running') return { started: false, reason: 'Ya hay un arreglo corriendo' };
+  const mass = await massStatus();
+  if (mass.job?.status === 'running') return { started: false, reason: 'Hay una publicación masiva corriendo' };
+  const a = await auditStatus();
+  if (!a || a.status !== 'done') return { started: false, reason: 'Primero hay que correr la auditoría' };
+
+  let targets = repairTargets(await auditRows(), input.action);
+  if (input.itemIds?.length) { const only = new Set(input.itemIds); targets = targets.filter((r) => only.has(r.itemId)); }
+  if (input.limit && input.limit > 0) targets = targets.slice(0, Math.floor(input.limit));
+  if (!targets.length) return { started: false, reason: 'No hay publicaciones para esa acción en la última auditoría' };
+
+  job = {
+    action: input.action, dryRun: !!input.dryRun, status: 'running', startedAt: new Date().toISOString(), finishedAt: null,
+    message: null, total: targets.length, done: 0, ok: 0, skipped: 0, failed: 0, rows: [],
+  };
+  stopRequested = false;
+  const mine = job;
+  void run(mine, targets).catch(async (err) => {
+    mine.status = 'error'; mine.finishedAt = new Date().toISOString(); mine.message = String(err?.message ?? 'error');
+    await save(mine);
+  });
+  return { started: true, total: targets.length };
+}
+
+type Ctx = {
+  ml: MlClient;
+  holder: PricingHolder;
+  catPath: (id: string) => Promise<string>;
+  catAttrs: (id: string) => Promise<any[]>;
+};
+
+async function run(j: RepairJob, targets: AuditRow[]) {
+  const ml = await requireMlClient();
+  const paths = new Map<string, string>();
+  const schemas = new Map<string, any[]>();
+  const ctx: Ctx = {
+    ml, holder: { ctx: null },
+    catPath: async (id) => {
+      if (!paths.has(id)) {
+        try { const c: any = await ml.getCategory(id); paths.set(id, (Array.isArray(c?.path_from_root) ? c.path_from_root.map((x: any) => x.name).join(' > ') : c?.name) || id); }
+        catch { paths.set(id, id); }
+      }
+      return paths.get(id)!;
+    },
+    catAttrs: async (id) => {
+      if (!schemas.has(id)) { try { schemas.set(id, (await ml.getCategoryAttributes(id)) || []); } catch { schemas.set(id, []); } }
+      return schemas.get(id)!;
+    },
+  };
+
+  // Republicar va POR PRODUCTO: uno con variantes puede tener varias publicaciones dadas de baja.
+  const units: AuditRow[][] = [];
+  if (j.action === 'republish') {
+    const byProduct = new Map<string, AuditRow[]>();
+    for (const r of targets) { const l = byProduct.get(r.productId) ?? []; l.push(r); byProduct.set(r.productId, l); }
+    units.push(...byProduct.values());
+    j.total = units.length;
+  } else {
+    for (const r of targets) units.push([r]);
+  }
+
+  let consecutive = 0;
+  let hard = 0;
+  for (const unit of units) {
+    if (stopRequested) { j.status = 'stopped'; j.message = 'Frenado a mano. Se puede volver a lanzar: lo ya arreglado no se repite.'; break; }
+    const first = unit[0];
+    let row: RepairRow;
+    try {
+      row = j.action === 'reactivate' ? await reactivate(ctx, first, j.dryRun)
+        : j.action === 'recategorize' ? await recategorize(ctx, first, j.dryRun)
+          : await republish(ctx, unit, j.dryRun);
+    } catch (err: any) {
+      const status = Number(err?.response?.status);
+      if ([401, 403, 429].includes(status)) hard++;
+      row = { itemId: first.itemId, productId: first.productId, name: first.name, result: 'failed', detail: mlErrorText(err) };
+    }
+    j.rows.push(row);
+    if (row.result === 'failed') { j.failed++; consecutive++; }
+    else { consecutive = 0; hard = 0; if (row.result === 'skipped') j.skipped++; else j.ok++; }
+    j.done++;
+    if (hard >= 3) { j.status = 'stopped'; j.message = 'Mercado Libre está rechazando por límite o permisos de la cuenta. Se frenó solo.'; break; }
+    if (consecutive >= MAX_CONSECUTIVE_FAILS) { j.status = 'stopped'; j.message = `Se frenó solo: ${MAX_CONSECUTIVE_FAILS} fallos seguidos. Revisá el detalle antes de seguir.`; break; }
+    if (j.done % 25 === 0) await save(j);
+    await sleep(PAUSE_MS);
+  }
+  if (j.status === 'running') j.status = 'done';
+  j.finishedAt = new Date().toISOString();
+  await save(j);
+}
+
+const base = (r: AuditRow) => ({ itemId: r.itemId, productId: r.productId, name: r.name });
+
+// 1) Pausada esperando las fotos → activar.
+async function reactivate(ctx: Ctx, r: AuditRow, dryRun: boolean): Promise<RepairRow> {
+  const it: any = await ctx.ml.getItem(r.itemId);
+  const sub: string[] = Array.isArray(it?.sub_status) ? it.sub_status.map(String) : [];
+  if (it?.status === 'active') return { ...base(r), result: 'skipped', detail: 'Ya estaba activa' };
+  if (it?.status !== 'paused') return { ...base(r), result: 'skipped', detail: `Estado ${it?.status}${sub.length ? ' (' + sub.join(' ') + ')' : ''}: no se toca` };
+  if (dryRun) return { ...base(r), result: 'preview', detail: `Pausada (${sub.join(' ') || 'sin motivo'}): se activaría`, link: it?.permalink ?? null };
+  const u: any = await ctx.ml.updateItem(r.itemId, { status: 'active' });
+  const subAfter: string[] = Array.isArray(u?.sub_status) ? u.sub_status.map(String) : [];
+  if (u?.status === 'active') return { ...base(r), result: 'ok', detail: 'Activada', link: it?.permalink ?? null };
+  return { ...base(r), result: 'failed', detail: `Mercado Libre la dejó en ${u?.status}${subAfter.length ? ' (' + subAfter.join(' ') + ')' : ''}` };
+}
+
+// 2) Viva en una categoría "Otros" → pasarla a la que predice ML para ese producto. Si la
+//    categoría nueva cobra otra comisión, se ajusta el precio para que siga quedando lo mismo.
+async function recategorize(ctx: Ctx, r: AuditRow, dryRun: boolean): Promise<RepairRow> {
+  const it: any = await ctx.ml.getItem(r.itemId);
+  if (it?.status !== 'active' && it?.status !== 'paused') return { ...base(r), result: 'skipped', detail: `Estado ${it?.status}: no se toca` };
+  const from = await ctx.catPath(String(it.category_id));
+  if (!isGenericCategory(from)) return { ...base(r), result: 'skipped', detail: 'Ya está en una categoría específica', from };
+  const product = await prisma.product.findUnique({
+    where: { id: r.productId },
+    select: { name: true, price: true, weight: true, width: true, height: true, depth: true, brand: { select: { name: true } }, tnMapping: { select: { tnProductId: true } } },
+  });
+  if (!product) return { ...base(r), result: 'skipped', detail: 'El producto ya no existe en el sistema', from };
+  const info = await resolveMlCategoryInfo(r.productId, product.name);
+  if (!info || info.generic) return { ...base(r), result: 'skipped', detail: 'Mercado Libre no sugiere una categoría específica: hay que elegirla a mano', from };
+  if (info.categoryId === String(it.category_id)) return { ...base(r), result: 'skipped', detail: 'La categoría sugerida es la misma', from };
+  const to = await ctx.catPath(info.categoryId);
+  if (isGenericCategory(to)) return { ...base(r), result: 'skipped', detail: 'La categoría sugerida también es genérica', from, to };
+
+  // Datos obligatorios de la categoría nueva que la publicación todavía no tiene.
+  const title = String(it.family_name || it.title || product.name).slice(0, 60);
+  const need = missingForCategory(await ctx.catAttrs(info.categoryId), it.attributes, { title, brand: product.brand?.name ?? null });
+  if (need.blocking.length) return { ...base(r), result: 'skipped', detail: `La categoría nueva pide datos que no tenemos: ${need.blocking.join(', ')}`, from, to };
+  if (dryRun) return { ...base(r), result: 'preview', detail: need.fill.length ? `Se completaría: ${need.fill.map((a) => a.id).join(', ')}` : 'Cambio directo', from, to, link: it?.permalink ?? null };
+
+  await ctx.ml.updateItem(r.itemId, { category_id: info.categoryId, ...(need.fill.length ? { attributes: need.fill } : {}) });
+
+  // Precio: mismo criterio que al publicar (que quede lo mismo que en el local), con la comisión
+  // de la categoría nueva. Solo publicaciones sin variaciones de ML; cambios chicos, no saltos.
+  let priceNote = '';
+  try {
+    if (!(Array.isArray(it.variations) && it.variations.length)) {
+      const vm = await prisma.variantMeliMapping.findFirst({ where: { mlItemId: r.itemId }, select: { variant: { select: { priceOverride: true } } } });
+      const storePrice = Number(vm?.variant?.priceOverride ?? product.price) || 0;
+      if (storePrice > 0) {
+        const pctx = await pricingCtxOf(ctx.holder, String(it.listing_type_id || LISTING));
+        const t = await targetPriceFor(pctx, { categoryId: info.categoryId, storePrice, product: await dimensionsFor(product) });
+        const cur = Number(it.price) || 0;
+        const diff = Math.abs(t.price - cur);
+        if (cur > 0 && diff >= 10 && diff / cur <= 0.1) {
+          await ctx.ml.updateItem(r.itemId, { price: t.price });
+          priceNote = ` · precio ${cur} → ${t.price}`;
+        }
+      }
+    }
+  } catch (err: any) { priceNote = ` · precio sin ajustar (${mlErrorText(err).slice(0, 120)})`; }
+  return { ...base(r), result: 'ok', detail: `Categoría cambiada${priceNote}`, from, to, link: it?.permalink ?? null };
+}
+
+// 3) Dadas de baja por ML → desvincular y publicar de nuevo en una categoría específica.
+async function republish(ctx: Ctx, unit: AuditRow[], dryRun: boolean): Promise<RepairRow> {
+  const r = unit[0];
+  const dead: string[] = [];
+  for (const u of unit) {
+    const it: any = await ctx.ml.getItem(u.itemId);
+    const sub: string[] = Array.isArray(it?.sub_status) ? it.sub_status.map(String) : [];
+    if (it?.status === 'closed' || sub.includes('forbidden')) dead.push(u.itemId);
+  }
+  if (!dead.length) return { ...base(r), result: 'skipped', detail: 'Ya no figura dada de baja: no se toca' };
+  const product = await prisma.product.findUnique({ where: { id: r.productId }, select: { name: true } });
+  if (!product) return { ...base(r), result: 'skipped', detail: 'El producto ya no existe en el sistema' };
+  const info = await resolveMlCategoryInfo(r.productId, product.name);
+  if (!info || info.generic) return { ...base(r), result: 'skipped', detail: 'Mercado Libre no sugiere una categoría específica: hay que elegirla a mano', from: r.categoryName };
+  const to = await ctx.catPath(info.categoryId);
+  if (isGenericCategory(to)) return { ...base(r), result: 'skipped', detail: 'La categoría sugerida también es genérica', from: r.categoryName, to };
+  if (info.categoryId === r.categoryId) return { ...base(r), result: 'skipped', detail: 'La categoría sugerida es la misma en la que Mercado Libre la dio de baja: revisar a mano', from: r.categoryName, to };
+  if (dryRun) return { ...base(r), result: 'preview', detail: `Se publicaría de nuevo (${dead.length} ${dead.length === 1 ? 'publicación' : 'publicaciones'})`, from: r.categoryName, to };
+
+  // Desvincular las dadas de baja (en ML no se toca nada).
+  await prisma.variantMeliMapping.deleteMany({ where: { mlItemId: { in: dead } } });
+  await prisma.productMeliMapping.deleteMany({ where: { productId: r.productId, mlItemId: { in: dead } } });
+  const left = await prisma.variantMeliMapping.count({ where: { variant: { productId: r.productId } } });
+  if (left === 0) await prisma.productMeliMapping.deleteMany({ where: { productId: r.productId } });
+
+  const one = await publishOne(r.productId, { listingTypeId: LISTING, pricing: 'target', priceFactor: 1, requireSpecific: true }, ctx.holder);
+  const res = one.res;
+  if (res?.ok && !res.alreadyLinked) {
+    return { ...base(r), result: 'ok', detail: `Publicada de nuevo${Number(res.count) > 1 ? ` (${res.count} publicaciones)` : ''} a $${one.mlPrice ?? '?'}`, from: r.categoryName, to, newItemId: res.itemId, link: res.permalink ?? null };
+  }
+  if (res?.ok) return { ...base(r), result: 'skipped', detail: 'No había variantes con stock para publicar de nuevo', from: r.categoryName, to };
+  if (left === 0) await prisma.product.update({ where: { id: r.productId }, data: { publishedMeli: false } }).catch(() => null);
+  const failed: RepairRow = { ...base(r), result: 'failed', detail: publishFailureReason(res), from: r.categoryName, to };
+  if (res?.error === 'ml_rejected' && isHardStop(res)) { const e: any = new Error(failed.detail); e.response = { status: 429 }; throw e; }
+  return failed;
+}
