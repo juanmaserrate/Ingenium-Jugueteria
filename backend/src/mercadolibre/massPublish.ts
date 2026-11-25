@@ -88,7 +88,7 @@ export async function dimensionsFor(p: Dims & { tnMapping?: { tnProductId: strin
 // Publica UN producto con las reglas de la publicación masiva: precio (para ganar lo mismo que
 // en el local, o con recargo fijo), paquete (el del producto → Tienda Nube → estándar) y, si se
 // pide, solo en una categoría específica. Lo usan la publicación masiva y los arreglos.
-export type PublishOneOpts = { listingTypeId: string; pricing: 'target' | 'factor'; priceFactor: number; minPrice?: number; requireSpecific?: boolean };
+export type PublishOneOpts = { listingTypeId: string; pricing: 'target' | 'factor'; priceFactor: number; minPrice?: number; requireSpecific?: boolean; categoryId?: string };
 export type PricingHolder = { ctx: PricingCtx | null };
 export async function pricingCtxOf(holder: PricingHolder, listingTypeId: string): Promise<PricingCtx> {
   if (!holder.ctx) {
@@ -107,7 +107,7 @@ export async function publishOne(productId: string, o: PublishOneOpts, holder: P
   const storePrice = p.price;
   if (o.minPrice && p.price < o.minPrice) return { res: null, storePrice, belowMin: true };
   // Nada va a una categoría "Otros": Mercado Libre lo da de baja a las horas.
-  if (o.requireSpecific) {
+  if (o.requireSpecific && !o.categoryId) {
     const info = await resolveMlCategoryInfo(productId, p.name);
     if (info?.generic) return { res: { error: 'generic_category', message: 'Mercado Libre no sugiere una categoría específica para este producto (solo "Otros"): hay que elegirla a mano' }, storePrice };
   }
@@ -117,7 +117,7 @@ export async function publishOne(productId: string, o: PublishOneOpts, holder: P
     let priceByBase: Record<string, number> | undefined;
     if (o.pricing === 'target') {
       const ctx = await pricingCtxOf(holder, o.listingTypeId);
-      const categoryId = await resolveMlCategory(productId, p.name);
+      const categoryId = o.categoryId || (await resolveMlCategory(productId, p.name));
       if (!categoryId) throw new Error('No se pudo determinar la categoría para calcular el precio');
       const bases = [...new Set([p.price, ...p.variants.map((v) => Number(v.priceOverride) || 0)].filter((x) => x > 0))];
       priceByBase = {};
@@ -130,7 +130,7 @@ export async function publishOne(productId: string, o: PublishOneOpts, holder: P
       mlPrice = Math.round(p.price * o.priceFactor);
     }
     // ML exige peso y medidas del paquete en toda publicación.
-    return publishProduct({ productId, listingTypeId: o.listingTypeId, priceFactor: o.priceFactor, priceByBase, attributes: packageAttributes(packageFor(dims)) });
+    return publishProduct({ productId, listingTypeId: o.listingTypeId, priceFactor: o.priceFactor, priceByBase, attributes: packageAttributes(packageFor(dims)), ...(o.categoryId ? { categoryId: o.categoryId } : {}) });
   };
   // Paquete: lo del producto, o lo de Tienda Nube. Si ML no acepta esas medidas (pasa con
   // valores muy chicos, ej. 15 g / 4×2×2 cm), se reintenta una vez con el paquete estándar.

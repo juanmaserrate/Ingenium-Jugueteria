@@ -430,6 +430,7 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
         dryRun: z.boolean().optional(),
         limit: z.number().int().positive().max(5000).nullable().optional(),
         itemIds: z.array(z.string().max(30)).max(2000).optional(),
+        categoryByProduct: z.record(z.string().regex(/^MLA\d+$/)).optional(),
       }).parse(req.body ?? {});
       return startRepair(b);
     });

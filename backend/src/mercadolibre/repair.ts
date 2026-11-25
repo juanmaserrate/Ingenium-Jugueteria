@@ -60,7 +60,9 @@ export function repairStop() {
   return { ok: true };
 }
 
-export async function startRepair(input: { action: RepairAction; dryRun?: boolean; limit?: number | null; itemIds?: string[] }) {
+// categoryByProduct: categoría de ML elegida a mano para cada producto ({ productId: 'MLA…' }).
+// Si viene, solo se tocan esos productos y se usa esa categoría (no se predice nada).
+export async function startRepair(input: { action: RepairAction; dryRun?: boolean; limit?: number | null; itemIds?: string[]; categoryByProduct?: Record<string, string> }) {
   if (job?.status === 'running') return { started: false, reason: 'Ya hay un arreglo corriendo' };
   const mass = await massStatus();
   if (mass.job?.status === 'running') return { started: false, reason: 'Hay una publicación masiva corriendo' };
@@ -69,6 +71,8 @@ export async function startRepair(input: { action: RepairAction; dryRun?: boolea
 
   let targets = repairTargets(await auditRows(), input.action);
   if (input.itemIds?.length) { const only = new Set(input.itemIds); targets = targets.filter((r) => only.has(r.itemId)); }
+  const overrides = input.categoryByProduct && Object.keys(input.categoryByProduct).length ? input.categoryByProduct : null;
+  if (overrides && input.action !== 'reactivate') targets = targets.filter((r) => !!overrides[r.productId]);
   if (input.limit && input.limit > 0) targets = targets.slice(0, Math.floor(input.limit));
   if (!targets.length) return { started: false, reason: 'No hay publicaciones para esa acción en la última auditoría' };
 
@@ -78,7 +82,7 @@ export async function startRepair(input: { action: RepairAction; dryRun?: boolea
   };
   stopRequested = false;
   const mine = job;
-  void run(mine, targets).catch(async (err) => {
+  void run(mine, targets, overrides).catch(async (err) => {
     mine.status = 'error'; mine.finishedAt = new Date().toISOString(); mine.message = String(err?.message ?? 'error');
     await save(mine);
   });
@@ -88,16 +92,17 @@ export async function startRepair(input: { action: RepairAction; dryRun?: boolea
 type Ctx = {
   ml: MlClient;
   holder: PricingHolder;
+  overrides: Record<string, string> | null;
   catPath: (id: string) => Promise<string>;
   catAttrs: (id: string) => Promise<any[]>;
 };
 
-async function run(j: RepairJob, targets: AuditRow[]) {
+async function run(j: RepairJob, targets: AuditRow[], overrides: Record<string, string> | null) {
   const ml = await requireMlClient();
   const paths = new Map<string, string>();
   const schemas = new Map<string, any[]>();
   const ctx: Ctx = {
-    ml, holder: { ctx: null },
+    ml, holder: { ctx: null }, overrides,
     catPath: async (id) => {
       if (!paths.has(id)) {
         try { const c: any = await ml.getCategory(id); paths.set(id, (Array.isArray(c?.path_from_root) ? c.path_from_root.map((x: any) => x.name).join(' > ') : c?.name) || id); }
@@ -224,7 +229,9 @@ async function recategorize(ctx: Ctx, r: AuditRow, dryRun: boolean): Promise<Rep
   });
   if (!product) return { ...base(r), result: 'skipped', detail: 'El producto ya no existe en el sistema', from };
   // Solo una categoría específica de la MISMA rama donde ya está (ver categoryPick.ts).
-  const pick = await pickSpecificCategory(String(it.category_id), product.name);
+  const forced = ctx.overrides?.[r.productId];
+  const pick = forced ? { categoryId: forced, path: await ctx.catPath(forced) } : await pickSpecificCategory(String(it.category_id), product.name);
+  if (pick && pick.categoryId === String(it.category_id)) return { ...base(r), result: 'skipped', detail: 'Ya está en esa categoría', from };
   if (!pick) return { ...base(r), result: 'skipped', detail: 'Mercado Libre no sugiere una categoría específica dentro de su rubro: hay que elegirla a mano', from };
   const info = { categoryId: pick.categoryId };
   const to = pick.path;
@@ -271,7 +278,8 @@ async function republish(ctx: Ctx, unit: AuditRow[], dryRun: boolean): Promise<R
   if (!dead.length) return { ...base(r), result: 'skipped', detail: 'Ya no figura dada de baja: no se toca' };
   const product = await prisma.product.findUnique({ where: { id: r.productId }, select: { name: true } });
   if (!product) return { ...base(r), result: 'skipped', detail: 'El producto ya no existe en el sistema' };
-  const info = await resolveMlCategoryInfo(r.productId, product.name);
+  const forced = ctx.overrides?.[r.productId];
+  const info = forced ? { categoryId: forced, generic: false } : await resolveMlCategoryInfo(r.productId, product.name);
   if (!info || info.generic) return { ...base(r), result: 'skipped', detail: 'Mercado Libre no sugiere una categoría específica: hay que elegirla a mano', from: r.categoryName };
   const to = await ctx.catPath(info.categoryId);
   if (isGenericCategory(to)) return { ...base(r), result: 'skipped', detail: 'La categoría sugerida también es genérica', from: r.categoryName, to };
@@ -284,7 +292,7 @@ async function republish(ctx: Ctx, unit: AuditRow[], dryRun: boolean): Promise<R
   const left = await prisma.variantMeliMapping.count({ where: { variant: { productId: r.productId } } });
   if (left === 0) await prisma.productMeliMapping.deleteMany({ where: { productId: r.productId } });
 
-  const one = await publishOne(r.productId, { listingTypeId: LISTING, pricing: 'target', priceFactor: 1, requireSpecific: true }, ctx.holder);
+  const one = await publishOne(r.productId, { listingTypeId: LISTING, pricing: 'target', priceFactor: 1, requireSpecific: true, categoryId: forced }, ctx.holder);
   const res = one.res;
   if (res?.ok && !res.alreadyLinked) {
     return { ...base(r), result: 'ok', detail: `Publicada de nuevo${Number(res.count) > 1 ? ` (${res.count} publicaciones)` : ''} a $${one.mlPrice ?? '?'}`, from: r.categoryName, to, newItemId: res.itemId, link: res.permalink ?? null };
