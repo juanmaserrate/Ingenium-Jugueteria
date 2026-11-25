@@ -1,5 +1,5 @@
 import { requireMlClient } from './client.js';
-import { chooseSpecificCategory, type CatCandidate } from './massPure.js';
+import { chooseSpecificCategory, isGenericCategory, type CatCandidate } from './massPure.js';
 
 // Elegir una categoría ESPECÍFICA de Mercado Libre para un producto que hoy cae en una
 // genérica ("… > Otros"). La predicción de ML por el nombre solo, sin contexto, manda cosas a
@@ -70,7 +70,7 @@ export async function categoryCandidates(title: string, n = 4): Promise<Array<{ 
     const id = String(p?.category_id ?? '');
     if (!id || out.some((o) => o.categoryId === id)) continue;
     const info = await catInfo(id);
-    if (!info || /^otr[oa]s/i.test(info.pathNames[info.pathNames.length - 1])) continue;
+    if (!info || isGenericCategory(info.pathNames[info.pathNames.length - 1])) continue;
     out.push({ categoryId: id, path: info.pathNames.join(' > ') });
     if (out.length >= n) break;
   }
