@@ -119,6 +119,15 @@ export class MlClient {
     return this.req({ method: 'get', url: `/items`, params: { ids: ids.join(','), ...(attributes ? { attributes } : {}) } });
   }
 
+  // --- Catálogo de productos (competir en la ficha del producto) ---
+  // ¿Se puede sumar a catálogo una publicación propia? status: READY_FOR_OPTIN, ALREADY_OPTED_IN, ...
+  catalogEligibility(itemId: string) { return this.req({ method: 'get', url: `/items/${itemId}/catalog_listing_eligibility` }); }
+  // Crea la publicación de catálogo a partir de una propia (queda sincronizada con ella).
+  catalogOptin(itemId: string, catalogProductId: string, variationId?: string | null) {
+    return this.req({ method: 'post', url: '/items/catalog_listings', data: { item_id: itemId, catalog_product_id: catalogProductId, ...(variationId ? { variation_id: Number(variationId) } : {}) } });
+  }
+  productSearch(params: Record<string, any>) { return this.req({ method: 'get', url: '/products/search', params }); }
+
   // --- Catálogo / categorías (para publicar) ---
   // Predice categoría a partir del título (domain discovery). site: MLA/MLM/MLB/...
   predictCategory(site: string, title: string, limit = 3) {

@@ -22,6 +22,7 @@ import { profitSample } from '../mercadolibre/profit.js';
 import { startAudit, auditStatus, auditRows, unlinkFinalized } from '../mercadolibre/audit.js';
 import { startRepair, repairStatus, repairStop } from '../mercadolibre/repair.js';
 import { resolveOrderItem } from '../mercadolibre/orderItems.js';
+import { startCatalogScan, startCatalogOptin, catalogStatus, catalogRows, catalogStop } from '../mercadolibre/catalog.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -485,6 +486,22 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
         minPrice: z.number().min(0).optional(),
       }).parse(req.body ?? {});
       return startPublishChosen(b);
+    });
+    // Catálogo de Mercado Libre: relevar cuáles ya compiten / se pueden sumar, y sumarlas.
+    r.post('/ml-catalog/scan', adminOnly, async () => startCatalogScan());
+    r.get('/ml-catalog', adminOnly, async () => catalogStatus(false));
+    r.get('/ml-catalog/rows', adminOnly, async (req) => catalogRows((req.query as any).state));
+    r.post('/ml-catalog/optin', adminOnly, async (req) => {
+      const b = z.object({ limit: z.number().int().positive().max(5000).nullable().optional(), itemIds: z.array(z.string().max(30)).max(5000).optional() }).parse(req.body ?? {});
+      return startCatalogOptin(b);
+    });
+    r.post('/ml-catalog/stop', adminOnly, async () => catalogStop());
+    // Diagnóstico: lo que responde ML sobre la elegibilidad de una publicación (solo lee).
+    r.get('/integrations/ml/item/:id/catalog', adminOnly, async (req, reply) => {
+      const id = String((req.params as any).id || '').toUpperCase();
+      if (!/^ML[A-Z]\d+$/.test(id)) return reply.status(400).send({ error: 'id inválido' });
+      try { const { requireMlClient } = await import('../mercadolibre/client.js'); return await (await requireMlClient()).catalogEligibility(id); }
+      catch (err: any) { return reply.status(502).send({ error: 'ml_error', status: err?.response?.status ?? null, details: err?.response?.data ?? err?.message }); }
     });
     r.get('/ml-mass/repair', adminOnly, async (req) => repairStatus((req.query as any).rows === '1'));
     r.post('/ml-mass/repair/stop', adminOnly, async () => repairStop());

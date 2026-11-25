@@ -45,6 +45,25 @@ test('orden ML: la publicacion de catalogo se resuelve por la publicacion con la
   assert.equal(itemGtin({ attributes: [{ id: 'GTIN', value_name: '7791234567890,7791234567891' }] }), '7791234567890');
 });
 
+test('catalogo ML: estado de cada publicacion y resumen', async () => {
+  const { catalogStateOf, summarizeCatalog } = await import('../src/mercadolibre/catalogPure.js');
+  const base = { status: 'active', isCatalogListing: false, twinIds: [] as string[], eligibleTag: false, catalogProductId: null as string | null, eligibility: null as string | null };
+  assert.equal(catalogStateOf({ ...base, twinIds: ['MLA1'] }), 'in_catalog');                     // ya tiene su publicacion de catalogo
+  assert.equal(catalogStateOf({ ...base, isCatalogListing: true }), 'in_catalog');
+  assert.equal(catalogStateOf({ ...base, eligibility: 'ALREADY_OPTED_IN' }), 'in_catalog');
+  assert.equal(catalogStateOf({ ...base, eligibleTag: true, catalogProductId: 'MLA9', eligibility: 'READY_FOR_OPTIN' }), 'ready');
+  assert.equal(catalogStateOf({ ...base, catalogProductId: 'MLA9', eligibility: 'NOT_ELIGIBLE' }), 'not_eligible');
+  assert.equal(catalogStateOf(base), 'no_product');                                                 // ML no la asocio a su catalogo
+  assert.equal(catalogStateOf({ ...base, status: 'paused', eligibleTag: true }), 'inactive');       // pausada: no se evalua
+  assert.equal(catalogStateOf({ ...base, status: 'paused', twinIds: ['MLA1'] }), 'in_catalog');     // pausada pero ya en catalogo
+  const row = (o: any) => ({ itemId: 'i', productId: 'p', name: 'n', code: 'c', domainId: 'MLA-BOOKS', price: 1, qty: 1, eligibilityReason: null, ...base, ...o });
+  const rows = [row({ twinIds: ['x'] }), row({ eligibility: 'READY_FOR_OPTIN', catalogProductId: 'P' }), row({ eligibility: 'NOT_ELIGIBLE', eligibilityReason: 'price' }), row({})].map((r: any) => ({ ...r, state: catalogStateOf(r) }));
+  const s = summarizeCatalog(rows as any);
+  assert.deepEqual([s.counts.in_catalog, s.counts.ready, s.counts.not_eligible, s.counts.no_product], [1, 1, 1, 1]);
+  assert.equal(s.blockedReasons[0].key, 'NOT_ELIGIBLE: price');
+  assert.equal(s.readyByDomain[0].key, 'MLA-BOOKS');
+});
+
 test('categorias genericas: "Otros" no se usa para publicar', async () => {
   const { isGenericCategory, pickPrediction, summarizeAudit } = await import('../src/mercadolibre/massPure.js');
   assert.equal(isGenericCategory('Juegos y Juguetes > Otros'), true);
