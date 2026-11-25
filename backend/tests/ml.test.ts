@@ -45,6 +45,20 @@ test('categorias genericas: "Otros" no se usa para publicar', async () => {
   assert.equal(pickPrediction([{ categoryId: 'MLA1910', categoryName: 'Otros' }])?.categoryId, 'MLA1910'); // si solo hay generica, esa
   assert.equal(pickPrediction([]), null);
 
+  // Para salir de "Otros" solo vale una categoria de la misma rama (la prediccion suelta manda
+  // un encastre a "Herrajes > Bisagras").
+  const { chooseSpecificCategory } = await import('../src/mercadolibre/massPure.js');
+  const cand = (categoryId: string, ids: string[], names: string[]) => ({ categoryId, pathIds: ids, pathNames: names });
+  const branch = ['JUG', 'MUN']; // Juegos y Juguetes > Muñecos y Muñecas (> Otros)
+  const bisagras = cand('B', ['HERR', 'HB', 'B'], ['Herramientas', 'Herrajes', 'Bisagras']);
+  const puzzles = cand('P', ['JUG', 'MESA', 'P'], ['Juegos y Juguetes', 'Juegos de Mesa', 'Rompecabezas']);
+  const bebotes = cand('BB', ['JUG', 'MUN', 'BB'], ['Juegos y Juguetes', 'Muñecos y Muñecas', 'Bebotes']);
+  const otros = cand('O', ['JUG', 'MUN', 'O'], ['Juegos y Juguetes', 'Muñecos y Muñecas', 'Otros']);
+  assert.equal(chooseSpecificCategory(branch, [bisagras, puzzles, otros, bebotes])?.categoryId, 'BB'); // mismo padre gana
+  assert.equal(chooseSpecificCategory(branch, [bisagras, puzzles, otros])?.categoryId, 'P');         // si no, mismo rubro raiz
+  assert.equal(chooseSpecificCategory(branch, [bisagras, otros]), null);                              // otro rubro o generica: ninguna
+  assert.equal(chooseSpecificCategory(branch, []), null);
+
   const row = (o: any) => ({ itemId: 'i', productId: 'p', name: 'n', code: 'c', status: 'active', subStatus: [], finalized: false, categoryId: 'A', categoryName: 'X > Autos', genericCategory: false, shippingMode: 'me2', logisticType: 'drop_off', freeShipping: false, localPickUp: true, pictures: 1, attributes: 4, price: 1, qty: 1, listingType: 'gold_special', catalogListing: false, health: null, permalink: null, titleLength: 30, tags: [], ...o });
   const s = summarizeAudit([
     row({}),

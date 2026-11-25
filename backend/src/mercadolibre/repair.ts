@@ -2,6 +2,7 @@ import { prisma } from '../db.js';
 import { requireMlClient, type MlClient } from './client.js';
 import { auditRows, auditStatus } from './audit.js';
 import { resolveMlCategoryInfo } from './publish.js';
+import { pickSpecificCategory } from './categoryPick.js';
 import { massStatus, publishOne, pricingCtxOf, dimensionsFor, type PricingHolder } from './massPublish.js';
 import { targetPriceFor } from './pricing.js';
 import { isGenericCategory, isHardStop, publishFailureReason, type AuditRow } from './massPure.js';
@@ -222,11 +223,11 @@ async function recategorize(ctx: Ctx, r: AuditRow, dryRun: boolean): Promise<Rep
     select: { name: true, price: true, weight: true, width: true, height: true, depth: true, brand: { select: { name: true } }, tnMapping: { select: { tnProductId: true } } },
   });
   if (!product) return { ...base(r), result: 'skipped', detail: 'El producto ya no existe en el sistema', from };
-  const info = await resolveMlCategoryInfo(r.productId, product.name);
-  if (!info || info.generic) return { ...base(r), result: 'skipped', detail: 'Mercado Libre no sugiere una categoría específica: hay que elegirla a mano', from };
-  if (info.categoryId === String(it.category_id)) return { ...base(r), result: 'skipped', detail: 'La categoría sugerida es la misma', from };
-  const to = await ctx.catPath(info.categoryId);
-  if (isGenericCategory(to)) return { ...base(r), result: 'skipped', detail: 'La categoría sugerida también es genérica', from, to };
+  // Solo una categoría específica de la MISMA rama donde ya está (ver categoryPick.ts).
+  const pick = await pickSpecificCategory(String(it.category_id), product.name);
+  if (!pick) return { ...base(r), result: 'skipped', detail: 'Mercado Libre no sugiere una categoría específica dentro de su rubro: hay que elegirla a mano', from };
+  const info = { categoryId: pick.categoryId };
+  const to = pick.path;
 
   // Datos obligatorios de la categoría nueva que la publicación todavía no tiene.
   const title = String(it.family_name || it.title || product.name).slice(0, 60);

@@ -121,8 +121,8 @@ export class MlClient {
 
   // --- Catálogo / categorías (para publicar) ---
   // Predice categoría a partir del título (domain discovery). site: MLA/MLM/MLB/...
-  predictCategory(site: string, title: string) {
-    return this.req({ method: 'get', url: `/sites/${site}/domain_discovery/search`, params: { limit: 3, q: title } });
+  predictCategory(site: string, title: string, limit = 3) {
+    return this.req({ method: 'get', url: `/sites/${site}/domain_discovery/search`, params: { limit: Math.min(8, Math.max(1, limit)), q: title } });
   }
   getCategory(categoryId: string) { return this.req({ method: 'get', url: `/categories/${categoryId}` }); }
   // Valida un item SIN crearlo (204 si es publicable). Sirve para probar el armado en vivo.

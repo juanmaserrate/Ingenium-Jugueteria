@@ -298,6 +298,22 @@ export function pickPrediction<T extends { categoryId?: string; categoryName?: s
   return list.find((p) => !isGenericCategory(p.categoryName)) ?? list[0] ?? null;
 }
 
+// De las categorías candidatas, la específica más cercana a la rama donde ya está el producto:
+// gana la que comparte más niveles con esa rama (desde la raíz); a igualdad, la primera
+// (vienen en el orden en que las sugirió ML). Si ninguna comparte ni el rubro raíz, ninguna.
+export type CatCandidate = { categoryId: string; pathIds: string[]; pathNames: string[] };
+export function chooseSpecificCategory(branchIds: string[], cands: CatCandidate[]): CatCandidate | null {
+  let best: CatCandidate | null = null;
+  let bestShared = 0;
+  for (const c of cands || []) {
+    if (!c?.pathIds?.length || isGenericCategory(c.pathNames[c.pathNames.length - 1])) continue;
+    let shared = 0;
+    while (shared < branchIds.length && shared < c.pathIds.length && c.pathIds[shared] === branchIds[shared]) shared++;
+    if (shared > bestShared) { best = c; bestShared = shared; }
+  }
+  return best;
+}
+
 // --- Auditoría de publicaciones ---
 export type AuditRow = {
   itemId: string; productId: string; name: string; code: string;

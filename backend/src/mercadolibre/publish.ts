@@ -7,6 +7,7 @@ import { STORE_SALE_TERMS, applyStoreTermsToItem } from './terms.js';
 import { mappedMlForProduct } from './categoryMap.js';
 import { isValidGtin } from './pure.js';
 import { priceWithFactor, pickPrediction, isGenericCategory } from './massPure.js';
+import { pickSpecificCategory } from './categoryPick.js';
 
 // Publicación de productos del sistema en Mercado Libre (Fase 3). Es la parte más delicada:
 // crea contenido real en la cuenta. NADA se publica solo — lo dispara el usuario desde la UI.
@@ -95,9 +96,17 @@ export async function publishProduct(input: PublishInput): Promise<any> {
     productId = v?.productId;
   }
   const mapped = productId ? await mappedMlForProduct(productId).catch(() => null) : null;
-  // Sin mapeo, o mapeada a una categoría genérica ("... > Otros"): ML da de baja lo publicado
-  // ahí por "categoría incorrecta", así que se usa la que predice ML para ese producto.
-  if (!mapped || mapped.generic) return publishProductCore(input);
+  if (!mapped) return publishProductCore(input); // sin mapeo: la que predice ML por el título
+  // Mapeada a una categoría genérica ("... > Otros"): ML da de baja lo publicado ahí por
+  // "categoría incorrecta". Se busca una específica dentro de la misma rama; si no aparece,
+  // no se publica (la predicción sin contexto manda cosas a rubros que no tienen nada que ver).
+  if (mapped.generic) {
+    const prod = await prisma.product.findUnique({ where: { id: productId! }, select: { name: true } });
+    const pick = await pickSpecificCategory(mapped.categoryId, input.title || prod?.name || '').catch(() => null);
+    if (!pick) return { error: 'generic_category', message: 'Mercado Libre no sugiere una categoría específica para este producto dentro de su rubro: elegila a mano' };
+    const res: any = await publishProductCore({ ...input, categoryId: pick.categoryId });
+    return { ...res, categorySource: 'predicha' };
+  }
   // Datos fijos de la categoría (ej. "Tipo de mochila"): lo que mande el form tiene prioridad.
   const sent = new Set((input.attributes || []).map((a) => a.id));
   const attributes = [...(input.attributes || []), ...mapped.attributes.filter((a) => !sent.has(a.id))];
@@ -451,6 +460,12 @@ export async function resolveMlCategory(productId: string, title: string): Promi
 export async function resolveMlCategoryInfo(productId: string, title: string): Promise<{ categoryId: string; generic: boolean; source: 'mapeada' | 'predicha' } | null> {
   const mapped = await mappedMlForProduct(productId).catch(() => null);
   if (mapped && !mapped.generic) return { categoryId: mapped.categoryId, generic: false, source: 'mapeada' };
+  // Mapeada a "Otros": se busca una específica DENTRO de la misma rama. Si no hay, queda la
+  // genérica marcada como tal (quien llama decide no publicar).
+  if (mapped) {
+    const pick = await pickSpecificCategory(mapped.categoryId, title).catch(() => null);
+    return pick ? { categoryId: pick.categoryId, generic: false, source: 'predicha' } : { categoryId: mapped.categoryId, generic: true, source: 'mapeada' };
+  }
   const pred = pickPrediction(await predictCategory(title.slice(0, 60)));
   if (!pred?.categoryId) return null;
   return { categoryId: pred.categoryId, generic: isGenericCategory(pred.categoryName), source: 'predicha' };
