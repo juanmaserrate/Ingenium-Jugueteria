@@ -88,7 +88,10 @@ export async function dimensionsFor(p: Dims & { tnMapping?: { tnProductId: strin
 // Publica UN producto con las reglas de la publicación masiva: precio (para ganar lo mismo que
 // en el local, o con recargo fijo), paquete (el del producto → Tienda Nube → estándar) y, si se
 // pide, solo en una categoría específica. Lo usan la publicación masiva y los arreglos.
-export type PublishOneOpts = { listingTypeId: string; pricing: 'target' | 'factor'; priceFactor: number; minPrice?: number; requireSpecific?: boolean; categoryId?: string };
+export type PublishOneOpts = { listingTypeId: string; pricing: 'target' | 'factor'; priceFactor: number; minPrice?: number; requireSpecific?: boolean; categoryId?: string;
+  // Datos obligatorios que el sistema no tiene (ej. Género): por categoría de ML o por producto.
+  extraAttrs?: Record<string, ExtraAttr[]>; extraAttrsByProduct?: Record<string, ExtraAttr[]> };
+export type ExtraAttr = { id: string; value_name: string };
 export type PricingHolder = { ctx: PricingCtx | null };
 export async function pricingCtxOf(holder: PricingHolder, listingTypeId: string): Promise<PricingCtx> {
   if (!holder.ctx) {
@@ -132,7 +135,9 @@ export async function publishOne(productId: string, o: PublishOneOpts, holder: P
       mlPrice = Math.round(p.price * o.priceFactor);
     }
     // ML exige peso y medidas del paquete en toda publicación.
-    return publishProduct({ productId, listingTypeId: o.listingTypeId, priceFactor: o.priceFactor, priceByBase, attributes: packageAttributes(packageFor(dims)), strictCategory: !!o.requireSpecific, ...(o.categoryId ? { categoryId: o.categoryId } : {}) });
+    const catForAttrs = o.extraAttrs ? (o.categoryId || (await resolveMlCategory(productId, p.name)) || '') : '';
+    const extra = [...(o.extraAttrsByProduct?.[productId] ?? []), ...(o.extraAttrs?.[catForAttrs] ?? [])];
+    return publishProduct({ productId, listingTypeId: o.listingTypeId, priceFactor: o.priceFactor, priceByBase, attributes: [...packageAttributes(packageFor(dims)), ...extra], strictCategory: !!o.requireSpecific, ...(o.categoryId ? { categoryId: o.categoryId } : {}) });
   };
   // Paquete: lo del producto, o lo de Tienda Nube. Si ML no acepta esas medidas (pasa con
   // valores muy chicos, ej. 15 g / 4×2×2 cm), se reintenta una vez con el paquete estándar.
@@ -318,7 +323,31 @@ export async function startPublish(opts: Partial<MassOptions>) {
   return { started: true, total: queue.length };
 }
 
-async function runPublish(j: Job, queue: MassAnalysis['ready']) {
+type ChosenExtra = { chosen: Record<string, string>; extraAttrs?: Record<string, ExtraAttr[]>; extraAttrsByProduct?: Record<string, ExtraAttr[]> };
+
+// Publica una lista puntual de productos: con la categoría elegida a mano para cada uno (si
+// viene) y con los datos obligatorios que se indiquen. No depende del análisis.
+export async function startPublishChosen(input: { categoryByProduct?: Record<string, string>; productIds?: string[]; extraAttrs?: Record<string, ExtraAttr[]>; extraAttrsByProduct?: Record<string, ExtraAttr[]>; minPrice?: number }) {
+  if (job?.status === 'running') return { started: false, reason: 'Ya hay un proceso corriendo' };
+  const chosen = input.categoryByProduct ?? {};
+  const ids = [...new Set([...Object.keys(chosen), ...(input.productIds ?? [])])];
+  if (!ids.length) return { started: false, reason: 'No se indicó ningún producto' };
+  const prods = await prisma.product.findMany({ where: { id: { in: ids }, active: true }, select: { id: true, name: true, code: true } });
+  const queue = prods.map((p) => ({ productId: p.id, name: p.name, code: p.code, listings: 1 }));
+  if (!queue.length) return { started: false, reason: 'No se encontraron esos productos' };
+  const minPrice = input.minPrice && input.minPrice > 0 ? Math.floor(input.minPrice) : 0;
+  job = { ...newJob('publish', queue.length), options: { limit: null, pricing: 'target', priceFactor: 1, minPrice, listingTypeId: 'gold_special' } };
+  stopRequested = false;
+  const mine = job;
+  void runPublish(mine, queue, { chosen, extraAttrs: input.extraAttrs, extraAttrsByProduct: input.extraAttrsByProduct }).catch((err) => {
+    mine.status = 'error'; mine.finishedAt = new Date().toISOString();
+    mine.message = `La publicación se cortó: ${err?.message ?? 'error'}`;
+    void kvSet(KV.report, mine);
+  });
+  return { started: true, total: queue.length };
+}
+
+async function runPublish(j: Job, queue: MassAnalysis['ready'], extra?: ChosenExtra) {
   const { priceFactor, listingTypeId, pricing, minPrice } = j.options!;
   let consecutive = 0;
   let hard = 0;
@@ -334,7 +363,10 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
     let storePrice: number | undefined;
     let mlPrice: number | undefined;
     try {
-      const one = await publishOne(item.productId, { listingTypeId, pricing, priceFactor, minPrice, requireSpecific: true }, holder);
+      const one = await publishOne(item.productId, {
+        listingTypeId, pricing, priceFactor, minPrice, requireSpecific: true,
+        categoryId: extra?.chosen[item.productId], extraAttrs: extra?.extraAttrs, extraAttrsByProduct: extra?.extraAttrsByProduct,
+      }, holder);
       storePrice = one.storePrice;
       // Los baratos no se publican sueltos: el costo fijo de ML se come la ganancia.
       if (one.belowMin) {
@@ -390,6 +422,7 @@ async function runPublish(j: Job, queue: MassAnalysis['ready']) {
     analysis.counts.linked += publishedIds.size;
     const prev = new Map((analysis.failed ?? []).map((r) => [r.productId, r]));
     for (const [id, row] of rejected) prev.set(id, row);
+    for (const id of publishedIds) prev.delete(id); // lo que antes falló y ahora salió
     analysis.failed = [...prev.values()];
     analysis.counts.listings = analysis.ready.reduce((s, r) => s + r.listings, 0);
     analysis.estimateSeconds = analysis.counts.listings * LISTING_SECONDS;

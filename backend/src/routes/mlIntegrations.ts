@@ -17,7 +17,7 @@ import { listCategoryMap, suggestForCategory, setCategoryMap, suggestFromListing
 import { isHistoricalOrder } from '../services/pendingMath.js';
 import { listQuestions, countUnanswered, answerQuestion } from '../mercadolibre/questions.js';
 import { flexSchedule } from '../mercadolibre/questionsPure.js';
-import { massStatus, massList, massStop, startAnalysis, startPublish, setSchedule, cancelSchedule, pricePreview } from '../mercadolibre/massPublish.js';
+import { massStatus, massList, massStop, startAnalysis, startPublish, startPublishChosen, setSchedule, cancelSchedule, pricePreview } from '../mercadolibre/massPublish.js';
 import { profitSample } from '../mercadolibre/profit.js';
 import { startAudit, auditStatus, auditRows, unlinkFinalized } from '../mercadolibre/audit.js';
 import { startRepair, repairStatus, repairStop } from '../mercadolibre/repair.js';
@@ -438,6 +438,32 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       const out: Array<{ productId: string; name: string; candidates: Array<{ categoryId: string; path: string }> }> = [];
       for (const p of prods) out.push({ productId: p.id, name: p.name, candidates: await categoryCandidates(p.name, 4) });
       return out;
+    });
+    // Igual, con la categoría de ML que tiene asignada cada producto y si ML sugiere "Otros".
+    r.post('/ml-mass/category-info', adminOnly, async (req) => {
+      const b = z.object({ productIds: z.array(z.string().max(60)).min(1).max(80), candidates: z.boolean().optional() }).parse(req.body ?? {});
+      const { categoryCandidatesInfo, categoryPath } = await import('../mercadolibre/categoryPick.js');
+      const { mappedMlForProduct } = await import('../mercadolibre/categoryMap.js');
+      const prods = await prisma.product.findMany({ where: { id: { in: b.productIds } }, select: { id: true, name: true, brand: { select: { name: true } } } });
+      const out: any[] = [];
+      for (const p of prods) {
+        const mapped = await mappedMlForProduct(p.id).catch(() => null);
+        const info = b.candidates === false ? { topGeneric: false, candidates: [] } : await categoryCandidatesInfo(p.name, 3);
+        out.push({ productId: p.id, name: p.name, brand: p.brand?.name ?? null, mappedId: mapped?.categoryId ?? null, mapped: mapped ? await categoryPath(mapped.categoryId) : null, topGeneric: info.topGeneric, candidates: info.candidates });
+      }
+      return out;
+    });
+    // Publica una lista puntual de productos con la categoría elegida a mano y/o datos fijos.
+    r.post('/ml-mass/publish-chosen', adminOnly, async (req) => {
+      const attr = z.object({ id: z.string().max(60), value_name: z.string().max(200) });
+      const b = z.object({
+        categoryByProduct: z.record(z.string().regex(/^MLA\d+$/)).optional(),
+        productIds: z.array(z.string().max(60)).max(3000).optional(),
+        extraAttrs: z.record(z.array(attr).max(20)).optional(),
+        extraAttrsByProduct: z.record(z.array(attr).max(20)).optional(),
+        minPrice: z.number().min(0).optional(),
+      }).parse(req.body ?? {});
+      return startPublishChosen(b);
     });
     r.get('/ml-mass/repair', adminOnly, async (req) => repairStatus((req.query as any).rows === '1'));
     r.post('/ml-mass/repair/stop', adminOnly, async () => repairStop());

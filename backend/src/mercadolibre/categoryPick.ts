@@ -76,3 +76,28 @@ export async function categoryCandidates(title: string, n = 4): Promise<Array<{ 
   }
   return out;
 }
+
+// Igual que categoryCandidates, y además avisa si lo PRIMERO que sugiere ML es una categoría
+// genérica ("Otros"): señal de que para ML ese producto no tiene una específica.
+export async function categoryCandidatesInfo(title: string, n = 3): Promise<{ topGeneric: boolean; candidates: Array<{ categoryId: string; path: string }> }> {
+  const name = String(title || '').slice(0, 60).trim();
+  if (!name) return { topGeneric: false, candidates: [] };
+  const ml = await requireMlClient();
+  let preds: any[] = [];
+  try { const res = await ml.predictCategory(SITE, name, 8); preds = Array.isArray(res) ? res : []; } catch { return { topGeneric: false, candidates: [] }; }
+  const out: Array<{ categoryId: string; path: string }> = [];
+  let topGeneric = false;
+  let first = true;
+  for (const p of preds) {
+    const id = String(p?.category_id ?? '');
+    if (!id || out.some((o) => o.categoryId === id)) continue;
+    const info = await catInfo(id);
+    if (!info) continue;
+    const generic = isGenericCategory(info.pathNames[info.pathNames.length - 1]);
+    if (first) { topGeneric = generic; first = false; }
+    if (generic) continue;
+    out.push({ categoryId: id, path: info.pathNames.join(' > ') });
+    if (out.length >= n) break;
+  }
+  return { topGeneric, candidates: out };
+}
