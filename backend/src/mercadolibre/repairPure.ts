@@ -36,6 +36,32 @@ export function missingForCategory(
   return { fill, blocking };
 }
 
+// --- Fotos chicas ---
+// Mercado Libre no termina de aceptar una foto si su lado más largo mide menos de 500 px: la
+// publicación queda pausada "esperando las fotos" para siempre (medido 2026-11-24: las 171
+// pausadas tenían al menos una así, y ninguna de las activas). Qué se hace con cada foto:
+//   keep    → sirve como está
+//   upscale → se agranda (hasta el doble) y se vuelve a subir
+//   drop    → demasiado chica para agrandarla sin que quede borrosa: se quita
+export const MIN_PICTURE_SIDE = 500;
+export const UPSCALE_TO = 600;      // lado más largo de la foto agrandada
+export const MAX_UPSCALE = 2;       // no agrandar más del doble
+
+export type PicturePlan = { id: string; w: number; h: number; action: 'keep' | 'upscale' | 'drop' };
+
+export function planPictures(pics: Array<{ id: string; size?: string | null }> | null | undefined): PicturePlan[] {
+  return (pics || []).map((p) => {
+    const m = /^(\d+)x(\d+)$/.exec(String(p.size ?? '').trim());
+    const w = m ? Number(m[1]) : 0;
+    const h = m ? Number(m[2]) : 0;
+    const longest = Math.max(w, h);
+    // Sin medida conocida no se toca.
+    const action: PicturePlan['action'] = !longest || longest >= MIN_PICTURE_SIDE ? 'keep'
+      : longest * MAX_UPSCALE >= UPSCALE_TO ? 'upscale' : 'drop';
+    return { id: String(p.id), w, h, action };
+  });
+}
+
 // Mensaje legible de un error de la API de Mercado Libre.
 export function mlErrorText(err: any): string {
   const d = err?.response?.data;

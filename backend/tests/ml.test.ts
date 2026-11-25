@@ -91,6 +91,12 @@ test('arreglos: que publicaciones entran en cada accion y que datos faltan para 
   assert.deepEqual(b.blocking, ['Marca', 'Género']);
   assert.deepEqual(missingForCategory(null, null, { title: 'x' }), { fill: [], blocking: [] });
 
+  // Fotos: ML no acepta las de menos de 500 px de lado mas largo.
+  const { planPictures } = await import('../src/mercadolibre/repairPure.js');
+  assert.deepEqual(planPictures([{ id: 'a', size: '462x643' }, { id: 'b', size: '429x481' }, { id: 'c', size: '217x183' }, { id: 'd', size: '' }, { id: 'e', size: '300x120' }]).map((p) => p.action),
+    ['keep', 'upscale', 'drop', 'keep', 'upscale']); // 643>=500 · 481 se agranda · 217 es mas del doble · sin medida no se toca · 300 justo al doble
+  assert.deepEqual(planPictures(null), []);
+
   assert.equal(mlErrorText({ response: { status: 400, data: { message: 'Validation error', cause: [{ type: 'warning', message: 'aviso' }, { type: 'error', message: 'Category is not modifiable' }] } } }), 'Category is not modifiable (400)');
   assert.equal(mlErrorText({ response: { status: 403, data: { message: 'forbidden' } } }), 'forbidden (403)');
   assert.equal(mlErrorText(new Error('timeout')), 'timeout');

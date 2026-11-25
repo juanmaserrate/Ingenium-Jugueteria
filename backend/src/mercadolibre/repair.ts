@@ -5,7 +5,7 @@ import { resolveMlCategoryInfo } from './publish.js';
 import { massStatus, publishOne, pricingCtxOf, dimensionsFor, type PricingHolder } from './massPublish.js';
 import { targetPriceFor } from './pricing.js';
 import { isGenericCategory, isHardStop, publishFailureReason, type AuditRow } from './massPure.js';
-import { missingForCategory, mlErrorText, repairTargets, type RepairAction } from './repairPure.js';
+import { missingForCategory, mlErrorText, repairTargets, planPictures, UPSCALE_TO, type RepairAction } from './repairPure.js';
 
 // ARREGLOS sobre las publicaciones que dejó la publicación masiva, a partir de la última
 // auditoría. Tres acciones, todas lanzadas por el dueño y con modo de prueba (dryRun):
@@ -152,17 +152,62 @@ async function run(j: RepairJob, targets: AuditRow[]) {
 
 const base = (r: AuditRow) => ({ itemId: r.itemId, productId: r.productId, name: r.name });
 
-// 1) Pausada esperando las fotos → activar.
+// Baja una foto, la agranda hasta UPSCALE_TO px de lado más largo y la sube a ML. Devuelve su id.
+async function upscaleAndUpload(ml: MlClient, url: string): Promise<string> {
+  const sharp = (await import('sharp')).default;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`No se pudo bajar la foto (${res.status})`);
+  const out = await sharp(Buffer.from(await res.arrayBuffer()))
+    .resize({ width: UPSCALE_TO, height: UPSCALE_TO, fit: 'inside', kernel: 'lanczos3' })
+    .flatten({ background: '#ffffff' })
+    .jpeg({ quality: 92 })
+    .toBuffer();
+  const up: any = await ml.uploadPicture(out, 'foto.jpg', 'image/jpeg');
+  if (!up?.id) throw new Error('Mercado Libre no devolvió la foto subida');
+  return String(up.id);
+}
+
+// 1) Pausada esperando las fotos → corregir las fotos chicas (ML no acepta las de menos de
+//    500 px) y activar.
 async function reactivate(ctx: Ctx, r: AuditRow, dryRun: boolean): Promise<RepairRow> {
   const it: any = await ctx.ml.getItem(r.itemId);
-  const sub: string[] = Array.isArray(it?.sub_status) ? it.sub_status.map(String) : [];
+  const subOf = (x: any): string[] => (Array.isArray(x?.sub_status) ? x.sub_status.map(String) : []);
+  const sub = subOf(it);
   if (it?.status === 'active') return { ...base(r), result: 'skipped', detail: 'Ya estaba activa' };
   if (it?.status !== 'paused') return { ...base(r), result: 'skipped', detail: `Estado ${it?.status}${sub.length ? ' (' + sub.join(' ') + ')' : ''}: no se toca` };
-  if (dryRun) return { ...base(r), result: 'preview', detail: `Pausada (${sub.join(' ') || 'sin motivo'}): se activaría`, link: it?.permalink ?? null };
-  const u: any = await ctx.ml.updateItem(r.itemId, { status: 'active' });
-  const subAfter: string[] = Array.isArray(u?.sub_status) ? u.sub_status.map(String) : [];
-  if (u?.status === 'active') return { ...base(r), result: 'ok', detail: 'Activada', link: it?.permalink ?? null };
-  return { ...base(r), result: 'failed', detail: `Mercado Libre la dejó en ${u?.status}${subAfter.length ? ' (' + subAfter.join(' ') + ')' : ''}` };
+  if (!sub.includes('picture_download_pending')) return { ...base(r), result: 'skipped', detail: 'Está pausada por otro motivo: no se toca' };
+
+  const urls = new Map<string, string>((it.pictures || []).map((p: any) => [String(p.id), String(p.secure_url || p.url || '')]));
+  const plan = planPictures((it.pictures || []).map((p: any) => ({ id: String(p.id), size: p.max_size || p.size })));
+  const sizes = plan.map((p) => `${p.w}x${p.h}`).join(', ');
+  const up = plan.filter((p) => p.action === 'upscale').length;
+  const drop = plan.filter((p) => p.action === 'drop').length;
+  if (plan.length && drop === plan.length) return { ...base(r), result: 'skipped', detail: `Foto demasiado chica (${sizes}): hay que cargar una más grande en Tienda Nube`, link: it?.permalink ?? null };
+  const what = `${up ? `${up} foto${up > 1 ? 's' : ''} agrandada${up > 1 ? 's' : ''}` : ''}${up && drop ? ', ' : ''}${drop ? `${drop} quitada${drop > 1 ? 's' : ''} por muy chica${drop > 1 ? 's' : ''}` : ''}` || 'fotos sin cambios';
+  if (dryRun) return { ...base(r), result: 'preview', detail: `Fotos ${sizes}: ${what}`, link: it?.permalink ?? null };
+
+  if (up || drop) {
+    const pictures: Array<{ id: string }> = [];
+    for (const p of plan) {
+      if (p.action === 'keep') pictures.push({ id: p.id });
+      else if (p.action === 'upscale') pictures.push({ id: await upscaleAndUpload(ctx.ml, urls.get(p.id) || '') });
+    }
+    await ctx.ml.updateItem(r.itemId, { pictures });
+  }
+  // ML procesa las fotos y la reactiva; si queda pausada sin motivo, se la activa.
+  let after: any = null;
+  for (let i = 0; i < 4; i++) {
+    await sleep(2500);
+    after = await ctx.ml.getItem(r.itemId);
+    if (after?.status === 'active') break;
+    if (after?.status === 'paused' && !subOf(after).includes('picture_download_pending')) {
+      after = await ctx.ml.updateItem(r.itemId, { status: 'active' });
+      if (after?.status === 'active') break;
+    }
+  }
+  if (after?.status === 'active') return { ...base(r), result: 'ok', detail: `Activada (${what})`, link: it?.permalink ?? null };
+  const s = subOf(after);
+  return { ...base(r), result: 'failed', detail: `Fotos corregidas (${what}) pero Mercado Libre la dejó en ${after?.status}${s.length ? ' (' + s.join(' ') + ')' : ''}`, link: it?.permalink ?? null };
 }
 
 // 2) Viva en una categoría "Otros" → pasarla a la que predice ML para ese producto. Si la

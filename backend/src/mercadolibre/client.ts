@@ -102,6 +102,14 @@ export class MlClient {
   updateItemVariation(itemId: string, variationId: string, data: any) {
     return this.req({ method: 'put', url: `/items/${itemId}/variations/${variationId}`, data });
   }
+  // Sube una foto (archivo) a ML y devuelve su id, para asociarla después a una publicación
+  // con PUT /items/{id} { pictures: [{ id }] }.
+  uploadPicture(buf: Buffer, filename: string, mime: string) {
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array(buf)], { type: mime }), filename);
+    // Content-Type explícito: con el JSON por defecto axios convertiría el formulario a JSON.
+    return this.req({ method: 'post', url: '/pictures/items/upload', data: form, headers: { 'Content-Type': 'multipart/form-data' } });
+  }
   // Publicaciones del vendedor (para detectar las que ya existen). Admite scan scroll.
   searchSellerItems(sellerId: string, params: Record<string, any> = {}) {
     return this.req({ method: 'get', url: `/users/${sellerId}/items/search`, params });
