@@ -112,9 +112,16 @@ export async function mount(el) {
 }
 
 function renderOrder(o, branches) {
+  // Debajo del título de Mercado Libre: cómo se llama en el sistema, su código y el stock.
+  const systemLine = (i) => {
+    const s = i.system;
+    if (!s) return '';
+    const stock = branches.map((b) => `${esc(b.name)} ${Number(s.stock?.[b.id] ?? 0)}`).join(' · ');
+    return `<div class="text-xs text-[#7d6c5c] mt-0.5">En el sistema: <b>${esc(s.name)}${s.variant ? ' – ' + esc(s.variant) : ''}</b> · código ${esc(s.code || '—')} · stock: ${stock}</div>`;
+  };
   const items = (o.items || []).map((i) => `
     <tr class="border-b border-[#fff1e6]">
-      <td class="py-1 px-2 text-sm">${esc(i.title || i.mlItemId)}</td>
+      <td class="py-1 px-2 text-sm">${esc(i.title || i.mlItemId)}${systemLine(i)}</td>
       <td class="py-1 px-2 text-sm text-center">${Number(i.qty)}</td>
       <td class="py-1 px-2 text-sm text-right">${money(i.unitPrice)}</td>
     </tr>`).join('');

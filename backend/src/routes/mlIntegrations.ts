@@ -335,12 +335,33 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       const status = (req.query as any).status ?? 'pending';
       const rows = await prisma.mlOrderPending.findMany({ where: { status }, orderBy: { receivedAt: 'desc' }, take: 300 });
       const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
+      // Cada ítem trae el título de Mercado Libre (en libros es el del catálogo, distinto al
+      // del sistema): se le agrega cómo se llama el producto EN EL SISTEMA, su código y el
+      // stock por sucursal, para poder encontrarlo y elegir de dónde sale.
+      const itemIds = [...new Set(rows.flatMap((o) => (o.items as any[] || []).map((i) => String(i?.mlItemId ?? ''))).filter(Boolean))];
+      const maps = itemIds.length ? await prisma.variantMeliMapping.findMany({
+        where: { mlItemId: { in: itemIds } },
+        select: { mlItemId: true, mlVariationId: true, variant: { select: { name: true, product: { select: { name: true, code: true, _count: { select: { variants: true } } } }, stocks: { select: { branchId: true, qty: true } } } } },
+      }) : [];
+      const systemOf = (i: any) => {
+        const list = maps.filter((m) => m.mlItemId === String(i?.mlItemId ?? ''));
+        const v = i?.mlVariationId != null ? String(i.mlVariationId) : null;
+        const hit = (v && list.find((m) => m.mlVariationId === v)) || list.find((m) => !m.mlVariationId) || list[0];
+        if (!hit) return null;
+        const p = hit.variant.product;
+        return {
+          name: p.name, code: p.code,
+          variant: p._count.variants > 1 ? hit.variant.name : null,
+          stock: Object.fromEntries(hit.variant.stocks.map((s) => [s.branchId, s.qty])),
+        };
+      };
       // Sin rawPayload (pesado). orderDate = fecha real de la compra; historical = anterior a
       // la conexión de la cuenta. Las más nuevas primero.
       return rows
         .map(({ rawPayload, ...o }) => {
           const orderDate = (rawPayload as any)?.date_created ?? null;
-          return { ...o, orderDate, historical: isHistoricalOrder(orderDate, integ?.connectedAt) };
+          const items = (o.items as any[] || []).map((i) => ({ ...i, system: systemOf(i) }));
+          return { ...o, items, orderDate, historical: isHistoricalOrder(orderDate, integ?.connectedAt) };
         })
         .sort((a, b) => String(b.orderDate ?? b.receivedAt).localeCompare(String(a.orderDate ?? a.receivedAt)));
     });
