@@ -433,6 +433,13 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       }).parse(req.body ?? {});
       return startRepair(b);
     });
+    // Diagnóstico: la publicación tal cual la devuelve Mercado Libre (solo lee).
+    r.get('/integrations/ml/item/:id/raw', adminOnly, async (req, reply) => {
+      const id = String((req.params as any).id || '').toUpperCase();
+      if (!/^ML[A-Z]\d+$/.test(id)) return reply.status(400).send({ error: 'id inválido' });
+      try { const { requireMlClient } = await import('../mercadolibre/client.js'); return await (await requireMlClient()).getItem(id); }
+      catch (err: any) { return reply.status(502).send({ error: 'ml_error', status: err?.response?.status ?? null, details: err?.response?.data ?? err?.message }); }
+    });
     r.get('/ml-mass/repair', adminOnly, async (req) => repairStatus((req.query as any).rows === '1'));
     r.post('/ml-mass/repair/stop', adminOnly, async () => repairStop());
     // Simulador de ganancia: muestra de productos sin publicar con la comisión real de ML.
