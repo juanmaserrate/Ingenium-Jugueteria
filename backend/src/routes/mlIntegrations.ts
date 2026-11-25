@@ -21,20 +21,9 @@ import { massStatus, massList, massStop, startAnalysis, startPublish, setSchedul
 import { profitSample } from '../mercadolibre/profit.js';
 import { startAudit, auditStatus, auditRows, unlinkFinalized } from '../mercadolibre/audit.js';
 import { startRepair, repairStatus, repairStop } from '../mercadolibre/repair.js';
+import { resolveOrderItem } from '../mercadolibre/orderItems.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-
-// Resuelve el variantId local a partir de un item de orden ML (item + variación opcional).
-async function resolveVariantId(mlItemId: string, mlVariationId: string | null): Promise<string | null> {
-  const maps = await prisma.variantMeliMapping.findMany({ where: { mlItemId } });
-  if (!maps.length) return null;
-  if (mlVariationId) {
-    return maps.find((m) => m.mlVariationId === String(mlVariationId))?.variantId
-      ?? maps.find((m) => !m.mlVariationId)?.variantId
-      ?? null;
-  }
-  return maps.find((m) => !m.mlVariationId)?.variantId ?? maps[0].variantId;
-}
 
 // Rutas de la integración con Mercado Libre. Todo queda DORMIDO mientras ML_CLIENT_ID esté
 // vacío (sin credenciales no se puede conectar). Espeja el patrón de Tienda Nube.
@@ -568,6 +557,20 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       return { count };
     });
 
+    // Diagnóstico (solo lee): a qué producto del sistema corresponde cada ítem de la orden.
+    r.get('/ml-orders/:id/check', async (req) => {
+      const { id } = req.params as { id: string };
+      const pending = await prisma.mlOrderPending.findUnique({ where: { id } });
+      if (!pending) throw new ValidationError('Orden pendiente no encontrada');
+      const out: any[] = [];
+      for (const it of pending.items as any[]) {
+        const hit = await resolveOrderItem(String(it.mlItemId), it.mlVariationId != null ? String(it.mlVariationId) : null);
+        const v = hit ? await prisma.variant.findUnique({ where: { id: hit.variantId }, select: { name: true, product: { select: { name: true, code: true } } } }) : null;
+        out.push({ title: it.title, mlItemId: it.mlItemId, resolved: !!hit, via: hit?.via ?? null, product: v?.product?.name ?? null, code: v?.product?.code ?? null });
+      }
+      return { items: out };
+    });
+
     // Asigna una orden de ML a una sucursal = la confirma como venta (con el costo MP real).
     // Espejo de /tn-orders/:id/assign.
     r.post('/ml-orders/:id/assign', async (req) => {
@@ -582,7 +585,8 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       const saleItems: Array<{ variantId: string; qty: number; unitPrice: number }> = [];
       const missing: any[] = [];
       for (const it of items) {
-        const variantId = await resolveVariantId(String(it.mlItemId), it.mlVariationId != null ? String(it.mlVariationId) : null);
+        // Vinculada directo, o vendida por la publicación de catálogo sincronizada con la nuestra.
+        const variantId = (await resolveOrderItem(String(it.mlItemId), it.mlVariationId != null ? String(it.mlVariationId) : null))?.variantId ?? null;
         if (!variantId) { missing.push(it); continue; }
         saleItems.push({ variantId, qty: Math.round(Number(it.qty)) || 0, unitPrice: Number(it.unitPrice) || 0 });
       }

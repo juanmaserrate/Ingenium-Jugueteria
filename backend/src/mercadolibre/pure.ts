@@ -82,3 +82,23 @@ export function isValidGtin(code: unknown): boolean {
   return (10 - (sum % 10)) % 10 === check;
 }
 
+
+// Publicaciones con las que ML declara sincronizada a una publicación (la de catálogo apunta a
+// la original del vendedor en item_relations). Sin repetidos ni ella misma.
+export function relatedItemIds(item: any): Array<{ id: string; variationId: string | null }> {
+  const self = String(item?.id ?? '');
+  const out: Array<{ id: string; variationId: string | null }> = [];
+  for (const r of Array.isArray(item?.item_relations) ? item.item_relations : []) {
+    const id = String(r?.id ?? '').trim();
+    if (!id || id === self || out.some((o) => o.id === id)) continue;
+    out.push({ id, variationId: r?.variation_id != null && r.variation_id !== '' ? String(r.variation_id) : null });
+  }
+  return out;
+}
+
+// Código de barras (GTIN) que informa una publicación de ML, si tiene.
+export function itemGtin(item: any): string | null {
+  const a = (Array.isArray(item?.attributes) ? item.attributes : []).find((x: any) => x?.id === 'GTIN');
+  const v = String(a?.value_name ?? '').split(',')[0].trim();
+  return v || null;
+}

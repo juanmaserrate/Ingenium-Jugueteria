@@ -6,6 +6,7 @@ import { requireMlClient, getMlClient } from './client.js';
 import { processReturn } from '../services/returns.js';
 import { randomId } from '../utils/crypto.js';
 import { invalidateQuestionsCount } from './questions.js';
+import { normalizeOrderItems } from './orderItems.js';
 
 // Procesa una notificación de Mercado Libre. Las notificaciones son "finas": traen un
 // resource (ej. "/orders/123") y hay que ir a buscar el detalle con nuestro token. La
@@ -56,7 +57,7 @@ export async function ingestPaidMlOrder(order: any) {
 
   const buyer = order.buyer ?? {};
   const customerName = [buyer.first_name, buyer.last_name].filter(Boolean).join(' ') || buyer.nickname || 'Sin nombre';
-  const items = (order.order_items ?? []).map((oi: any) => ({
+  const rawItems = (order.order_items ?? []).map((oi: any) => ({
     mlItemId: String(oi?.item?.id ?? ''),
     mlVariationId: oi?.item?.variation_id != null ? String(oi.item.variation_id) : null,
     qty: Number(oi?.quantity) || 0,
@@ -64,6 +65,9 @@ export async function ingestPaidMlOrder(order: any) {
     title: oi?.item?.title ?? '',
     saleFee: Number(oi?.sale_fee) || 0,
   }));
+  // Si se vendió por la publicación de catálogo (la que ML crea sincronizada con la nuestra),
+  // el ítem se anota con el id de la publicación vinculada al sistema.
+  const items = await normalizeOrderItems(rawItems);
 
   try {
     await prisma.mlOrderPending.create({

@@ -32,6 +32,19 @@ test('paquete: lo que falta en el sistema se toma de Tienda Nube', async () => {
   assert.deepEqual(tnDimensions(null), { weight: 0, height: 0, width: 0, depth: 0 });
 });
 
+test('orden ML: la publicacion de catalogo se resuelve por la publicacion con la que esta sincronizada', async () => {
+  const { relatedItemIds, itemGtin } = await import('../src/mercadolibre/pure.js');
+  // Caso real 2026-11-25: se vendio MLA4236463176 (catalogo) sincronizada con MLA2318583907 (la vinculada).
+  const catalog = { id: 'MLA4236463176', catalog_listing: true, item_relations: [{ id: 'MLA2318583907', variation_id: null, stock_relation: 1 }], attributes: [{ id: 'GTIN', value_name: '9789878203386' }] };
+  assert.deepEqual(relatedItemIds(catalog), [{ id: 'MLA2318583907', variationId: null }]);
+  assert.equal(itemGtin(catalog), '9789878203386');
+  // Sin relaciones, repetidas o apuntando a si misma: no inventa nada.
+  assert.deepEqual(relatedItemIds({ id: 'A' }), []);
+  assert.deepEqual(relatedItemIds({ id: 'A', item_relations: [{ id: 'A' }, { id: 'B', variation_id: 55 }, { id: 'B' }, { id: '' }] }), [{ id: 'B', variationId: '55' }]);
+  assert.equal(itemGtin({ attributes: [{ id: 'BRAND', value_name: 'x' }] }), null);
+  assert.equal(itemGtin({ attributes: [{ id: 'GTIN', value_name: '7791234567890,7791234567891' }] }), '7791234567890');
+});
+
 test('categorias genericas: "Otros" no se usa para publicar', async () => {
   const { isGenericCategory, pickPrediction, summarizeAudit } = await import('../src/mercadolibre/massPure.js');
   assert.equal(isGenericCategory('Juegos y Juguetes > Otros'), true);
