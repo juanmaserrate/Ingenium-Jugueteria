@@ -22,7 +22,7 @@ import { profitSample } from '../mercadolibre/profit.js';
 import { startAudit, auditStatus, auditRows, unlinkFinalized } from '../mercadolibre/audit.js';
 import { startRepair, repairStatus, repairStop } from '../mercadolibre/repair.js';
 import { resolveOrderItem } from '../mercadolibre/orderItems.js';
-import { startCatalogScan, startCatalogOptin, startCatalogMatch, catalogStatus, catalogRows, catalogStop } from '../mercadolibre/catalog.js';
+import { startCatalogScan, startCatalogOptin, startCatalogMatch, startCatalogMove, catalogStatus, catalogRows, catalogStop } from '../mercadolibre/catalog.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -489,7 +489,12 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
     });
     // Catálogo de Mercado Libre: relevar cuáles ya compiten / se pueden sumar, y sumarlas.
     r.post('/ml-catalog/scan', adminOnly, async () => startCatalogScan());
-    r.get('/ml-catalog', adminOnly, async () => catalogStatus(false));
+    r.get('/ml-catalog', adminOnly, async (req) => catalogStatus(false, (req.query as any).results === 'all'));
+    // Pasar publicaciones al rubro de su ficha de catálogo (publicación → ficha, elegidas a mano).
+    r.post('/ml-catalog/move', adminOnly, async (req) => {
+      const b = z.object({ pairs: z.record(z.string().regex(/^ML[A-Z]\d+$/), z.string().regex(/^ML[A-Z]\d+$/)), dryRun: z.boolean().optional(), limit: z.number().int().positive().max(5000).nullable().optional() }).parse(req.body ?? {});
+      return startCatalogMove(b);
+    });
     r.get('/ml-catalog/rows', adminOnly, async (req) => catalogRows((req.query as any).state));
     r.post('/ml-catalog/optin', adminOnly, async (req) => {
       const b = z.object({ limit: z.number().int().positive().max(5000).nullable().optional(), itemIds: z.array(z.string().max(30)).max(5000).optional(), matched: z.boolean().optional(), pairs: z.record(z.string().regex(/^ML[A-Z]\d+$/), z.string().regex(/^ML[A-Z]\d+$/)).optional() }).parse(req.body ?? {});

@@ -76,3 +76,12 @@ export function pickCatalogProduct(results: any[] | null | undefined, itemDomain
   if (!same) return { product: null, note: 'el código coincide con una ficha de otro rubro' };
   return { product: { id: String(same.id), name: String(same.name ?? ''), domainId: same.domain_id ?? null }, note: 'ficha encontrada por código de barras' };
 }
+
+// Categoría de Mercado Libre para pasar una publicación al rubro (domain) de su ficha de
+// catálogo: de las que sugiere ML para el nombre, la primera de ESE rubro; si se puede, una
+// que no sea genérica ("Otros").
+export function pickCategoryForDomain(cands: Array<{ categoryId: string; domainId: string | null; generic: boolean }>, domainId: string | null): string | null {
+  if (!domainId) return null;
+  const same = cands.filter((c) => c.categoryId && c.domainId === domainId);
+  return (same.find((c) => !c.generic) ?? same[0])?.categoryId ?? null;
+}

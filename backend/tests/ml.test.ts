@@ -76,6 +76,19 @@ test('catalogo ML: ficha por codigo de barras solo si es del mismo rubro y esta 
   assert.equal(pickCatalogProduct([book], null).product?.id, 'MLA1');                    // sin rubro conocido: el activo
 });
 
+test('catalogo ML: categoria del rubro de la ficha (prefiere una que no sea Otros)', async () => {
+  const { pickCategoryForDomain } = await import('../src/mercadolibre/catalogPure.js');
+  const c = [
+    { categoryId: 'MLA1', domainId: 'MLA-TOYS_AND_GAMES', generic: true },
+    { categoryId: 'MLA2', domainId: 'MLA-PUZZLES', generic: true },
+    { categoryId: 'MLA3', domainId: 'MLA-PUZZLES', generic: false },
+  ];
+  assert.equal(pickCategoryForDomain(c, 'MLA-PUZZLES'), 'MLA3');
+  assert.equal(pickCategoryForDomain(c, 'MLA-TOYS_AND_GAMES'), 'MLA1');   // solo hay generica: sirve igual
+  assert.equal(pickCategoryForDomain(c, 'MLA-BOOKS'), null);               // ninguna de ese rubro
+  assert.equal(pickCategoryForDomain(c, null), null);
+});
+
 test('categorias genericas: "Otros" no se usa para publicar', async () => {
   const { isGenericCategory, pickPrediction, summarizeAudit } = await import('../src/mercadolibre/massPure.js');
   assert.equal(isGenericCategory('Juegos y Juguetes > Otros'), true);

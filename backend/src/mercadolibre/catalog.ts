@@ -1,6 +1,10 @@
 import { prisma } from '../db.js';
 import { requireMlClient } from './client.js';
-import { summarizeCatalog, catalogStateOf, pickCatalogProduct, type CatalogRow } from './catalogPure.js';
+import { summarizeCatalog, catalogStateOf, pickCatalogProduct, pickCategoryForDomain, type CatalogRow } from './catalogPure.js';
+import { missingForCategory } from './repairPure.js';
+import { isGenericCategory } from './massPure.js';
+import { pricingCtxOf, dimensionsFor, type PricingHolder } from './massPublish.js';
+import { targetPriceFor } from './pricing.js';
 import { isValidGtin } from './pure.js';
 import { mlErrorText } from './repairPure.js';
 
@@ -16,13 +20,13 @@ const PAUSE_MS = 250;
 const MAX_CONSECUTIVE_FAILS = 15;
 
 type CatalogJob = {
-  kind: 'scan' | 'optin' | 'match';
+  kind: 'scan' | 'optin' | 'match' | 'move';
   status: 'running' | 'done' | 'stopped' | 'error';
   startedAt: string; finishedAt: string | null; message: string | null;
-  total: number; done: number; ok: number; failed: number;
+  total: number; done: number; ok: number; failed: number; skipped?: number; dryRun?: boolean;
   rows: CatalogRow[];
   summary: ReturnType<typeof summarizeCatalog> | null;
-  results: Array<{ itemId: string; name: string; result: 'ok' | 'failed'; detail: string; catalogItemId?: string | null }>;
+  results: Array<{ itemId: string; name: string; result: 'ok' | 'failed' | 'skipped' | 'preview'; detail: string; catalogItemId?: string | null; from?: string; to?: string }>;
 };
 
 let job: CatalogJob | null = null;
@@ -42,10 +46,10 @@ async function load(): Promise<CatalogJob | null> {
   return v && v.status === 'running' ? { ...v, status: 'error', message: 'Se interrumpió (el servidor se reinició). Se puede volver a lanzar.' } : v;
 }
 
-export async function catalogStatus(withRows = false) {
+export async function catalogStatus(withRows = false, allResults = false) {
   const j = await load();
   if (!j) return null;
-  return withRows ? j : { ...j, rows: undefined, results: j.results.slice(-200) };
+  return withRows ? j : { ...j, rows: undefined, results: allResults ? j.results : j.results.slice(-200) };
 }
 export async function catalogRows(state?: string): Promise<CatalogRow[]> {
   const j = await load();
@@ -255,6 +259,143 @@ async function runMatch(j: CatalogJob, targets: CatalogRow[]) {
     j.done++;
     if (j.done % 50 === 0) { j.summary = summarizeCatalog(j.rows); await save(j); }
     await sleep(150);
+  }
+  j.summary = summarizeCatalog(j.rows);
+  if (j.status === 'running') j.status = 'done';
+  j.finishedAt = new Date().toISOString();
+  await save(j);
+}
+
+// --- 4) Pasar una publicación al rubro de su ficha de catálogo ---
+// Mercado Libre solo deja sumar a catálogo si la publicación está en el MISMO rubro (domain)
+// que la ficha ("does not belong to domain"). Para las que tienen la ficha en otro rubro: se
+// cambia la categoría de la publicación a una de ese rubro (completando los datos obligatorios
+// que se puedan), se ajusta el precio a la comisión nueva y queda 'matched' para sumarla después
+// con optin {matched:true}. pairs = publicación → ficha, elegidas a mano. dryRun no toca nada.
+export async function startCatalogMove(input: { pairs: Record<string, string>; dryRun?: boolean; limit?: number | null }) {
+  if (job?.status === 'running') return { started: false, reason: 'Ya hay un proceso de catálogo corriendo' };
+  const prev = await load();
+  if (!prev?.rows?.length) return { started: false, reason: 'Primero hay que relevar el catálogo' };
+  let targets = prev.rows.filter((r) => r.state === 'no_product' && r.status === 'active' && input.pairs[r.itemId]);
+  if (input.limit && input.limit > 0) targets = targets.slice(0, Math.floor(input.limit));
+  if (!targets.length) return { started: false, reason: 'Ninguna de esas publicaciones está sin ficha y activa' };
+  job = { ...fresh('move', prev.rows), total: targets.length, skipped: 0, dryRun: !!input.dryRun };
+  stopRequested = false;
+  const mine = job;
+  void runMove(mine, targets, input.pairs, !!input.dryRun).catch(async (err) => {
+    mine.status = 'error'; mine.finishedAt = new Date().toISOString(); mine.message = String(err?.message ?? 'error');
+    await save(mine);
+  });
+  return { started: true, total: targets.length, dryRun: !!input.dryRun };
+}
+
+async function runMove(j: CatalogJob, targets: CatalogRow[], pairs: Record<string, string>, dryRun: boolean) {
+  const ml = await requireMlClient();
+  const holder: PricingHolder = { ctx: null };
+  const paths = new Map<string, string>();
+  const schemas = new Map<string, any[]>();
+  const domainCat = new Map<string, string>(); // rubro → última categoría usada de ese rubro
+  const catPath = async (id: string) => {
+    if (!paths.has(id)) {
+      try { const c: any = await ml.getCategory(id); paths.set(id, (Array.isArray(c?.path_from_root) ? c.path_from_root.map((x: any) => x.name).join(' > ') : c?.name) || id); }
+      catch { paths.set(id, id); }
+    }
+    return paths.get(id)!;
+  };
+  const catAttrs = async (id: string) => {
+    if (!schemas.has(id)) { try { schemas.set(id, (await ml.getCategoryAttributes(id)) || []); } catch { schemas.set(id, []); } }
+    return schemas.get(id)!;
+  };
+  // Categoría del rubro de la ficha: la que ML sugiere para el nombre de la ficha (o el nuestro).
+  const categoryFor = async (domainId: string, names: string[]) => {
+    for (const q of names) {
+      const name = String(q || '').slice(0, 60).trim();
+      if (!name) continue;
+      let preds: any[] = [];
+      try { const res = await ml.predictCategory('MLA', name, 8); preds = Array.isArray(res) ? res : []; } catch { preds = []; }
+      const cands = [];
+      for (const p of preds) {
+        const id = String(p?.category_id ?? '');
+        if (!id) continue;
+        cands.push({ categoryId: id, domainId: p?.domain_id ? String(p.domain_id) : null, generic: isGenericCategory(await catPath(id)) });
+      }
+      const hit = pickCategoryForDomain(cands, domainId);
+      if (hit) { domainCat.set(domainId, hit); return hit; }
+    }
+    return domainCat.get(domainId) ?? null;
+  };
+
+  let consecutive = 0;
+  let hard = 0;
+  const push = (r: CatalogRow, result: 'ok' | 'failed' | 'skipped' | 'preview', detail: string, from?: string, to?: string) => {
+    j.results.push({ itemId: r.itemId, name: r.name, result, detail, from, to });
+    if (result === 'failed') { j.failed++; consecutive++; } else { consecutive = 0; hard = 0; if (result === 'skipped') j.skipped = (j.skipped || 0) + 1; else j.ok++; }
+  };
+  for (const r of targets) {
+    if (stopRequested) { j.status = 'stopped'; j.message = 'Frenado a mano. Se puede volver a lanzar: lo ya movido no se repite.'; break; }
+    const pid = pairs[r.itemId];
+    try {
+      const prod: any = await ml.catalogProduct(pid);
+      const domainId = prod?.domain_id ? String(prod.domain_id) : null;
+      if (!domainId || (prod?.status && prod.status !== 'active')) { push(r, 'skipped', 'La ficha no está activa'); }
+      else {
+        const it: any = await ml.getItem(r.itemId);
+        const from = await catPath(String(it?.category_id ?? ''));
+        if (it?.status !== 'active') push(r, 'skipped', `Estado ${it?.status}: no se toca`, from);
+        else if ((Array.isArray(it.item_relations) && it.item_relations.length) || it.catalog_listing) { r.state = 'in_catalog'; push(r, 'skipped', 'Ya está en catálogo', from); }
+        else if (Array.isArray(it.variations) && it.variations.length) push(r, 'skipped', 'Tiene variaciones: no se mueve sola', from);
+        else {
+          const sameDomain = String(it.domain_id ?? '') === domainId;
+          const catId = sameDomain ? String(it.category_id) : await categoryFor(domainId, [String(prod?.name ?? ''), r.name]);
+          if (!catId) push(r, 'skipped', `No encontré una categoría del rubro ${domainId}`, from);
+          else {
+            const to = await catPath(catId);
+            const product = await prisma.product.findUnique({
+              where: { id: r.productId },
+              select: { name: true, price: true, weight: true, width: true, height: true, depth: true, brand: { select: { name: true } }, tnMapping: { select: { tnProductId: true } } },
+            });
+            const title = String(it.family_name || it.title || r.name).slice(0, 60);
+            const need = sameDomain ? { fill: [], blocking: [] } : missingForCategory(await catAttrs(catId), it.attributes, { title, brand: product?.brand?.name ?? null });
+            if (need.blocking.length) push(r, 'skipped', `La categoría nueva pide datos que no tenemos: ${need.blocking.join(', ')}`, from, to);
+            else if (dryRun) push(r, 'preview', sameDomain ? 'Ya está en el rubro de la ficha' : (need.fill.length ? `Se completaría: ${need.fill.map((a) => a.id).join(', ')}` : 'Cambio directo'), from, to);
+            else {
+              let note = 'Ya estaba en el rubro de la ficha';
+              if (!sameDomain) {
+                await ml.updateItem(r.itemId, { category_id: catId, ...(need.fill.length ? { attributes: need.fill } : {}) });
+                note = 'Categoría cambiada';
+                // Precio: mismo criterio que al publicar, con la comisión de la categoría nueva.
+                try {
+                  const vm = await prisma.variantMeliMapping.findFirst({ where: { mlItemId: r.itemId }, select: { variant: { select: { priceOverride: true } } } });
+                  const storePrice = Number(vm?.variant?.priceOverride ?? product?.price) || 0;
+                  if (product && storePrice > 0) {
+                    const pctx = await pricingCtxOf(holder, String(it.listing_type_id || 'gold_special'));
+                    const t = await targetPriceFor(pctx, { categoryId: catId, storePrice, product: await dimensionsFor(product) });
+                    const cur = Number(it.price) || 0;
+                    const diff = Math.abs(t.price - cur);
+                    if (cur > 0 && diff >= 10) {
+                      if (diff / cur <= 0.1) { await ml.updateItem(r.itemId, { price: t.price }); note += ` · precio ${cur} → ${t.price}`; }
+                      else note += ` · precio sin tocar (${cur}; con la comisión nueva sería ${t.price})`;
+                    }
+                  }
+                } catch (err: any) { note += ` · precio sin ajustar (${mlErrorText(err).slice(0, 100)})`; }
+              }
+              r.domainId = domainId; r.matchProductId = pid; r.matchName = String(prod?.name ?? '').slice(0, 120); r.matchDomain = domainId;
+              r.matchNote = 'movida al rubro de la ficha'; r.state = 'matched';
+              push(r, 'ok', note, from, to);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      const status = Number(err?.response?.status);
+      if ([401, 403, 429].includes(status)) hard++;
+      push(r, 'failed', mlErrorText(err).slice(0, 200));
+    }
+    j.done++;
+    if (hard >= 3) { j.status = 'stopped'; j.message = 'Mercado Libre está rechazando por límite o permisos de la cuenta. Se frenó solo.'; break; }
+    if (consecutive >= MAX_CONSECUTIVE_FAILS) { j.status = 'stopped'; j.message = `Se frenó solo: ${MAX_CONSECUTIVE_FAILS} fallos seguidos. Revisá el detalle antes de seguir.`; break; }
+    if (j.done % 25 === 0) { j.summary = summarizeCatalog(j.rows); if (!dryRun) await save(j); }
+    await sleep(PAUSE_MS);
   }
   j.summary = summarizeCatalog(j.rows);
   if (j.status === 'running') j.status = 'done';
