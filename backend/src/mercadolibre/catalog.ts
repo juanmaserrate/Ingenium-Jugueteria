@@ -95,7 +95,9 @@ async function runScan(j: CatalogJob) {
     for (const r of Array.isArray(res) ? res : []) if (r?.code === 200 && r.body?.id) got.set(String(r.body.id), r.body);
     for (const id of chunk) {
       const p = byItem.get(id)!;
-      const it = got.get(id);
+      let it = got.get(id);
+      // Si la consulta en tanda falló o no la trajo, se la lee sola (no dejarla como "error").
+      if (!it) { try { it = await ml.getItem(id); } catch { it = undefined; } }
       const row: CatalogRow = {
         itemId: id, productId: p.productId, name: p.name, code: p.code,
         status: String(it?.status ?? 'error'),
