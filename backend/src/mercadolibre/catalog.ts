@@ -139,14 +139,22 @@ async function runScan(j: CatalogJob) {
 }
 
 // --- 2) Sumar a catálogo las que están listas ---
-export async function startCatalogOptin(input: { limit?: number | null; itemIds?: string[]; matched?: boolean }) {
+export async function startCatalogOptin(input: { limit?: number | null; itemIds?: string[]; matched?: boolean; pairs?: Record<string, string> }) {
   if (job?.status === 'running') return { started: false, reason: 'Ya hay un proceso de catálogo corriendo' };
   const prev = await load();
   if (!prev?.rows?.length) return { started: false, reason: 'Primero hay que relevar el catálogo' };
   // matched = las que no tenían ficha y se les encontró una por código de barras.
-  let targets = input.matched
-    ? prev.rows.filter((r) => r.state === 'matched' && r.matchProductId)
-    : prev.rows.filter((r) => r.state === 'ready' && r.catalogProductId);
+  // pairs = ficha elegida a mano para publicaciones sin ficha (publicación → producto de catálogo).
+  const forced = new Set<string>();
+  let targets: CatalogRow[];
+  if (input.pairs && Object.keys(input.pairs).length) {
+    targets = prev.rows.filter((r) => r.state === 'no_product' && r.status === 'active' && input.pairs![r.itemId]);
+    for (const r of targets) { r.matchProductId = input.pairs[r.itemId]; r.state = 'matched'; forced.add(r.itemId); }
+  } else {
+    targets = input.matched
+      ? prev.rows.filter((r) => r.state === 'matched' && r.matchProductId)
+      : prev.rows.filter((r) => r.state === 'ready' && r.catalogProductId);
+  }
   if (input.itemIds?.length) { const only = new Set(input.itemIds); targets = targets.filter((r) => only.has(r.itemId)); }
   if (input.limit && input.limit > 0) targets = targets.slice(0, Math.floor(input.limit));
   if (!targets.length) return { started: false, reason: 'No hay publicaciones listas para sumar a catálogo' };
@@ -154,14 +162,14 @@ export async function startCatalogOptin(input: { limit?: number | null; itemIds?
   job = { ...fresh('optin', prev.rows), total: targets.length };
   stopRequested = false;
   const mine = job;
-  void runOptin(mine, targets).catch(async (err) => {
+  void runOptin(mine, targets, forced).catch(async (err) => {
     mine.status = 'error'; mine.finishedAt = new Date().toISOString(); mine.message = String(err?.message ?? 'error');
     await save(mine);
   });
   return { started: true, total: targets.length };
 }
 
-async function runOptin(j: CatalogJob, targets: CatalogRow[]) {
+async function runOptin(j: CatalogJob, targets: CatalogRow[], forced = new Set<string>()) {
   const ml = await requireMlClient();
   let consecutive = 0;
   let hard = 0;
@@ -178,9 +186,11 @@ async function runOptin(j: CatalogJob, targets: CatalogRow[]) {
       const status = Number(err?.response?.status);
       if ([401, 403, 429].includes(status)) hard++; else hard = 0;
       consecutive++;
-      r.eligibilityReason = mlErrorText(err).slice(0, 200);
-      r.state = 'optin_failed';
-      j.results.push({ itemId: r.itemId, name: r.name, result: 'failed', detail: r.eligibilityReason });
+      const why = mlErrorText(err).slice(0, 200);
+      // Las de ficha elegida a mano vuelven a 'sin ficha' con el motivo, no quedan como rechazadas.
+      if (forced.has(r.itemId)) { r.state = 'no_product'; r.matchNote = `Mercado Libre no aceptó la ficha ${r.matchProductId}: ${why}`.slice(0, 200); r.matchProductId = null; }
+      else { r.eligibilityReason = why; r.state = 'optin_failed'; }
+      j.results.push({ itemId: r.itemId, name: r.name, result: 'failed', detail: why });
       j.failed++;
     }
     j.done++;

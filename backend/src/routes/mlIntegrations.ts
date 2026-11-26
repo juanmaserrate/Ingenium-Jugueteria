@@ -492,7 +492,7 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
     r.get('/ml-catalog', adminOnly, async () => catalogStatus(false));
     r.get('/ml-catalog/rows', adminOnly, async (req) => catalogRows((req.query as any).state));
     r.post('/ml-catalog/optin', adminOnly, async (req) => {
-      const b = z.object({ limit: z.number().int().positive().max(5000).nullable().optional(), itemIds: z.array(z.string().max(30)).max(5000).optional(), matched: z.boolean().optional() }).parse(req.body ?? {});
+      const b = z.object({ limit: z.number().int().positive().max(5000).nullable().optional(), itemIds: z.array(z.string().max(30)).max(5000).optional(), matched: z.boolean().optional(), pairs: z.record(z.string().regex(/^ML[A-Z]\d+$/), z.string().regex(/^ML[A-Z]\d+$/)).optional() }).parse(req.body ?? {});
       return startCatalogOptin(b);
     });
     // Buscar por código de barras la ficha de catálogo de las que ML no asoció (solo lee).
