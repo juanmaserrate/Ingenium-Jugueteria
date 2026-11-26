@@ -64,6 +64,18 @@ test('catalogo ML: estado de cada publicacion y resumen', async () => {
   assert.equal(s.readyByDomain[0].key, 'MLA-BOOKS');
 });
 
+test('catalogo ML: ficha por codigo de barras solo si es del mismo rubro y esta activa', async () => {
+  const { pickCatalogProduct } = await import('../src/mercadolibre/catalogPure.js');
+  const book = { id: 'MLA1', name: 'Libro X', status: 'active', domain_id: 'MLA-BOOKS' };
+  assert.equal(pickCatalogProduct([book], 'MLA-BOOKS').product?.id, 'MLA1');
+  assert.equal(pickCatalogProduct([book], 'MLA-PUZZLES').product, null);                 // otro rubro: codigo mal cargado
+  assert.match(pickCatalogProduct([book], 'MLA-PUZZLES').note, /otro rubro/);
+  assert.equal(pickCatalogProduct([{ ...book, status: 'inactive' }], 'MLA-BOOKS').product, null);
+  assert.match(pickCatalogProduct([], 'MLA-BOOKS').note, /no est. en el cat.logo/);
+  assert.equal(pickCatalogProduct([{ id: 'MLA2', name: 'Y', domain_id: 'MLA-PUZZLES' }, book], 'MLA-BOOKS').product?.id, 'MLA1'); // elige el del rubro
+  assert.equal(pickCatalogProduct([book], null).product?.id, 'MLA1');                    // sin rubro conocido: el activo
+});
+
 test('categorias genericas: "Otros" no se usa para publicar', async () => {
   const { isGenericCategory, pickPrediction, summarizeAudit } = await import('../src/mercadolibre/massPure.js');
   assert.equal(isGenericCategory('Juegos y Juguetes > Otros'), true);

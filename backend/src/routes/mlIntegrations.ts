@@ -22,7 +22,7 @@ import { profitSample } from '../mercadolibre/profit.js';
 import { startAudit, auditStatus, auditRows, unlinkFinalized } from '../mercadolibre/audit.js';
 import { startRepair, repairStatus, repairStop } from '../mercadolibre/repair.js';
 import { resolveOrderItem } from '../mercadolibre/orderItems.js';
-import { startCatalogScan, startCatalogOptin, catalogStatus, catalogRows, catalogStop } from '../mercadolibre/catalog.js';
+import { startCatalogScan, startCatalogOptin, startCatalogMatch, catalogStatus, catalogRows, catalogStop } from '../mercadolibre/catalog.js';
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -492,8 +492,13 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
     r.get('/ml-catalog', adminOnly, async () => catalogStatus(false));
     r.get('/ml-catalog/rows', adminOnly, async (req) => catalogRows((req.query as any).state));
     r.post('/ml-catalog/optin', adminOnly, async (req) => {
-      const b = z.object({ limit: z.number().int().positive().max(5000).nullable().optional(), itemIds: z.array(z.string().max(30)).max(5000).optional() }).parse(req.body ?? {});
+      const b = z.object({ limit: z.number().int().positive().max(5000).nullable().optional(), itemIds: z.array(z.string().max(30)).max(5000).optional(), matched: z.boolean().optional() }).parse(req.body ?? {});
       return startCatalogOptin(b);
+    });
+    // Buscar por código de barras la ficha de catálogo de las que ML no asoció (solo lee).
+    r.post('/ml-catalog/match', adminOnly, async (req) => {
+      const b = z.object({ limit: z.number().int().positive().max(5000).nullable().optional() }).parse(req.body ?? {});
+      return startCatalogMatch(b);
     });
     r.post('/ml-catalog/stop', adminOnly, async () => catalogStop());
     // Diagnóstico: lo que responde ML sobre la elegibilidad de una publicación (solo lee).

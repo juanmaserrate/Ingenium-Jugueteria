@@ -1,6 +1,7 @@
 import { prisma } from '../db.js';
 import { requireMlClient } from './client.js';
-import { summarizeCatalog, catalogStateOf, type CatalogRow } from './catalogPure.js';
+import { summarizeCatalog, catalogStateOf, pickCatalogProduct, type CatalogRow } from './catalogPure.js';
+import { isValidGtin } from './pure.js';
 import { mlErrorText } from './repairPure.js';
 
 // CATÁLOGO de Mercado Libre. Una publicación "de catálogo" compite en la ficha del producto
@@ -15,7 +16,7 @@ const PAUSE_MS = 250;
 const MAX_CONSECUTIVE_FAILS = 15;
 
 type CatalogJob = {
-  kind: 'scan' | 'optin';
+  kind: 'scan' | 'optin' | 'match';
   status: 'running' | 'done' | 'stopped' | 'error';
   startedAt: string; finishedAt: string | null; message: string | null;
   total: number; done: number; ok: number; failed: number;
@@ -138,11 +139,14 @@ async function runScan(j: CatalogJob) {
 }
 
 // --- 2) Sumar a catálogo las que están listas ---
-export async function startCatalogOptin(input: { limit?: number | null; itemIds?: string[] }) {
+export async function startCatalogOptin(input: { limit?: number | null; itemIds?: string[]; matched?: boolean }) {
   if (job?.status === 'running') return { started: false, reason: 'Ya hay un proceso de catálogo corriendo' };
   const prev = await load();
   if (!prev?.rows?.length) return { started: false, reason: 'Primero hay que relevar el catálogo' };
-  let targets = prev.rows.filter((r) => r.state === 'ready' && r.catalogProductId);
+  // matched = las que no tenían ficha y se les encontró una por código de barras.
+  let targets = input.matched
+    ? prev.rows.filter((r) => r.state === 'matched' && r.matchProductId)
+    : prev.rows.filter((r) => r.state === 'ready' && r.catalogProductId);
   if (input.itemIds?.length) { const only = new Set(input.itemIds); targets = targets.filter((r) => only.has(r.itemId)); }
   if (input.limit && input.limit > 0) targets = targets.slice(0, Math.floor(input.limit));
   if (!targets.length) return { started: false, reason: 'No hay publicaciones listas para sumar a catálogo' };
@@ -164,7 +168,7 @@ async function runOptin(j: CatalogJob, targets: CatalogRow[]) {
   for (const r of targets) {
     if (stopRequested) { j.status = 'stopped'; j.message = 'Frenado a mano. Se puede volver a lanzar: lo ya sumado no se repite.'; break; }
     try {
-      const created: any = await ml.catalogOptin(r.itemId, r.catalogProductId!);
+      const created: any = await ml.catalogOptin(r.itemId, (r.state === 'matched' ? r.matchProductId : r.catalogProductId)!);
       const newId = created?.id ? String(created.id) : null;
       r.state = 'in_catalog';
       if (newId) r.twinIds = [...r.twinIds, newId];
@@ -184,6 +188,63 @@ async function runOptin(j: CatalogJob, targets: CatalogRow[]) {
     if (consecutive >= MAX_CONSECUTIVE_FAILS) { j.status = 'stopped'; j.message = `Se frenó solo: ${MAX_CONSECUTIVE_FAILS} fallos seguidos. Revisá el detalle antes de seguir.`; break; }
     if (j.done % 25 === 0) { j.summary = summarizeCatalog(j.rows); await save(j); }
     await sleep(PAUSE_MS);
+  }
+  j.summary = summarizeCatalog(j.rows);
+  if (j.status === 'running') j.status = 'done';
+  j.finishedAt = new Date().toISOString();
+  await save(j);
+}
+
+// --- 3) Buscar ficha de catálogo por código de barras para las que ML no asoció ---
+export async function startCatalogMatch(input: { limit?: number | null } = {}) {
+  if (job?.status === 'running') return { started: false, reason: 'Ya hay un proceso de catálogo corriendo' };
+  const prev = await load();
+  if (!prev?.rows?.length) return { started: false, reason: 'Primero hay que relevar el catálogo' };
+  let targets = prev.rows.filter((r) => r.state === 'no_product' && r.status === 'active');
+  if (input.limit && input.limit > 0) targets = targets.slice(0, Math.floor(input.limit));
+  if (!targets.length) return { started: false, reason: 'No hay publicaciones sin ficha para buscar' };
+  job = { ...fresh('match', prev.rows), total: targets.length };
+  stopRequested = false;
+  const mine = job;
+  void runMatch(mine, targets).catch(async (err) => {
+    mine.status = 'error'; mine.finishedAt = new Date().toISOString(); mine.message = String(err?.message ?? 'error');
+    await save(mine);
+  });
+  return { started: true, total: targets.length };
+}
+
+async function runMatch(j: CatalogJob, targets: CatalogRow[]) {
+  const ml = await requireMlClient();
+  // Código de barras real de cada publicación, tomado del sistema.
+  const maps = await prisma.variantMeliMapping.findMany({
+    where: { mlItemId: { in: targets.map((r) => r.itemId) } },
+    select: { mlItemId: true, variant: { select: { barcode: true, code: true, product: { select: { code: true, _count: { select: { variants: true } } } } } } },
+  });
+  const gtinOf = new Map<string, string>();
+  for (const m of maps) {
+    const v = m.variant;
+    const g = [v.barcode, v.code, v.product._count.variants === 1 ? v.product.code : null].map((x) => String(x ?? '').trim()).find((x) => isValidGtin(x));
+    if (g && !gtinOf.has(m.mlItemId)) gtinOf.set(m.mlItemId, g);
+  }
+  for (const r of targets) {
+    if (stopRequested) { j.status = 'stopped'; j.message = 'Frenado a mano.'; break; }
+    const gtin = gtinOf.get(r.itemId) ?? null;
+    r.gtin = gtin;
+    if (!gtin) { r.matchNote = 'el producto no tiene código de barras real'; j.done++; continue; }
+    try {
+      const res: any = await ml.productSearch({ status: 'active', site_id: 'MLA', product_identifier: gtin });
+      const pick = pickCatalogProduct(res?.results, r.domainId);
+      r.matchNote = pick.note;
+      if (pick.product) {
+        r.matchProductId = pick.product.id; r.matchName = pick.product.name.slice(0, 120); r.matchDomain = pick.product.domainId;
+        r.state = 'matched'; j.ok++;
+      }
+    } catch (err: any) {
+      r.matchNote = `no se pudo consultar: ${mlErrorText(err).slice(0, 100)}`; j.failed++;
+    }
+    j.done++;
+    if (j.done % 50 === 0) { j.summary = summarizeCatalog(j.rows); await save(j); }
+    await sleep(150);
   }
   j.summary = summarizeCatalog(j.rows);
   if (j.status === 'running') j.status = 'done';
