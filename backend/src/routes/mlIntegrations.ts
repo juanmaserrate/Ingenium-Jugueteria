@@ -508,6 +508,22 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       try { const { requireMlClient } = await import('../mercadolibre/client.js'); return await (await requireMlClient()).catalogEligibility(id); }
       catch (err: any) { return reply.status(502).send({ error: 'ml_error', status: err?.response?.status ?? null, details: err?.response?.data ?? err?.message }); }
     });
+    // Diagnóstico: fichas del catálogo de ML para un código de barras, o una ficha por id (solo lee).
+    r.get('/integrations/ml/catalog-product', adminOnly, async (req, reply) => {
+      const q = req.query as { gtin?: string; id?: string };
+      try {
+        const ml = await (await import('../mercadolibre/client.js')).requireMlClient();
+        if (q.id) {
+          const id = String(q.id).toUpperCase();
+          if (!/^ML[A-Z]\d+$/.test(id)) return reply.status(400).send({ error: 'id inválido' });
+          return await ml.catalogProduct(id);
+        }
+        const gtin = String(q.gtin ?? '').trim();
+        if (!/^\d{8,14}$/.test(gtin)) return reply.status(400).send({ error: 'código inválido' });
+        const res: any = await ml.productSearch({ status: 'active', site_id: 'MLA', product_identifier: gtin });
+        return { results: (res?.results ?? []).map((p: any) => ({ id: p.id, name: p.name, status: p.status, domain_id: p.domain_id })) };
+      } catch (err: any) { return reply.status(502).send({ error: 'ml_error', status: err?.response?.status ?? null, details: err?.response?.data ?? err?.message }); }
+    });
     r.get('/ml-mass/repair', adminOnly, async (req) => repairStatus((req.query as any).rows === '1'));
     r.post('/ml-mass/repair/stop', adminOnly, async () => repairStop());
     // Simulador de ganancia: muestra de productos sin publicar con la comisión real de ML.

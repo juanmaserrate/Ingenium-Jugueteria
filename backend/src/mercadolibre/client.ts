@@ -127,6 +127,7 @@ export class MlClient {
     return this.req({ method: 'post', url: '/items/catalog_listings', data: { item_id: itemId, catalog_product_id: catalogProductId, ...(variationId ? { variation_id: Number(variationId) } : {}) } });
   }
   productSearch(params: Record<string, any>) { return this.req({ method: 'get', url: '/products/search', params }); }
+  catalogProduct(productId: string) { return this.req({ method: 'get', url: `/products/${productId}` }); }
 
   // --- Catálogo / categorías (para publicar) ---
   // Predice categoría a partir del título (domain discovery). site: MLA/MLM/MLB/...
