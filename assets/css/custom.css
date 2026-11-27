@@ -283,3 +283,21 @@ html.dark .ing-table tbody tr.ing-row-alt { background: rgba(255,255,255,.03); }
 .ing-table tbody tr.ing-row-alt:hover { background: #fcf5ef; }
 html.dark .ing-table tbody tr:hover { background: transparent; }
 html.dark .ing-table tbody tr.ing-row-alt:hover { background: rgba(255,255,255,.03); }
+
+/* ---- Barra lateral contraída (botón en la barra; clase en <html>) ---- */
+#sidebar { transition: width .2s ease; }
+main.ml-64 { transition: margin-left .2s ease; }
+#sidebar .sb-mini { display: none; }
+html.sb-collapsed #sidebar { width: 4.5rem !important; border-radius: 0 1.5rem 1.5rem 0; }
+html.sb-collapsed main.ml-64 { margin-left: 4.5rem !important; }
+html.sb-collapsed #sidebar .sb-label,
+html.sb-collapsed #sidebar .sb-section,
+html.sb-collapsed #sidebar .sb-brand { display: none !important; }
+html.sb-collapsed #sidebar .sb-mini { display: inline; }
+html.sb-collapsed #sidebar .sb-head { padding-left: .5rem; padding-right: .5rem; }
+html.sb-collapsed #sidebar .sb-head > div { flex-direction: column; gap: .25rem; }
+html.sb-collapsed #sidebar .sb-head #sb-toggle { margin-left: 0; }
+html.sb-collapsed #sidebar .sb-item { justify-content: center; padding-left: 0 !important; padding-right: 0 !important; margin-left: .5rem; margin-right: .5rem; border-radius: 9999px; }
+html.sb-collapsed #sidebar nav { padding-top: .25rem; }
+html.sb-collapsed #sidebar .sb-badge { position: absolute; top: 0; right: 2px; min-width: 16px; height: 16px; font-size: 9px; margin: 0; }
+html.sb-collapsed #sidebar #btn-new-sale { padding-left: 0; padding-right: 0; }

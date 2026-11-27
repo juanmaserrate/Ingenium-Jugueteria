@@ -14,6 +14,8 @@
   <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin />
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
   <script src="./src/config/theme.js"></script>
+  <!-- Barra lateral contraída: se aplica antes de dibujar (ver src/components/sidebar.js). -->
+  <script>try { if (localStorage.getItem('sb_collapsed') === '1') document.documentElement.classList.add('sb-collapsed'); } catch (e) {}</script>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
   <link href="./assets/css/custom.css" rel="stylesheet" />
