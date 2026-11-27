@@ -532,6 +532,47 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       } catch (err: any) { return reply.status(502).send({ error: 'ml_error', status: err?.response?.status ?? null, details: err?.response?.data ?? err?.message }); }
     });
     r.get('/ml-mass/repair', adminOnly, async (req) => repairStatus((req.query as any).rows === '1'));
+    // Corregir publicaciones que Mercado Libre pausó "para corregir" (título que no coincide con
+    // la foto, portada con textos, marca): título nuevo, otra foto de portada, sacar fotos y/o
+    // datos. Solo publicaciones vinculadas a un producto del sistema. ML las vuelve a revisar sola.
+    r.post('/ml-mass/patch-items', adminOnly, async (req) => {
+      const b = z.object({ items: z.array(z.object({
+        itemId: z.string().regex(/^MLA\d+$/),
+        title: z.string().min(5).max(60).optional(),
+        coverIndex: z.number().int().min(0).max(20).optional(),
+        dropIndexes: z.array(z.number().int().min(0).max(20)).max(20).optional(),
+        attributes: z.array(z.object({ id: z.string().max(60), value_name: z.string().max(200) })).max(20).optional(),
+      })).min(1).max(50) }).parse(req.body ?? {});
+      const { requireMlClient } = await import('../mercadolibre/client.js');
+      const { mlErrorText } = await import('../mercadolibre/repairPure.js');
+      const ml = await requireMlClient();
+      const out: any[] = [];
+      for (const x of b.items) {
+        const linked = await prisma.variantMeliMapping.count({ where: { mlItemId: x.itemId } });
+        if (!linked) { out.push({ itemId: x.itemId, ok: false, detail: 'No está vinculada a un producto del sistema' }); continue; }
+        try {
+          const it: any = await ml.getItem(x.itemId);
+          const body: any = {};
+          if (x.title && x.title !== it.title) body.title = x.title;
+          const pics: any[] = Array.isArray(it.pictures) ? it.pictures : [];
+          if (pics.length && (x.coverIndex != null || x.dropIndexes?.length)) {
+            const drop = new Set(x.dropIndexes ?? []);
+            let order = pics.map((p, i) => ({ p, i })).filter((o) => !drop.has(o.i));
+            if (x.coverIndex != null) order = [...order.filter((o) => o.i === x.coverIndex), ...order.filter((o) => o.i !== x.coverIndex)];
+            if (!order.length) throw new Error('No puede quedar sin fotos');
+            body.pictures = order.map((o) => ({ id: o.p.id }));
+          }
+          if (x.attributes?.length) body.attributes = x.attributes;
+          if (!Object.keys(body).length) { out.push({ itemId: x.itemId, ok: true, detail: 'Sin cambios' }); continue; }
+          await ml.updateItem(x.itemId, body);
+          const after: any = await ml.getItem(x.itemId).catch(() => null);
+          out.push({ itemId: x.itemId, ok: true, detail: `Cambiado: ${Object.keys(body).join(', ')}`, status: after?.status ?? null, sub: after?.sub_status ?? null, title: after?.title ?? null });
+        } catch (err: any) {
+          out.push({ itemId: x.itemId, ok: false, detail: mlErrorText(err).slice(0, 300) });
+        }
+      }
+      return out;
+    });
     // Qué categoría le asigna Mercado Libre a cada título (su clasificador). Sirve para probar un
     // título antes de publicar: si ML lo manda a otra categoría, la puede dar de baja. Solo lee.
     r.post('/ml-mass/predict-titles', adminOnly, async (req) => {
