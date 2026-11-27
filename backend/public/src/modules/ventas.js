@@ -352,7 +352,9 @@ function wire(el) {
 
   // Filtros de selección múltiple: cada opción muestra cuántos movimientos tiene en el período.
   {
-    const ents = state.entries || [];
+    const all = state.entries || [];
+    // Los números de cada opción cuentan solo las sucursales que se están mirando.
+    const ents = state.branches.length ? all.filter(e => state.branches.includes(e.branchId)) : all;
     const cnt = (pred) => ents.filter(pred).length;
     const setF = (k) => (vals) => { state[k] = vals; reRender(); };
     mountMultiFilter(el, 'v-types', { options: [
@@ -365,7 +367,7 @@ function wire(el) {
     ].filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
     mountMultiFilter(el, 'v-methods', { options: methodNames.map(n => ({ id: n, name: n, count: cnt(e => (e.payments || []).some(p => (p.methodName || p.methodId) === n)) })),
       selected: state.methods, onChange: setF('methods'), searchPlaceholder: 'Buscar medio de pago…' });
-    if (isAdmin()) mountMultiFilter(el, 'v-branches', { options: Object.entries(state.brMap || {}).map(([id, name]) => ({ id, name, count: cnt(e => e.branchId === id) })),
+    if (isAdmin()) mountMultiFilter(el, 'v-branches', { options: Object.entries(state.brMap || {}).map(([id, name]) => ({ id, name, count: all.filter(e => e.branchId === id).length })),
       selected: state.branches, onChange: setF('branches') });
     mountMultiFilter(el, 'v-sources', { options: [
       { id: 'pos', name: 'POS (local)', count: cnt(e => (e.source || 'pos') === 'pos') },
