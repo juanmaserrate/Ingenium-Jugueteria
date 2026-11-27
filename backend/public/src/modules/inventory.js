@@ -88,8 +88,9 @@ function paintThumbs(container) {
     const url = _thumbs.get(img.dataset.thumb);
     if (!url || img.dataset.painted) return;
     img.dataset.painted = '1';
-    img.onerror = () => { if (img.src !== url) img.src = url; else { img.classList.add('hidden'); img.nextElementSibling?.classList.remove('hidden'); } };
-    img.onload = () => { img.classList.remove('hidden'); img.nextElementSibling?.classList.add('hidden'); };
+    // Oculta con opacidad (no display:none): una imagen lazy oculta con display:none nunca se baja.
+    img.onerror = () => { if (img.src !== url) img.src = url; else { img.classList.add('opacity-0'); img.nextElementSibling?.classList.remove('hidden'); } };
+    img.onload = () => { img.classList.remove('opacity-0'); img.nextElementSibling?.classList.add('hidden'); };
     img.src = smallImg(url);
   });
 }
@@ -439,7 +440,7 @@ async function renderProducts(container, forceReload = false) {
 
   const cols = [
     // Foto: miniatura que se carga aparte (solo las de la página visible), ver loadThumbs.
-    { id: 'photo', label: 'Foto', align: 'center', render: p => `<button type="button" data-thumbbtn="${p.id}" class="inv-thumb-btn inline-flex w-12 h-12 rounded-lg bg-[#fff1e6] dark:bg-[#2a2018] overflow-hidden items-center justify-center align-middle" title="Ver foto"><img data-thumb="${p.id}" alt="" class="hidden w-full h-full object-cover" loading="lazy" /><span class="material-symbols-outlined text-base text-[#c9b6a3]">image</span></button>` },
+    { id: 'photo', label: 'Foto', align: 'center', render: p => `<button type="button" data-thumbbtn="${p.id}" class="inv-thumb-btn relative inline-flex w-12 h-12 rounded-lg bg-[#fff1e6] dark:bg-[#2a2018] overflow-hidden items-center justify-center align-middle" title="Ver foto"><img data-thumb="${p.id}" alt="" class="absolute inset-0 w-full h-full object-cover opacity-0 transition-opacity" loading="lazy" /><span class="material-symbols-outlined text-base text-[#c9b6a3]">image</span></button>` },
     { id: 'code', label: 'Código', render: p => `<span class="font-mono text-xs text-[#7d6c5c]">${p.code}</span>` },
     { id: 'name', label: 'Nombre', render: p => `<span class="font-bold">${p.name}</span>${p.has_variants ? `<span class="ml-2 px-1.5 py-0.5 rounded-full bg-[#fff1e6] text-[#d82f1e] text-[10px] font-black align-middle">${(p.variants||[]).length} ${p.variant_type || 'var'}</span>` : ''}`, editable: 'text' },
     { id: 'category', label: 'Categoría', render: p => catMap[p.category_id] || '-' },
