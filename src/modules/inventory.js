@@ -77,6 +77,99 @@ function mountCombo(wrap, { options, selectedId = '', allLabel = 'Todos', onPick
   });
 }
 
+// ---- Filtro desplegable de selección múltiple con búsqueda ----
+// Un botón ("Categoría ▾", con la cantidad marcada) abre un panel con un buscador y la lista de
+// opciones con casillas. Marcar/desmarcar aplica al instante; el panel queda abierto (se vuelve a
+// abrir solo después de redibujar la tabla) hasta que se toca afuera o el botón.
+function multiFilterHtml(key, label, nSelected) {
+  const on = nSelected > 0;
+  return `<div class="mf-wrap relative" data-mf="${key}">
+    <button type="button" class="mf-btn ing-filter inline-flex items-center gap-1.5 ${on ? '!border-[#d82f1e] text-[#d82f1e] font-bold' : ''}" aria-haspopup="true">
+      ${escapeAttr(label)}${on ? ` <span class="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-[#d82f1e] text-white text-[11px] font-black">${nSelected}</span>` : ''}
+      <span class="material-symbols-outlined text-base">expand_more</span>
+    </button>
+    <div class="mf-panel hidden absolute z-40 mt-1 w-72 bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm p-2"></div>
+  </div>`;
+}
+
+let _mfOutsideBound = false;
+function mountMultiFilter(container, key, { options, selected, onChange, searchPlaceholder = 'Buscar…' }) {
+  const wrap = container.querySelector(`[data-mf="${key}"]`);
+  if (!wrap) return;
+  const btn = wrap.querySelector('.mf-btn');
+  const panel = wrap.querySelector('.mf-panel');
+  const sel = new Set(selected || []);
+  const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+  const draw = (q = '') => {
+    const needle = norm(q.trim());
+    const list = needle ? options.filter((o) => norm(o.name).includes(needle)) : options;
+    panel.innerHTML = `
+      <input class="mf-search ing-input w-full !py-1.5 text-sm" placeholder="${escapeAttr(searchPlaceholder)}" value="${escapeAttr(q)}" autocomplete="off" />
+      <div class="flex items-center justify-between px-1 py-1.5 text-xs">
+        <button type="button" class="mf-all text-[#d82f1e] font-bold hover:underline" ${list.length ? '' : 'disabled'}>Marcar ${needle ? 'los encontrados' : 'todos'}</button>
+        <button type="button" class="mf-none text-[#7d6c5c] font-bold hover:underline" ${sel.size ? '' : 'disabled'}>Desmarcar todo</button>
+      </div>
+      <div class="mf-list max-h-64 overflow-auto">
+        ${list.length ? list.map((o) => `
+          <label class="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-[#fff1e6]">
+            <input type="checkbox" data-mfopt="${escapeAttr(o.id)}" ${sel.has(o.id) ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
+            <span class="flex-1 ${o.muted ? 'italic text-[#7d6c5c]' : ''}">${escapeAttr(o.name)}</span>
+            ${o.count != null ? `<span class="text-xs text-[#7d6c5c]">${o.count}</span>` : ''}
+          </label>`).join('') : `<div class="px-2 py-2 text-[#7d6c5c] italic">Sin resultados</div>`}
+      </div>`;
+    const search = panel.querySelector('.mf-search');
+    search.addEventListener('input', () => {
+      const pos = search.selectionStart;
+      const scroll = 0;
+      draw(search.value);
+      const s2 = panel.querySelector('.mf-search');
+      s2.focus(); try { s2.setSelectionRange(pos, pos); } catch { /* noop */ }
+      panel.querySelector('.mf-list').scrollTop = scroll;
+    });
+    search.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    const apply = () => {
+      state.openFilter = { key, q: panel.querySelector('.mf-search')?.value || '', scroll: panel.querySelector('.mf-list')?.scrollTop || 0 };
+      onChange([...sel]);
+    };
+    panel.querySelectorAll('[data-mfopt]').forEach((cb) => cb.addEventListener('change', () => {
+      if (cb.checked) sel.add(cb.dataset.mfopt); else sel.delete(cb.dataset.mfopt);
+      apply();
+    }));
+    panel.querySelector('.mf-all')?.addEventListener('click', () => { for (const o of list) sel.add(o.id); apply(); });
+    panel.querySelector('.mf-none')?.addEventListener('click', () => { sel.clear(); apply(); });
+  };
+  const open = (q = '', scroll = 0, focus = true) => {
+    container.querySelectorAll('.mf-panel').forEach((p) => { if (p !== panel) p.classList.add('hidden'); });
+    draw(q);
+    panel.classList.remove('hidden');
+    panel.querySelector('.mf-list').scrollTop = scroll;
+    if (focus) { const s = panel.querySelector('.mf-search'); s.focus(); try { s.setSelectionRange(q.length, q.length); } catch { /* noop */ } }
+  };
+  const close = () => { panel.classList.add('hidden'); if (state.openFilter?.key === key) state.openFilter = null; };
+  btn.addEventListener('click', () => (panel.classList.contains('hidden') ? open() : close()));
+
+  // Clic afuera: cierra cualquier panel abierto (un solo listener para toda la pantalla).
+  if (!_mfOutsideBound) {
+    _mfOutsideBound = true;
+    document.addEventListener('mousedown', (e) => {
+      if (e.target.closest?.('.mf-wrap')) return;
+      document.querySelectorAll('.mf-panel').forEach((p) => p.classList.add('hidden'));
+      state.openFilter = null;
+    });
+  }
+  // Si este panel estaba abierto antes de redibujar, se vuelve a abrir igual.
+  if (state.openFilter?.key === key) open(state.openFilter.q, state.openFilter.scroll, true);
+}
+
+// Claves de variante para filtrar: "Talle: S", "Color: Rojo"… (o el nombre si no tiene atributos).
+function variantKeys(v) {
+  const attrs = Object.entries(v.attributes || {}).filter(([, val]) => String(val ?? '').trim());
+  if (attrs.length) return attrs.map(([k, val]) => `${k}: ${String(val).trim()}`);
+  const n = String(v.name || '').trim();
+  return n && n !== 'default' && !v.is_default ? [n] : [];
+}
+
 // Parseo de número tolerante al formato argentino (1.234,56) y al plano (1234.56).
 // Devuelve null si no es un número válido (para NO guardar 0 por error de formato).
 function parseNumAR(s) {
@@ -203,7 +296,8 @@ const state = {
   tab: 'products',
   selected: new Set(),
   page: 0,
-  filters: { search: '', category: '', brand: '', supplier: '', channels: [], variant: '', stock: 'all', stockMax: null },
+  filters: { search: '', categories: [], brands: [], suppliers: [], channels: [], variants: [], stocks: [], stockMax: null },
+  openFilter: null, // panel de filtro abierto { key, q, scroll } para reabrirlo al redibujar
   // Orden de la lista: 'newest' (más nuevos primero, por defecto) o 'name' (A → Z). Lo cambia
   // el botón "A-Z" y se recuerda entre sesiones.
   sort: (() => { try { return localStorage.getItem('inv_sort') === 'name' ? 'name' : 'newest'; } catch { return 'newest'; } })(),
@@ -345,9 +439,10 @@ async function renderProducts(container, forceReload = false) {
       const q = f.search.toLowerCase();
       if (!(p.name?.toLowerCase().includes(q) || p.code?.toLowerCase().includes(q))) return false;
     }
-    if (f.category && p.category_id !== f.category) return false;
-    if (f.brand && p.brand_id !== f.brand) return false;
-    if (f.supplier && p.supplier_id !== f.supplier) return false;
+    // Listas de selección múltiple: '__none' = sin categoría/marca/proveedor cargado.
+    if (f.categories.length && !f.categories.includes(p.category_id || '__none')) return false;
+    if (f.brands.length && !f.brands.includes(p.brand_id || '__none')) return false;
+    if (f.suppliers.length && !f.suppliers.includes(p.supplier_id || '__none')) return false;
     // Dónde está publicado (casillas, se puede marcar más de una): cada producto cae en un solo
     // grupo — solo Mercado Libre, solo Tienda Nube, en ambos o sin publicar — y se muestran los
     // grupos marcados. Sin ninguna marcada no se filtra.
@@ -356,17 +451,13 @@ async function renderProducts(container, forceReload = false) {
       const group = ml && tn ? 'both' : ml ? 'ml_only' : tn ? 'tn_only' : 'none';
       if (!f.channels.includes(group)) return false;
     }
-    if (f.variant) {
-      const vq = f.variant.toLowerCase();
-      const hit = (p.variants || []).some(v =>
-        (v.name || '').toLowerCase().includes(vq) ||
-        Object.entries(v.attributes || {}).some(([k, val]) => `${k} ${val}`.toLowerCase().includes(vq)));
-      if (!hit) return false;
+    if (f.variants.length) {
+      const want = new Set(f.variants);
+      if (!(p.variants || []).some(v => variantKeys(v).some(k => want.has(k)))) return false;
     }
-    if ((f.stock && f.stock !== 'all') || f.stockMax != null) {
+    if (f.stocks.length || f.stockMax != null) {
       const total = stockOf(p.id, 'br_lomas').qty + stockOf(p.id, 'br_banfield').qty;
-      if (f.stock === 'with' && total <= 0) return false;   // solo con stock
-      if (f.stock === 'zero' && total > 0) return false;      // solo sin stock (0 o negativo)
+      if (f.stocks.length && !f.stocks.includes(total > 0 ? 'with' : 'zero')) return false; // con / sin stock
       if (f.stockMax != null && total > f.stockMax) return false; // stock por cantidad: total <= máximo
     }
     return true;
@@ -476,33 +567,14 @@ async function renderProducts(container, forceReload = false) {
       </div>
 
       <!-- Panel de filtros: se abre con "Filtrar". Queda abierto si hay filtros activos. -->
-      <div id="filter-panel" class="${(f.category||f.brand||f.supplier||(f.variant&&f.variant.trim())||(f.stock&&f.stock!=='all')||f.stockMax!=null||(f.channels&&f.channels.length))?'':'hidden'} mt-3 pt-3 border-t border-[#fff1e6] flex flex-wrap gap-3 items-center">
-        <div class="combo-wrap relative w-[180px]" data-combo="category">
-          <input id="f-category" class="ing-input w-full" autocomplete="off" placeholder="Todas las categorías" />
-          <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
-        </div>
-        <div class="combo-wrap relative w-[170px]" data-combo="brand">
-          <input id="f-brand" class="ing-input w-full" autocomplete="off" placeholder="Todas las marcas" />
-          <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
-        </div>
-        <div class="combo-wrap relative w-[180px]" data-combo="supplier">
-          <input id="f-supplier" class="ing-input w-full" autocomplete="off" placeholder="Todos los proveedores" />
-          <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
-        </div>
-        <input id="f-variant" class="ing-input max-w-[160px]" placeholder="Variante (talle…)" value="${escapeAttr(f.variant || '')}" />
-        <select id="f-stock" class="ing-filter" title="Filtrar por stock">
-          <option value="all" ${f.stock==='all'?'selected':''}>Todo el stock</option>
-          <option value="with" ${f.stock==='with'?'selected':''}>Con stock</option>
-          <option value="zero" ${f.stock==='zero'?'selected':''}>Sin stock (0)</option>
-        </select>
+      <div id="filter-panel" class="${(f.categories.length||f.brands.length||f.suppliers.length||f.variants.length||f.stocks.length||f.stockMax!=null||f.channels.length)?'':'hidden'} mt-3 pt-3 border-t border-[#fff1e6] flex flex-wrap gap-3 items-center">
+        ${multiFilterHtml('categories', 'Categoría', f.categories.length)}
+        ${multiFilterHtml('brands', 'Marca', f.brands.length)}
+        ${multiFilterHtml('suppliers', 'Proveedor', f.suppliers.length)}
+        ${multiFilterHtml('variants', 'Variante', f.variants.length)}
+        ${multiFilterHtml('stocks', 'Stock', f.stocks.length)}
         <input id="f-stock-max" type="number" min="0" inputmode="numeric" class="ing-filter w-28" placeholder="Stock ≤" title="Mostrar productos con stock total menor o igual a esta cantidad" value="${f.stockMax != null ? f.stockMax : ''}" />
-        <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm" title="Marcá uno o varios. Sin marcar, se ven todos.">
-          <span class="font-black text-[#7d6c5c]">Publicado en:</span>
-          ${[['ml_only','Solo Mercado Libre'],['tn_only','Solo Tienda Nube'],['both','En ambos'],['none','Sin publicar']].map(([v, label]) => `
-          <label class="flex items-center gap-1.5 font-bold cursor-pointer">
-            <input type="checkbox" data-channel="${v}" ${(f.channels||[]).includes(v)?'checked':''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" /> ${label}
-          </label>`).join('')}
-        </div>
+        ${multiFilterHtml('channels', 'Publicado en', f.channels.length)}
         <button id="f-clear" class="text-xs text-[#d82f1e] font-bold hover:underline">Limpiar</button>
       </div>
 
@@ -563,28 +635,36 @@ async function renderProducts(container, forceReload = false) {
   container.querySelector('#btn-filters')?.addEventListener('click', () => {
     container.querySelector('#filter-panel')?.classList.toggle('hidden');
   });
-  // Comboboxes filtrables (escribir/autocompletar/desplegar) + crear al vuelo. Alfabéticos.
-  mountCombo(container.querySelector('[data-combo="category"]'), {
-    options: categories, selectedId: f.category, allLabel: 'Todas las categorías',
-    onPick: (id) => { state.filters.category = id; state.page = 0; renderProducts(container); },
-    onCreate: async (name) => { const c = await Categories.save({ name }); if (state.cache) state.cache.categories = [...(state.cache.categories||[]), c]; toast(`Categoría "${name}" creada`, 'success'); return c; },
-  });
-  mountCombo(container.querySelector('[data-combo="brand"]'), {
-    options: brands, selectedId: f.brand, allLabel: 'Todas las marcas',
-    onPick: (id) => { state.filters.brand = id; state.page = 0; renderProducts(container); },
-    onCreate: async (name) => { const b = await Brands.save({ name }); if (state.cache) state.cache.brands = [...(state.cache.brands||[]), b]; toast(`Marca "${name}" creada`, 'success'); return b; },
-  });
-  mountCombo(container.querySelector('[data-combo="supplier"]'), {
-    options: suppliers, selectedId: f.supplier, allLabel: 'Todos los proveedores',
-    onPick: (id) => { state.filters.supplier = id; state.page = 0; renderProducts(container); },
-    onCreate: async (name) => { const s = await Suppliers.save({ name }); if (state.cache) state.cache.suppliers = [...(state.cache.suppliers||[]), s]; toast(`Proveedor "${name}" creado`, 'success'); return s; },
-  });
-  container.querySelectorAll('[data-channel]').forEach(cb => cb.addEventListener('change', () => {
-    state.filters.channels = [...container.querySelectorAll('[data-channel]:checked')].map(x => x.dataset.channel);
-    state.page = 0; renderProducts(container);
-  }));
-  container.querySelector('#f-variant').addEventListener('input', e => { state.filters.variant = e.target.value; state.page = 0; scheduleFilterRender(container, 'f-variant'); });
-  container.querySelector('#f-stock').addEventListener('change', e => { state.filters.stock = e.target.value; state.page = 0; renderProducts(container); });
+  // Filtros de selección múltiple con búsqueda. Cada opción muestra cuántos productos tiene
+  // (sobre todo el inventario). Alfabéticos; "Sin …" al principio.
+  {
+    const countBy = (keyOf) => { const m = new Map(); for (const p of products) for (const k of keyOf(p)) m.set(k, (m.get(k) || 0) + 1); return m; };
+    const catalogOpts = (items, field, noneLabel) => {
+      const cnt = countBy((p) => [p[field] || '__none']);
+      const opts = [...(items || [])].sort(byName).map((o) => ({ id: o.id, name: o.name, count: cnt.get(o.id) || 0 }));
+      return cnt.get('__none') ? [{ id: '__none', name: noneLabel, count: cnt.get('__none'), muted: true }, ...opts] : opts;
+    };
+    const setF = (k) => (vals) => { state.filters[k] = vals; state.page = 0; renderProducts(container); };
+    mountMultiFilter(container, 'categories', { options: catalogOpts(categories, 'category_id', 'Sin categoría'), selected: f.categories, onChange: setF('categories'), searchPlaceholder: 'Buscar categoría…' });
+    mountMultiFilter(container, 'brands', { options: catalogOpts(brands, 'brand_id', 'Sin marca'), selected: f.brands, onChange: setF('brands'), searchPlaceholder: 'Buscar marca…' });
+    mountMultiFilter(container, 'suppliers', { options: catalogOpts(suppliers, 'supplier_id', 'Sin proveedor'), selected: f.suppliers, onChange: setF('suppliers'), searchPlaceholder: 'Buscar proveedor…' });
+    const vcnt = countBy((p) => [...new Set((p.variants || []).flatMap(variantKeys))]);
+    const vcoll = new Intl.Collator('es', { sensitivity: 'base', numeric: true });
+    const variantOpts = [...vcnt.entries()].map(([k, n]) => ({ id: k, name: k, count: n })).sort((a, b) => vcoll.compare(a.name, b.name));
+    mountMultiFilter(container, 'variants', { options: variantOpts, selected: f.variants, onChange: setF('variants'), searchPlaceholder: 'Buscar talle, color…' });
+    const scnt = countBy((p) => [(stockOf(p.id, 'br_lomas').qty + stockOf(p.id, 'br_banfield').qty) > 0 ? 'with' : 'zero']);
+    mountMultiFilter(container, 'stocks', { options: [
+      { id: 'with', name: 'Con stock', count: scnt.get('with') || 0 },
+      { id: 'zero', name: 'Sin stock (0)', count: scnt.get('zero') || 0 },
+    ], selected: f.stocks, onChange: setF('stocks') });
+    const ccnt = countBy((p) => [p.linked_ml && p.linked_tn ? 'both' : p.linked_ml ? 'ml_only' : p.linked_tn ? 'tn_only' : 'none']);
+    mountMultiFilter(container, 'channels', { options: [
+      { id: 'ml_only', name: 'Solo Mercado Libre', count: ccnt.get('ml_only') || 0 },
+      { id: 'tn_only', name: 'Solo Tienda Nube', count: ccnt.get('tn_only') || 0 },
+      { id: 'both', name: 'En ambos', count: ccnt.get('both') || 0 },
+      { id: 'none', name: 'Sin publicar', count: ccnt.get('none') || 0 },
+    ], selected: f.channels, onChange: setF('channels') });
+  }
   container.querySelector('#f-stock-max').addEventListener('change', e => { const v = e.target.value.trim(); state.filters.stockMax = v === '' ? null : Math.max(0, Math.floor(Number(v) || 0)); state.page = 0; renderProducts(container); });
   // Botón A-Z: prende/apaga el orden alfabético. Ordena lo que dejen los filtros activos.
   container.querySelector('#btn-az').addEventListener('click', () => {
@@ -593,7 +673,7 @@ async function renderProducts(container, forceReload = false) {
     try { localStorage.setItem('inv_sort', state.sort); } catch { /* sin storage: no se recuerda */ }
     renderProducts(container);
   });
-  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', channels:[], variant:'', stock:'all', stockMax:null }; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search: '', categories: [], brands: [], suppliers: [], channels: [], variants: [], stocks: [], stockMax: null }; state.openFilter = null; state.page = 0; renderProducts(container); });
 
   container.querySelector('#btn-new')?.addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-bulkcost')?.addEventListener('click', () => openBulkCostModal(container));
