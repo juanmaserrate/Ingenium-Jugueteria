@@ -212,7 +212,7 @@ const state = {
   tab: 'products',
   selected: new Set(),
   page: 0,
-  filters: { search: '', categories: [], brands: [], suppliers: [], channels: [], variants: [], stocks: [], stockMax: null },
+  filters: { search: '', categories: [], brands: [], suppliers: [], channels: [], variants: [], stockBranches: [], stocks: [], stockMin: null, stockMax: null },
   // Orden de la lista: 'newest' (más nuevos primero, por defecto) o 'name' (A → Z). Lo cambia
   // el botón "A-Z" y se recuerda entre sesiones.
   sort: (() => { try { return localStorage.getItem('inv_sort') === 'name' ? 'name' : 'newest'; } catch { return 'newest'; } })(),
@@ -345,6 +345,9 @@ async function renderProducts(container, forceReload = false) {
   const _stockMap = new Map();
   for (const s of (stocks || [])) _stockMap.set(`${s.product_id}|${s.branch_id}`, s);
   const stockOf = (pid, bid) => _stockMap.get(`${pid}|${bid}`) || { qty: 0, reserved_qty: 0 };
+  // Stock de las sucursales elegidas en el filtro "Stock en" (ninguna marcada = Lomas + Banfield).
+  const stockBranchIds = state.filters.stockBranches?.length ? state.filters.stockBranches : ['br_lomas', 'br_banfield'];
+  const stockIn = (pid) => stockBranchIds.reduce((n, b) => n + (stockOf(pid, b).qty || 0), 0);
   const lomas = (branches || []).find(b => b.id === 'br_lomas');
   const banf  = (branches || []).find(b => b.id === 'br_banfield');
 
@@ -370,9 +373,10 @@ async function renderProducts(container, forceReload = false) {
       const want = new Set(f.variants);
       if (!(p.variants || []).some(v => variantKeys(v).some(k => want.has(k)))) return false;
     }
-    if (f.stocks.length || f.stockMax != null) {
-      const total = stockOf(p.id, 'br_lomas').qty + stockOf(p.id, 'br_banfield').qty;
+    if (f.stocks.length || f.stockMin != null || f.stockMax != null) {
+      const total = stockIn(p.id); // de las sucursales elegidas en "Stock en" (ninguna = las dos)
       if (f.stocks.length && !f.stocks.includes(total > 0 ? 'with' : 'zero')) return false; // con / sin stock
+      if (f.stockMin != null && total < f.stockMin) return false; // stock por cantidad: total >= mínimo
       if (f.stockMax != null && total > f.stockMax) return false; // stock por cantidad: total <= máximo
     }
     return true;
@@ -423,10 +427,15 @@ async function renderProducts(container, forceReload = false) {
   const sumLomas = list.reduce((s, p) => s + (stockOf(p.id, 'br_lomas').qty || 0), 0);
   const sumBanf  = list.reduce((s, p) => s + (stockOf(p.id, 'br_banfield').qty || 0), 0);
 
+  // Totales de lo filtrado: unidades en stock de las sucursales elegidas en "Stock en".
+  const unitsShown = list.reduce((n, p) => n + Math.max(0, stockIn(p.id)), 0);
+  const stockLabel = state.filters.stockBranches?.length === 1
+    ? ((branches || []).find(b => b.id === state.filters.stockBranches[0])?.name || 'la sucursal')
+    : 'Lomas + Banfield';
   // Barra de paginación reutilizable (se muestra arriba y abajo de la tabla).
   const pagBar = (pos) => `
     <div class="flex items-center justify-between mt-3 flex-wrap gap-2">
-      <p class="text-xs text-[#7d6c5c]">${list.length} producto(s)${list.length > PAGE_SIZE ? ` · mostrando ${pageStart+1}-${Math.min(pageStart+PAGE_SIZE, list.length)}` : ''}${pos==='bottom' ? ' · doble-click para editar (Nombre, Costo, %Margen, Precio)' : ''}</p>
+      <p class="text-xs text-[#7d6c5c]"><b class="text-[#241a0d] dark:text-[#fff1e6]">${list.length.toLocaleString('es-AR')} producto(s)</b> · <b class="text-[#241a0d] dark:text-[#fff1e6]">${unitsShown.toLocaleString('es-AR')} unidades</b> en ${stockLabel}${list.length > PAGE_SIZE ? ` · mostrando ${pageStart+1}-${Math.min(pageStart+PAGE_SIZE, list.length)}` : ''}${pos==='bottom' ? ' · doble-click para editar (Nombre, Costo, %Margen, Precio)' : ''}</p>
       ${totalPages > 1 ? `
       <div class="flex items-center gap-2">
         <button class="pg-first ing-btn-secondary text-xs !py-1.5 !px-3" ${state.page===0?'disabled':''} title="Primera">«</button>
@@ -482,13 +491,15 @@ async function renderProducts(container, forceReload = false) {
       </div>
 
       <!-- Panel de filtros: se abre con "Filtrar". Queda abierto si hay filtros activos. -->
-      <div id="filter-panel" class="${(f.categories.length||f.brands.length||f.suppliers.length||f.variants.length||f.stocks.length||f.stockMax!=null||f.channels.length)?'':'hidden'} mt-3 pt-3 border-t border-[#fff1e6] flex flex-wrap gap-3 items-center">
+      <div id="filter-panel" class="${(f.categories.length||f.brands.length||f.suppliers.length||f.variants.length||f.stockBranches.length||f.stocks.length||f.stockMin!=null||f.stockMax!=null||f.channels.length)?'':'hidden'} mt-3 pt-3 border-t border-[#fff1e6] flex flex-wrap gap-3 items-center">
         ${multiFilterHtml('categories', 'Categoría', f.categories.length)}
         ${multiFilterHtml('brands', 'Marca', f.brands.length)}
         ${multiFilterHtml('suppliers', 'Proveedor', f.suppliers.length)}
         ${multiFilterHtml('variants', 'Variante', f.variants.length)}
+        ${multiFilterHtml('stockBranches', 'Stock en', f.stockBranches.length)}
         ${multiFilterHtml('stocks', 'Stock', f.stocks.length)}
-        <input id="f-stock-max" type="number" min="0" inputmode="numeric" class="ing-filter w-28" placeholder="Stock ≤" title="Mostrar productos con stock total menor o igual a esta cantidad" value="${f.stockMax != null ? f.stockMax : ''}" />
+        <input id="f-stock-min" type="number" min="0" inputmode="numeric" class="ing-filter w-28" placeholder="Stock ≥" title="Mostrar productos con stock mayor o igual a esta cantidad (de las sucursales elegidas en «Stock en»)" value="${f.stockMin != null ? f.stockMin : ''}" />
+        <input id="f-stock-max" type="number" min="0" inputmode="numeric" class="ing-filter w-28" placeholder="Stock ≤" title="Mostrar productos con stock menor o igual a esta cantidad (de las sucursales elegidas en «Stock en»)" value="${f.stockMax != null ? f.stockMax : ''}" />
         ${multiFilterHtml('channels', 'Publicado en', f.channels.length)}
         <button id="f-clear" class="text-xs text-[#d82f1e] font-bold hover:underline">Limpiar</button>
       </div>
@@ -567,7 +578,11 @@ async function renderProducts(container, forceReload = false) {
     const vcoll = new Intl.Collator('es', { sensitivity: 'base', numeric: true });
     const variantOpts = [...vcnt.entries()].map(([k, n]) => ({ id: k, name: k, count: n })).sort((a, b) => vcoll.compare(a.name, b.name));
     mountMultiFilter(container, 'variants', { options: variantOpts, selected: f.variants, onChange: setF('variants'), searchPlaceholder: 'Buscar talle, color…' });
-    const scnt = countBy((p) => [(stockOf(p.id, 'br_lomas').qty + stockOf(p.id, 'br_banfield').qty) > 0 ? 'with' : 'zero']);
+    mountMultiFilter(container, 'stockBranches', { options: [
+      { id: 'br_lomas', name: lomas?.name || 'Lomas' },
+      { id: 'br_banfield', name: banf?.name || 'Banfield' },
+    ], selected: f.stockBranches, onChange: setF('stockBranches') });
+    const scnt = countBy((p) => [stockIn(p.id) > 0 ? 'with' : 'zero']);
     mountMultiFilter(container, 'stocks', { options: [
       { id: 'with', name: 'Con stock', count: scnt.get('with') || 0 },
       { id: 'zero', name: 'Sin stock (0)', count: scnt.get('zero') || 0 },
@@ -582,6 +597,7 @@ async function renderProducts(container, forceReload = false) {
       { id: 'none', name: 'Sin publicar', count: ccnt.get('none') || 0 },
     ], selected: chSel, onChange: setF('channels') });
   }
+  container.querySelector('#f-stock-min').addEventListener('change', e => { const v = e.target.value.trim(); state.filters.stockMin = v === '' ? null : Math.max(0, Math.floor(Number(v) || 0)); state.page = 0; renderProducts(container); });
   container.querySelector('#f-stock-max').addEventListener('change', e => { const v = e.target.value.trim(); state.filters.stockMax = v === '' ? null : Math.max(0, Math.floor(Number(v) || 0)); state.page = 0; renderProducts(container); });
   // Botón A-Z: prende/apaga el orden alfabético. Ordena lo que dejen los filtros activos.
   container.querySelector('#btn-az').addEventListener('click', () => {
@@ -590,7 +606,7 @@ async function renderProducts(container, forceReload = false) {
     try { localStorage.setItem('inv_sort', state.sort); } catch { /* sin storage: no se recuerda */ }
     renderProducts(container);
   });
-  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search: '', categories: [], brands: [], suppliers: [], channels: [], variants: [], stocks: [], stockMax: null }; closeMultiFilters(); state.page = 0; renderProducts(container); });
+  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search: '', categories: [], brands: [], suppliers: [], channels: [], variants: [], stockBranches: [], stocks: [], stockMin: null, stockMax: null }; closeMultiFilters(); state.page = 0; renderProducts(container); });
 
   container.querySelector('#btn-new')?.addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-bulkcost')?.addEventListener('click', () => openBulkCostModal(container));
