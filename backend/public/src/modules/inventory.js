@@ -78,6 +78,41 @@ function mountCombo(wrap, { options, selectedId = '', allLabel = 'Todos', onPick
   });
 }
 
+// ---- Fotos (miniaturas) de la grilla ----
+// Se piden al servidor solo para los productos de la página visible y se guardan en memoria.
+// Las de Tienda Nube se piden en tamaño chico (su CDN acepta el sufijo -240-0); si falla, la original.
+const _thumbs = new Map(); // productId -> url | null
+const smallImg = (u) => String(u || '').replace(/-(\d+)-(\d+)\.(webp|jpe?g|png)(\?.*)?$/i, '-240-0.$3');
+function paintThumbs(container) {
+  container.querySelectorAll('img[data-thumb]').forEach((img) => {
+    const url = _thumbs.get(img.dataset.thumb);
+    if (!url || img.dataset.painted) return;
+    img.dataset.painted = '1';
+    img.onerror = () => { if (img.src !== url) img.src = url; else { img.classList.add('hidden'); img.nextElementSibling?.classList.remove('hidden'); } };
+    img.onload = () => { img.classList.remove('hidden'); img.nextElementSibling?.classList.add('hidden'); };
+    img.src = smallImg(url);
+  });
+}
+async function loadThumbs(container, ids) {
+  paintThumbs(container);
+  const need = ids.filter((id) => !_thumbs.has(id));
+  if (!need.length) return;
+  try {
+    const res = await api('/api/products/thumbs', { method: 'POST', body: { ids: need } });
+    // Las que todavía no tienen foto buscada vuelven null: se reintenta en la próxima página.
+    for (const id of need) if (res && res[id]) _thumbs.set(id, res[id]);
+    paintThumbs(container);
+  } catch { /* sin fotos: la grilla funciona igual */ }
+}
+function openThumbModal(productId, name) {
+  const url = _thumbs.get(productId);
+  if (!url) { toast('Este producto no tiene foto cargada', 'info'); return; }
+  openModal({ title: name || 'Foto', size: 'md',
+    bodyHTML: `<div class="flex justify-center"><img src="${escapeAttr(url)}" alt="" class="max-h-[70vh] max-w-full rounded-xl object-contain" /></div>`,
+    footerHTML: `<button class="ing-btn-secondary" data-act="close">Cerrar</button>`,
+    onOpen: (el, close) => el.querySelector('[data-act="close"]').addEventListener('click', () => close(null)) });
+}
+
 // Claves de variante para filtrar: "Talle: S", "Color: Rojo"… (o el nombre si no tiene atributos).
 function variantKeys(v) {
   const attrs = Object.entries(v.attributes || {}).filter(([, val]) => String(val ?? '').trim());
@@ -217,7 +252,7 @@ const state = {
   // el botón "A-Z" y se recuerda entre sesiones.
   sort: (() => { try { return localStorage.getItem('inv_sort') === 'name' ? 'name' : 'newest'; } catch { return 'newest'; } })(),
   expandedVariants: new Set(), // productos con el detalle de variantes desplegado
-  visibleCols: new Set(['code', 'name', 'category', 'brand', 'supplier', 'cost', 'price', 'margin', 'stock_lomas', 'stock_banfield', 'total', 'meli', 'tn']),
+  visibleCols: new Set(['photo', 'code', 'name', 'category', 'brand', 'supplier', 'cost', 'price', 'margin', 'stock_lomas', 'stock_banfield', 'total', 'meli', 'tn']),
   // Caché de datos: se carga una sola vez y los filtros operan sobre él
   cache: null, // { products, stocks, categories, brands, suppliers, branches, subcats }
 };
@@ -403,6 +438,8 @@ async function renderProducts(container, forceReload = false) {
   const pageRows = list.slice(pageStart, pageStart + PAGE_SIZE);
 
   const cols = [
+    // Foto: miniatura que se carga aparte (solo las de la página visible), ver loadThumbs.
+    { id: 'photo', label: 'Foto', align: 'center', render: p => `<button type="button" data-thumbbtn="${p.id}" class="inv-thumb-btn inline-flex w-12 h-12 rounded-lg bg-[#fff1e6] dark:bg-[#2a2018] overflow-hidden items-center justify-center align-middle" title="Ver foto"><img data-thumb="${p.id}" alt="" class="hidden w-full h-full object-cover" loading="lazy" /><span class="material-symbols-outlined text-base text-[#c9b6a3]">image</span></button>` },
     { id: 'code', label: 'Código', render: p => `<span class="font-mono text-xs text-[#7d6c5c]">${p.code}</span>` },
     { id: 'name', label: 'Nombre', render: p => `<span class="font-bold">${p.name}</span>${p.has_variants ? `<span class="ml-2 px-1.5 py-0.5 rounded-full bg-[#fff1e6] text-[#d82f1e] text-[10px] font-black align-middle">${(p.variants||[]).length} ${p.variant_type || 'var'}</span>` : ''}`, editable: 'text' },
     { id: 'category', label: 'Categoría', render: p => catMap[p.category_id] || '-' },
@@ -608,6 +645,15 @@ async function renderProducts(container, forceReload = false) {
   });
   container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search: '', categories: [], brands: [], suppliers: [], channels: [], variants: [], stockBranches: [], stocks: [], stockMin: null, stockMax: null }; closeMultiFilters(); state.page = 0; renderProducts(container); });
 
+  // Fotos de la página visible.
+  if (state.visibleCols.has('photo')) {
+    void loadThumbs(container, pageRows.map(p => p.id));
+    container.querySelectorAll('[data-thumbbtn]').forEach(b => b.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const p = pageRows.find(x => x.id === b.dataset.thumbbtn);
+      openThumbModal(b.dataset.thumbbtn, p?.name);
+    }));
+  }
   container.querySelector('#btn-new')?.addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-bulkcost')?.addEventListener('click', () => openBulkCostModal(container));
   container.querySelector('#btn-mlsync')?.addEventListener('click', async () => {

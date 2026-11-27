@@ -199,6 +199,19 @@ async function main() {
   startSyncWorker(app.log);
   // Publicación masiva en Mercado Libre programada (arranca sola a la hora fijada)
   startMassScheduler();
+  // Miniaturas de Inventario: si muchos productos todavía no tienen la foto buscada, se cargan
+  // solas desde Tienda Nube (una vez; después las mantiene el webhook de productos).
+  setTimeout(async () => {
+    try {
+      const { prisma: db } = await import('./db.js');
+      const pending = await db.product.count({ where: { active: true, thumbUrl: null, tnMapping: { isNot: null } } });
+      if (pending > 200) {
+        const { startThumbBackfill } = await import('./services/thumbs.js');
+        startThumbBackfill();
+        console.log(`[thumbs] carga inicial de miniaturas (${pending} sin buscar)`);
+      }
+    } catch (err) { console.warn('[thumbs] no se pudo lanzar la carga inicial:', err); }
+  }, 20_000);
 }
 
 main().catch((err) => {

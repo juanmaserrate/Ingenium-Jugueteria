@@ -275,6 +275,8 @@ export async function handleProductUpdated(event: any) {
   const tn = await getTnClient();
   if (!tn) throw new Error('TN not connected');
   const tnProduct = await tn.getProduct(tnProductId);
+  // Miniatura de Inventario: la 1ra foto de TN (aunque el resto de los datos no se pise).
+  try { const { setThumbFromTn } = await import('../services/thumbs.js'); await setThumbFromTn(mapping.productId, tnProduct); } catch { /* no frena el webhook */ }
 
   // Last-write-wins: si la modificaci\u00f3n de TN es posterior a la local, actualizamos.
   // Si la fecha de TN es inv\u00e1lida, NO tocamos nada (no arriesgamos pisar lo local).

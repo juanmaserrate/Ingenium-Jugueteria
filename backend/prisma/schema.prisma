@@ -146,6 +146,7 @@ model Product {
   seoDescription String? @map("seo_description")
   handle        String?  // slug url custom (si null, se genera del name)
   videoUrl      String?  @map("video_url") // youtube/vimeo embed, se inyecta en description al pushear
+  thumbUrl      String?  @map("thumb_url") // 1ra foto (miniatura de Inventario). null = sin buscar, '' = sin foto
   tnCategoryIds Json     @default("[]") @map("tn_category_ids") // [123, 456] ids de TN
   categoryId    String?  @map("category_id")
   subcategoryId String?  @map("subcategory_id")

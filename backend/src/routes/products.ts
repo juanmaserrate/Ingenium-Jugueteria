@@ -61,6 +61,22 @@ export async function productsRoutes(app: FastifyInstance) {
 
   app.get('/products', async () => listProducts());
 
+  // Miniaturas (1ra foto) de una tanda de productos: la grilla de Inventario las pide de a página.
+  app.post('/products/thumbs', async (req) => {
+    const b = z.object({ ids: z.array(z.string().max(60)).min(1).max(300) }).parse(req.body ?? {});
+    const { thumbsFor } = await import('../services/thumbs.js');
+    return thumbsFor(b.ids);
+  });
+  // Carga inicial de miniaturas desde Tienda Nube (una vez; después se mantienen solas).
+  app.post('/products/thumbs/backfill', { preHandler: requireRole('admin') }, async () => {
+    const { startThumbBackfill } = await import('../services/thumbs.js');
+    return startThumbBackfill();
+  });
+  app.get('/products/thumbs/backfill', { preHandler: requireRole('admin') }, async () => {
+    const { thumbBackfillStatus } = await import('../services/thumbs.js');
+    return thumbBackfillStatus();
+  });
+
   app.get('/products/:id', async (req) => {
     const { id } = req.params as { id: string };
     return getProduct(id);
