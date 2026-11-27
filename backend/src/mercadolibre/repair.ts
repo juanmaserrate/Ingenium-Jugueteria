@@ -62,7 +62,7 @@ export function repairStop() {
 
 // categoryByProduct: categoría de ML elegida a mano para cada producto ({ productId: 'MLA…' }).
 // Si viene, solo se tocan esos productos y se usa esa categoría (no se predice nada).
-export async function startRepair(input: { action: RepairAction; dryRun?: boolean; limit?: number | null; itemIds?: string[]; categoryByProduct?: Record<string, string> }) {
+export async function startRepair(input: { action: RepairAction; dryRun?: boolean; limit?: number | null; itemIds?: string[]; categoryByProduct?: Record<string, string>; titleByProduct?: Record<string, string>; attrsByProduct?: Record<string, Array<{ id: string; value_name: string }>> }) {
   if (job?.status === 'running') return { started: false, reason: 'Ya hay un arreglo corriendo' };
   const mass = await massStatus();
   if (mass.job?.status === 'running') return { started: false, reason: 'Hay una publicación masiva corriendo' };
@@ -82,7 +82,8 @@ export async function startRepair(input: { action: RepairAction; dryRun?: boolea
   };
   stopRequested = false;
   const mine = job;
-  void run(mine, targets, overrides).catch(async (err) => {
+  const extras = { titles: input.titleByProduct ?? {}, attrs: input.attrsByProduct ?? {} };
+  void run(mine, targets, overrides, extras).catch(async (err) => {
     mine.status = 'error'; mine.finishedAt = new Date().toISOString(); mine.message = String(err?.message ?? 'error');
     await save(mine);
   });
@@ -93,16 +94,18 @@ type Ctx = {
   ml: MlClient;
   holder: PricingHolder;
   overrides: Record<string, string> | null;
+  titles: Record<string, string>;
+  attrs: Record<string, Array<{ id: string; value_name: string }>>;
   catPath: (id: string) => Promise<string>;
   catAttrs: (id: string) => Promise<any[]>;
 };
 
-async function run(j: RepairJob, targets: AuditRow[], overrides: Record<string, string> | null) {
+async function run(j: RepairJob, targets: AuditRow[], overrides: Record<string, string> | null, extras: { titles: Record<string, string>; attrs: Record<string, Array<{ id: string; value_name: string }>> } = { titles: {}, attrs: {} }) {
   const ml = await requireMlClient();
   const paths = new Map<string, string>();
   const schemas = new Map<string, any[]>();
   const ctx: Ctx = {
-    ml, holder: { ctx: null }, overrides,
+    ml, holder: { ctx: null }, overrides, titles: extras.titles, attrs: extras.attrs,
     catPath: async (id) => {
       if (!paths.has(id)) {
         try { const c: any = await ml.getCategory(id); paths.set(id, (Array.isArray(c?.path_from_root) ? c.path_from_root.map((x: any) => x.name).join(' > ') : c?.name) || id); }
@@ -283,8 +286,10 @@ async function republish(ctx: Ctx, unit: AuditRow[], dryRun: boolean): Promise<R
   if (!info || info.generic) return { ...base(r), result: 'skipped', detail: 'Mercado Libre no sugiere una categoría específica: hay que elegirla a mano', from: r.categoryName };
   const to = await ctx.catPath(info.categoryId);
   if (isGenericCategory(to)) return { ...base(r), result: 'skipped', detail: 'La categoría sugerida también es genérica', from: r.categoryName, to };
-  if (info.categoryId === r.categoryId) return { ...base(r), result: 'skipped', detail: 'La categoría sugerida es la misma en la que Mercado Libre la dio de baja: revisar a mano', from: r.categoryName, to };
-  if (dryRun) return { ...base(r), result: 'preview', detail: `Se publicaría de nuevo (${dead.length} ${dead.length === 1 ? 'publicación' : 'publicaciones'})`, from: r.categoryName, to };
+  const newTitle = ctx.titles[r.productId] ? String(ctx.titles[r.productId]).slice(0, 60) : undefined;
+  // Misma categoría solo si cambia el título (ML la había bajado por cómo la clasificó por el título).
+  if (info.categoryId === r.categoryId && !newTitle) return { ...base(r), result: 'skipped', detail: 'La categoría sugerida es la misma en la que Mercado Libre la dio de baja: revisar a mano', from: r.categoryName, to };
+  if (dryRun) return { ...base(r), result: 'preview', detail: `Se publicaría de nuevo (${dead.length} ${dead.length === 1 ? 'publicación' : 'publicaciones'})${newTitle ? ' como "' + newTitle + '"' : ''}`, from: r.categoryName, to };
 
   // Desvincular las dadas de baja (en ML no se toca nada).
   await prisma.variantMeliMapping.deleteMany({ where: { mlItemId: { in: dead } } });
@@ -292,7 +297,8 @@ async function republish(ctx: Ctx, unit: AuditRow[], dryRun: boolean): Promise<R
   const left = await prisma.variantMeliMapping.count({ where: { variant: { productId: r.productId } } });
   if (left === 0) await prisma.productMeliMapping.deleteMany({ where: { productId: r.productId } });
 
-  const one = await publishOne(r.productId, { listingTypeId: LISTING, pricing: 'target', priceFactor: 1, requireSpecific: true, categoryId: forced }, ctx.holder);
+  const extraAttrs = ctx.attrs[r.productId];
+  const one = await publishOne(r.productId, { listingTypeId: LISTING, pricing: 'target', priceFactor: 1, requireSpecific: true, categoryId: forced, ...(newTitle ? { title: newTitle } : {}), ...(extraAttrs?.length ? { extraAttrsByProduct: { [r.productId]: extraAttrs } } : {}) }, ctx.holder);
   const res = one.res;
   if (res?.ok && !res.alreadyLinked) {
     return { ...base(r), result: 'ok', detail: `Publicada de nuevo${Number(res.count) > 1 ? ` (${res.count} publicaciones)` : ''} a $${one.mlPrice ?? '?'}`, from: r.categoryName, to, newItemId: res.itemId, link: res.permalink ?? null };

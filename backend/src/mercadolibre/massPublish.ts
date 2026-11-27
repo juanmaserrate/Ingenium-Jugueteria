@@ -89,6 +89,8 @@ export async function dimensionsFor(p: Dims & { tnMapping?: { tnProductId: strin
 // en el local, o con recargo fijo), paquete (el del producto → Tienda Nube → estándar) y, si se
 // pide, solo en una categoría específica. Lo usan la publicación masiva y los arreglos.
 export type PublishOneOpts = { listingTypeId: string; pricing: 'target' | 'factor'; priceFactor: number; minPrice?: number; requireSpecific?: boolean; categoryId?: string;
+  // Título para Mercado Libre distinto del nombre del producto (máx. 60).
+  title?: string;
   // Datos obligatorios que el sistema no tiene (ej. Género): por categoría de ML o por producto.
   extraAttrs?: Record<string, ExtraAttr[]>; extraAttrsByProduct?: Record<string, ExtraAttr[]> };
 export type ExtraAttr = { id: string; value_name: string };
@@ -137,7 +139,7 @@ export async function publishOne(productId: string, o: PublishOneOpts, holder: P
     // ML exige peso y medidas del paquete en toda publicación.
     const catForAttrs = o.extraAttrs ? (o.categoryId || (await resolveMlCategory(productId, p.name)) || '') : '';
     const extra = [...(o.extraAttrsByProduct?.[productId] ?? []), ...(o.extraAttrs?.[catForAttrs] ?? [])];
-    return publishProduct({ productId, listingTypeId: o.listingTypeId, priceFactor: o.priceFactor, priceByBase, attributes: [...packageAttributes(packageFor(dims)), ...extra], strictCategory: !!o.requireSpecific, ...(o.categoryId ? { categoryId: o.categoryId } : {}) });
+    return publishProduct({ productId, listingTypeId: o.listingTypeId, priceFactor: o.priceFactor, priceByBase, attributes: [...packageAttributes(packageFor(dims)), ...extra], strictCategory: !!o.requireSpecific, ...(o.categoryId ? { categoryId: o.categoryId } : {}), ...(o.title ? { title: o.title.slice(0, 60) } : {}) });
   };
   // Paquete: lo del producto, o lo de Tienda Nube. Si ML no acepta esas medidas (pasa con
   // valores muy chicos, ej. 15 g / 4×2×2 cm), se reintenta una vez con el paquete estándar.

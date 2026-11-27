@@ -442,6 +442,8 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
         limit: z.number().int().positive().max(5000).nullable().optional(),
         itemIds: z.array(z.string().max(30)).max(2000).optional(),
         categoryByProduct: z.record(z.string().regex(/^MLA\d+$/)).optional(),
+        titleByProduct: z.record(z.string().min(5).max(60)).optional(),
+        attrsByProduct: z.record(z.array(z.object({ id: z.string().max(60), value_name: z.string().max(200) })).max(20)).optional(),
       }).parse(req.body ?? {});
       return startRepair(b);
     });
@@ -530,6 +532,26 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       } catch (err: any) { return reply.status(502).send({ error: 'ml_error', status: err?.response?.status ?? null, details: err?.response?.data ?? err?.message }); }
     });
     r.get('/ml-mass/repair', adminOnly, async (req) => repairStatus((req.query as any).rows === '1'));
+    // Qué categoría le asigna Mercado Libre a cada título (su clasificador). Sirve para probar un
+    // título antes de publicar: si ML lo manda a otra categoría, la puede dar de baja. Solo lee.
+    r.post('/ml-mass/predict-titles', adminOnly, async (req) => {
+      const b = z.object({ titles: z.array(z.string().min(2).max(60)).min(1).max(60) }).parse(req.body ?? {});
+      const { requireMlClient } = await import('../mercadolibre/client.js');
+      const { categoryPath } = await import('../mercadolibre/categoryPick.js');
+      const ml = await requireMlClient();
+      const out: Array<{ title: string; preds: Array<{ categoryId: string; domainId: string | null; path: string }> }> = [];
+      for (const t of b.titles) {
+        let preds: any[] = [];
+        try { const res = await ml.predictCategory('MLA', t, 3); preds = Array.isArray(res) ? res : []; } catch { preds = []; }
+        const list = [];
+        for (const p of preds.slice(0, 3)) {
+          const id = String(p?.category_id ?? '');
+          if (id) list.push({ categoryId: id, domainId: p?.domain_id ? String(p.domain_id) : null, path: await categoryPath(id) });
+        }
+        out.push({ title: t, preds: list });
+      }
+      return out;
+    });
     r.post('/ml-mass/repair/stop', adminOnly, async () => repairStop());
     // Simulador de ganancia: muestra de productos sin publicar con la comisión real de ML.
     r.get('/ml-mass/profit-sample', adminOnly, async (req, reply) => {
