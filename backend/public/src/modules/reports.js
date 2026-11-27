@@ -16,6 +16,7 @@ import { activeBranchId, isAdmin, listBranches } from '../core/auth.js';
 import { exportToXLSX } from '../core/xlsx.js';
 import { toast } from '../core/notifications.js';
 import { openModal } from '../components/modal.js';
+import { multiFilterHtml, mountMultiFilter } from '../components/multifilter.js';
 
 const REPORTS = [
   { id: 'by-customer', name: 'Compras por cliente', desc: 'Agrupado por cliente: sus compras, detalle de productos e importes. Elegís los filtros al generar.', icon: 'shopping_cart', filters: ['date', 'branch', 'source', 'customer'] },
@@ -85,9 +86,10 @@ async function runReport(id, btn) {
   try {
     if (filters?.branchesSeparate) {
       // "Las dos sucursales" → una exportación por sucursal, en archivos separados.
-      const brs = await listBranches().catch(() => []);
+      const all = await listBranches().catch(() => []);
+      const picked = filters.branchIdsPicked?.length ? all.filter(b => filters.branchIdsPicked.includes(b.id)) : all;
       let files = 0;
-      for (const b of brs) {
+      for (const b of picked) {
         batchExport = { suffix: sheetSafe(b.name).replace(/\s+/g, '_') };
         try {
           const r = await fn({ ...filters, branchId: b.id, branchesSeparate: false });
@@ -250,6 +252,13 @@ function applyColumnFilters(sheets, filters) {
 }
 
 const getBranches = () => api('/api/branches').catch(() => []);
+
+// Orígenes elegidos (POS / Tienda Nube / Mercado Libre). Con uno solo filtra el servidor;
+// con varios se traen todas y se filtra acá. Vacío = todos.
+const setSourceQs = (qs, f) => { if (f.sources?.length === 1) qs.set('source', f.sources[0]); };
+const keepSources = (f) => (rows) => (f.sources?.length > 1 ? (rows || []).filter(s => f.sources.includes(s.source || 'pos')) : rows);
+// Proveedores elegidos (vacío = todos).
+const supplierOk = (f, supplierId) => !f.supplierIds?.length || f.supplierIds.includes(String(supplierId));
 const nameOf = (c) => `${c.name || ''} ${c.lastname || ''}`.trim();
 
 async function repSales(f = {}) {
@@ -257,9 +266,9 @@ async function repSales(f = {}) {
   if (f.from) qs.set('from', f.from + 'T00:00:00');
   if (f.to) qs.set('to', f.to + 'T23:59:59');
   if (f.branchId) qs.set('branchId', f.branchId);
-  if (f.source) qs.set('source', f.source);
+  setSourceQs(qs, f);
   const [sales, employees, products, categories, branches] = await Promise.all([
-    api('/api/sales?' + qs.toString()),
+    api('/api/sales?' + qs.toString()).then(keepSources(f)),
     Employees.list(), Products.list(), getAll('categories'), getBranches(),
   ]);
   const emMap = Object.fromEntries((employees || []).map(e => [e.id, nameOf(e)]));
@@ -271,12 +280,12 @@ async function repSales(f = {}) {
       vMap[v.id] = { code: v.code || p.code || '', category: catMap[p.category_id] || '', supplierId: p.supplier_id || null };
     }
   }
-  const match = (it) => !f.supplierId || String(vMap[it.variantId]?.supplierId) === String(f.supplierId);
+  const match = (it) => supplierOk(f, vMap[it.variantId]?.supplierId);
   const header = [];
   const details = [];
   for (const s of (sales || [])) {
     const items = (s.items || []).filter(match);
-    if (f.supplierId && !items.length) continue; // con filtro de proveedor, sólo ventas que lo incluyan
+    if (f.supplierIds?.length && !items.length) continue; // con filtro de proveedor, sólo ventas que lo incluyan
     const importe = round2(items.reduce((n, it) => n + (it.subtotal || 0), 0));
     const costo = round2(items.reduce((n, it) => n + (it.costSnapshot || 0) * (it.qty || 0), 0));
     header.push({
@@ -320,9 +329,9 @@ async function salesContext(f = {}) {
   if (f.from) qs.set('from', f.from + 'T00:00:00');
   if (f.to) qs.set('to', f.to + 'T23:59:59');
   if (f.branchId) qs.set('branchId', f.branchId);
-  if (f.source) qs.set('source', f.source);
+  setSourceQs(qs, f);
   const [sales, customers, products, categories, suppliers, branches] = await Promise.all([
-    api('/api/sales?' + qs.toString()),
+    api('/api/sales?' + qs.toString()).then(keepSources(f)),
     api('/api/customers').catch(() => []),
     Products.list(), getAll('categories'), Suppliers.list().catch(() => []), getBranches(),
   ]);
@@ -402,12 +411,12 @@ async function repByCustomerSum(f = {}) {
 // Agrupa los ITEMS de venta por una dimensión del producto (proveedor o rubro).
 // Enriquecido: ventas, unidades, productos, importe, costo, ganancia, margen y participación,
 // con fila TOTAL. supplierId (opcional) filtra a un proveedor.
-function groupItemsBy(sales, vMap, dimKey, label, supplierId) {
+function groupItemsBy(sales, vMap, dimKey, label, f = {}) {
   const g = new Map();
   let granImporte = 0;
   for (const s of sales) for (const it of (s.items || [])) {
     const info = vMap[it.variantId] || {};
-    if (supplierId && String(info.supplierId) !== String(supplierId)) continue;
+    if (!supplierOk(f, info.supplierId)) continue;
     const k = info[dimKey] || `Sin ${label.toLowerCase()}`;
     const e = g.get(k) || { [label]: k, Unidades: 0, Importe: 0, Costo: 0, _prods: new Set(), _sales: new Set() };
     const sub = it.subtotal || 0;
@@ -442,11 +451,11 @@ function groupItemsBy(sales, vMap, dimKey, label, supplierId) {
 
 // Detalle por PRODUCTO vendido (una fila por variante/SKU): cantidad, precio, costo, margen.
 // supplierId (opcional) filtra a un proveedor. Ordena por importe desc, con fila TOTAL.
-function productDetail(sales, vMap, supplierId) {
+function productDetail(sales, vMap, f = {}) {
   const g = new Map(); // variantId -> agregado
   for (const s of sales) for (const it of (s.items || [])) {
     const info = vMap[it.variantId] || {};
-    if (supplierId && String(info.supplierId) !== String(supplierId)) continue;
+    if (!supplierOk(f, info.supplierId)) continue;
     const variante = it.variantNameSnap && it.variantNameSnap !== 'default' ? ` (${it.variantNameSnap})` : '';
     const e = g.get(it.variantId) || {
       Proveedor: info.proveedor || 'Sin proveedor', Rubro: info.categoria || 'Sin rubro',
@@ -485,14 +494,14 @@ function productDetail(sales, vMap, supplierId) {
 async function repBySupplier(f = {}) {
   const { sales, vMap } = await salesContext(f);
   return saveXLSX('ventas_por_proveedor.xlsx', [
-    { name: 'Por proveedor', rows: groupItemsBy(sales, vMap, 'proveedor', 'Proveedor', f.supplierId) },
-    { name: 'Productos vendidos', rows: productDetail(sales, vMap, f.supplierId) },
+    { name: 'Por proveedor', rows: groupItemsBy(sales, vMap, 'proveedor', 'Proveedor', f) },
+    { name: 'Productos vendidos', rows: productDetail(sales, vMap, f) },
   ]);
 }
 
 async function repByCategory(f = {}) {
   const { sales, vMap } = await salesContext(f);
-  return saveXLSX('ventas_por_rubro.xlsx', [{ name: 'Por rubro', rows: groupItemsBy(sales, vMap, 'categoria', 'Rubro', f.supplierId) }]);
+  return saveXLSX('ventas_por_rubro.xlsx', [{ name: 'Por rubro', rows: groupItemsBy(sales, vMap, 'categoria', 'Rubro', f) }]);
 }
 
 // Nombre de hoja válido para Excel: sin \ / ? * [ ] :  y máx 31 chars.
@@ -628,12 +637,10 @@ function pickFilters(fields = [], title = 'Filtros del reporte') {
     if (has('branch')) { try { branches = await listBranches(); } catch { branches = []; } }
     let suppliers = [];
     if (has('supplier')) { try { suppliers = await Suppliers.list(); } catch { suppliers = []; } }
-    // El admin arranca con SU sucursal activa preseleccionada; puede elegir la otra, o "las dos"
-    // (que genera un XLSX por sucursal). El encargado queda ceñido a la suya (única opción).
-    const branchOptions = admin
-      ? branches.map(b => `<option value="${b.id}" ${b.id === activeBranchId() ? 'selected' : ''}>${b.name}</option>`).join('')
-        + `<option value="__sep__">Las dos (archivos separados)</option>`
-      : branches.filter(b => b.id === activeBranchId()).map(b => `<option value="${b.id}">${b.name}</option>`).join('');
+    // Sucursal: el admin arranca con la suya marcada; puede marcar otra o varias (varias = un
+    // archivo por sucursal) o ninguna (= todas juntas). El encargado queda ceñido a la suya.
+    const sel = { branches: activeBranchId() ? [activeBranchId()] : [], sources: [], suppliers: [] };
+    const myBranch = branches.find(b => b.id === activeBranchId());
     const parts = [];
     const now = new Date();
     const curMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -660,19 +667,15 @@ function pickFilters(fields = [], title = 'Filtros del reporte') {
       <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Hasta</span>
         <input id="rf-to" type="date" class="ing-input w-full mt-1" /></label>`);
     if (has('branch')) parts.push(`
-      <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Sucursal</span>
-        <select id="rf-branch" class="ing-input w-full mt-1" ${admin ? '' : 'disabled'}>${branchOptions}</select></label>`);
+      <div class="block"><span class="text-xs font-bold text-[#7d6c5c]">Sucursal</span>
+        <div class="mt-1">${admin ? multiFilterHtml('rf-branches', 'Sucursal', sel.branches.length, { full: true }) : `<div class="ing-input w-full opacity-80">${escHtml(myBranch?.name || '')}</div>`}</div>
+        ${admin ? '<p class="text-[11px] text-[#7d6c5c] mt-1">Varias = un archivo por sucursal. Ninguna = todas juntas.</p>' : ''}</div>`);
     if (has('source')) parts.push(`
-      <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Origen</span>
-        <select id="rf-source" class="ing-input w-full mt-1">
-          <option value="">Todos</option><option value="pos">POS (local)</option><option value="tn">Tienda Nube</option><option value="ml">Mercado Libre</option>
-        </select></label>`);
+      <div class="block"><span class="text-xs font-bold text-[#7d6c5c]">Origen</span>
+        <div class="mt-1">${multiFilterHtml('rf-sources', 'Todos', 0, { full: true })}</div></div>`);
     if (has('supplier')) parts.push(`
-      <label class="block"><span class="text-xs font-bold text-[#7d6c5c]">Proveedor</span>
-        <select id="rf-supplier" class="ing-input w-full mt-1">
-          <option value="">Todos</option>
-          ${suppliers.map(s => `<option value="${escHtml(s.id)}">${escHtml(s.name)}</option>`).join('')}
-        </select></label>`);
+      <div class="block col-span-2"><span class="text-xs font-bold text-[#7d6c5c]">Proveedor</span>
+        <div class="mt-1">${multiFilterHtml('rf-suppliers', 'Todos', 0, { full: true })}</div></div>`);
     if (has('customer')) parts.push(`
       <label class="block col-span-2"><span class="text-xs font-bold text-[#7d6c5c]">Cliente (nombre o documento, opcional)</span>
         <input id="rf-term" class="ing-input w-full mt-1" placeholder="Dejar vacío = todos los clientes" /></label>
@@ -692,6 +695,12 @@ function pickFilters(fields = [], title = 'Filtros del reporte') {
                    <button class="ing-btn-primary" data-act="ok"><span class="material-symbols-outlined text-sm align-middle">download</span> Generar</button>`,
       onOpen: (el, close) => {
         const g = (id) => el.querySelector(id);
+        if (has('branch') && admin) mountMultiFilter(el, 'rf-branches', { options: branches.map(b => ({ id: b.id, name: b.name })), selected: sel.branches, onChange: (v) => { sel.branches = v; } });
+        if (has('source')) mountMultiFilter(el, 'rf-sources', { options: [
+          { id: 'pos', name: 'POS (local)' }, { id: 'tn', name: 'Tienda Nube' }, { id: 'ml', name: 'Mercado Libre' },
+        ], selected: sel.sources, onChange: (v) => { sel.sources = v; } });
+        if (has('supplier')) mountMultiFilter(el, 'rf-suppliers', { options: [...suppliers].sort((a, b) => String(a.name).localeCompare(String(b.name), 'es')).map(s => ({ id: String(s.id), name: s.name })),
+          selected: sel.suppliers, onChange: (v) => { sel.suppliers = v; }, searchPlaceholder: 'Buscar proveedor…' });
         if (has('period')) {
           const sync = () => {
             const m = g('#rf-pmode').value;
@@ -713,15 +722,17 @@ function pickFilters(fields = [], title = 'Filtros del reporte') {
         el.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
         el.querySelector('[data-act="ok"]').addEventListener('click', () => {
           const pr = has('period') ? periodRange() : {};
-          const brVal = has('branch') ? (admin ? g('#rf-branch').value : activeBranchId()) : undefined;
-          const branchesSeparate = brVal === '__sep__';
+          const brs = has('branch') ? (admin ? sel.branches : [activeBranchId()].filter(Boolean)) : [];
+          const branchesSeparate = brs.length > 1;
+          const brVal = brs.length === 1 ? brs[0] : undefined;
           close({
             from: has('period') ? pr.from : (has('date') ? (g('#rf-from').value || undefined) : undefined),
             to: has('period') ? pr.to : (has('date') ? (g('#rf-to').value || undefined) : undefined),
             branchId: branchesSeparate ? undefined : (brVal || undefined),
             branchesSeparate,
-            supplierId: has('supplier') ? (g('#rf-supplier').value || undefined) : undefined,
-            source: has('source') ? (g('#rf-source').value || undefined) : undefined,
+            branchIdsPicked: branchesSeparate ? brs : undefined,
+            supplierIds: has('supplier') ? sel.suppliers : [],
+            sources: has('source') ? sel.sources : [],
             term: has('customer') ? g('#rf-term').value.trim().toLowerCase() : '',
             onlyWithCustomer: has('customer') ? g('#rf-onlycust').checked : false,
             columnFilter: !!(g('#rf-colfilter') && g('#rf-colfilter').checked),
@@ -738,9 +749,9 @@ async function repByCustomer(f = {}) {
   if (f.from) qs.set('from', f.from + 'T00:00:00');
   if (f.to) qs.set('to', f.to + 'T23:59:59');
   if (f.branchId) qs.set('branchId', f.branchId);
-  if (f.source) qs.set('source', f.source);
+  setSourceQs(qs, f);
   const [sales, customers, products, categories, branches] = await Promise.all([
-    api('/api/sales?' + qs.toString()),
+    api('/api/sales?' + qs.toString()).then(keepSources(f)),
     api('/api/customers').catch(() => []),
     Products.list(), getAll('categories'), getBranches(),
   ]);
@@ -894,7 +905,7 @@ async function repInventory(f = {}) {
   const brMap = Object.fromEntries((brands || []).map(b => [b.id, b.name]));
   const spMap = Object.fromEntries((suppliers || []).map(s => [s.id, s.name]));
   let prods = (products || []);
-  if (f.supplierId) prods = prods.filter(p => String(p.supplier_id) === String(f.supplierId));
+  if (f.supplierIds?.length) prods = prods.filter(p => supplierOk(f, p.supplier_id));
   const rows = prods.map(p => {
     const row = {
       Codigo: p.code, Nombre: p.name, Categoria: catMap[p.category_id] || '', Marca: brMap[p.brand_id] || '',

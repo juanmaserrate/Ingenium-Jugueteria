@@ -12,6 +12,7 @@ import { activeBranchId, isAdmin } from '../core/auth.js';
 import { toast } from '../core/notifications.js';
 import { on, EV } from '../core/events.js';
 import { openModal, confirmModal } from '../components/modal.js';
+import { multiFilterHtml, mountMultiFilter } from '../components/multifilter.js';
 
 const AR = '-03:00';
 
@@ -20,16 +21,17 @@ const state = {
   date: todayKey(),
   customFrom: todayKey(),
   customTo: todayKey(),
-  branch: 'all',
-  method: '',
-  type: 'all', // all | sale | return
-  source: '', // '' | pos | tn
+  // Filtros de selección múltiple (vacío = todos).
+  branches: [],
+  methods: [],   // nombres de medio de pago
+  types: [],     // sale | return
+  sources: [],   // pos | tn | ml
   q: '',
   expanded: new Set(),
   entries: [],
   vName: {},
   brMap: {},
-  methods: [],
+  methodsCfg: [],
 };
 
 export async function mount(el) {
@@ -38,9 +40,9 @@ export async function mount(el) {
   // pasar a 'Todas'/otra, y recordamos su elección mientras no cierre sesión.
   const mine = activeBranchId();
   if (!isAdmin()) {
-    if (mine) state.branch = mine;
+    state.branches = mine ? [mine] : [];
   } else if (!state._branchInit) {
-    state.branch = mine || 'all';
+    state.branches = mine ? [mine] : [];
     state._branchInit = true;
   }
   await load(el);
@@ -93,7 +95,7 @@ async function load(el) {
     return;
   }
 
-  state.methods = methodsCfg || [];
+  state.methodsCfg = methodsCfg || [];
   state.brMap = Object.fromEntries((branches || []).map(b => [b.id, b.name]));
   // variantId -> nombre legible (para el detalle de las devoluciones, que sólo guardan variantId)
   state.vName = {};
@@ -142,10 +144,10 @@ async function load(el) {
 function filtered() {
   const q = state.q.trim().toLowerCase();
   return state.entries.filter(e => {
-    if (state.type !== 'all' && e.kind !== state.type) return false;
-    if (state.branch !== 'all' && e.branchId !== state.branch) return false;
-    if (state.source && e.source !== state.source) return false;
-    if (state.method && !(e.payments || []).some(p => (p.methodName || p.methodId) === state.method)) return false;
+    if (state.types.length && !state.types.includes(e.kind)) return false;
+    if (state.branches.length && !state.branches.includes(e.branchId)) return false;
+    if (state.sources.length && !state.sources.includes(e.source || 'pos')) return false;
+    if (state.methods.length && !(e.payments || []).some(p => state.methods.includes(p.methodName || p.methodId))) return false;
     if (!q) return true;
     if (String(e.number).includes(q)) return true;
     if ((e.customerName || '').toLowerCase().includes(q)) return true;
@@ -173,16 +175,8 @@ function render(el) {
   const nVentas = list.filter(e => e.kind === 'sale').length;
   const nDev = list.filter(e => e.kind === 'return').length;
 
-  const methodOpts = ['<option value="">Todos los medios</option>']
-    .concat((state.methods || []).map(m => `<option value="${escapeHtml(m.name)}" ${state.method === m.name ? 'selected' : ''}>${escapeHtml(m.name)}</option>`)).join('');
-  // Admin: 'Todas' + todas las sucursales (con la suya preseleccionada por el default).
-  // Encargado: solo su sucursal (sin 'Todas' ni la otra) → el select queda fijo.
-  const branchOpts = isAdmin()
-    ? ['<option value="all">Todas las sucursales</option>']
-        .concat(Object.entries(state.brMap || {}).map(([id, name]) => `<option value="${id}" ${state.branch === id ? 'selected' : ''}>${escapeHtml(name)}</option>`)).join('')
-    : Object.entries(state.brMap || {})
-        .filter(([id]) => id === activeBranchId())
-        .map(([id, name]) => `<option value="${id}" selected>${escapeHtml(name)}</option>`).join('');
+  // Encargado: solo su sucursal (fija, sin filtro). Admin: elige una, varias o ninguna (= todas).
+  const myBranchName = (state.brMap || {})[activeBranchId()] || '';
 
   const dateInput = state.period === 'custom' ? `
       <input id="v-from" type="date" value="${state.customFrom}" class="ing-filter" title="Desde" />
@@ -222,19 +216,10 @@ function render(el) {
           ${(isAdmin() ? ['day', 'month', 'year', 'custom', 'all'] : ['day']).map(p => `<button data-period="${p}" class="px-2.5 py-1 text-xs font-bold rounded-md ${state.period === p ? 'bg-[#d82f1e] text-white' : 'bg-[#fff1e6] text-[#7d6c5c]'}">${{ day: 'Día', month: 'Mes', year: 'Año', custom: 'Rango', all: 'Todo' }[p]}</button>`).join('')}
         </div>
         ${dateInput}
-        <select id="v-type" class="ing-filter">
-          <option value="all" ${state.type === 'all' ? 'selected' : ''}>Ventas y devoluciones</option>
-          <option value="sale" ${state.type === 'sale' ? 'selected' : ''}>Sólo ventas</option>
-          <option value="return" ${state.type === 'return' ? 'selected' : ''}>Sólo devoluciones</option>
-        </select>
-        <select id="v-method" class="ing-filter">${methodOpts}</select>
-        <select id="v-br" class="ing-filter" ${isAdmin() ? '' : 'disabled'}>${branchOpts}</select>
-        <select id="v-source" class="ing-filter">
-          <option value="" ${state.source === '' ? 'selected' : ''}>Todo origen</option>
-          <option value="pos" ${state.source === 'pos' ? 'selected' : ''}>POS</option>
-          <option value="tn" ${state.source === 'tn' ? 'selected' : ''}>Tienda Nube</option>
-          <option value="ml" ${state.source === 'ml' ? 'selected' : ''}>Mercado Libre</option>
-        </select>
+        ${multiFilterHtml('v-types', 'Tipo', state.types.length)}
+        ${multiFilterHtml('v-methods', 'Medio de pago', state.methods.length)}
+        ${isAdmin() ? multiFilterHtml('v-branches', 'Sucursal', state.branches.length) : `<span class="ing-filter inline-flex items-center opacity-80">${escapeHtml(myBranchName)}</span>`}
+        ${multiFilterHtml('v-sources', 'Origen', state.sources.length)}
         <input id="v-q" placeholder="Buscar N°, cliente, vendedor o producto…" class="ing-filter flex-1 min-w-[160px]" value="${escapeHtml(state.q)}" />
       </div>
     </div>
@@ -365,10 +350,29 @@ function wire(el) {
   const f = el.querySelector('#v-from'); if (f) f.addEventListener('change', ev => { state.customFrom = ev.target.value; load(el); });
   const t = el.querySelector('#v-to'); if (t) t.addEventListener('change', ev => { state.customTo = ev.target.value; load(el); });
 
-  el.querySelector('#v-type')?.addEventListener('change', ev => { state.type = ev.target.value; reRender(); });
-  el.querySelector('#v-method')?.addEventListener('change', ev => { state.method = ev.target.value; reRender(); });
-  el.querySelector('#v-br')?.addEventListener('change', ev => { state.branch = ev.target.value; reRender(); });
-  el.querySelector('#v-source')?.addEventListener('change', ev => { state.source = ev.target.value; reRender(); });
+  // Filtros de selección múltiple: cada opción muestra cuántos movimientos tiene en el período.
+  {
+    const ents = state.entries || [];
+    const cnt = (pred) => ents.filter(pred).length;
+    const setF = (k) => (vals) => { state[k] = vals; reRender(); };
+    mountMultiFilter(el, 'v-types', { options: [
+      { id: 'sale', name: 'Ventas', count: cnt(e => e.kind === 'sale') },
+      { id: 'return', name: 'Devoluciones', count: cnt(e => e.kind === 'return') },
+    ], selected: state.types, onChange: setF('types') });
+    const methodNames = [...new Set([
+      ...(state.methodsCfg || []).map(m => m.name),
+      ...ents.flatMap(e => (e.payments || []).map(p => p.methodName || p.methodId)),
+    ].filter(Boolean))].sort((a, b) => a.localeCompare(b, 'es'));
+    mountMultiFilter(el, 'v-methods', { options: methodNames.map(n => ({ id: n, name: n, count: cnt(e => (e.payments || []).some(p => (p.methodName || p.methodId) === n)) })),
+      selected: state.methods, onChange: setF('methods'), searchPlaceholder: 'Buscar medio de pago…' });
+    if (isAdmin()) mountMultiFilter(el, 'v-branches', { options: Object.entries(state.brMap || {}).map(([id, name]) => ({ id, name, count: cnt(e => e.branchId === id) })),
+      selected: state.branches, onChange: setF('branches') });
+    mountMultiFilter(el, 'v-sources', { options: [
+      { id: 'pos', name: 'POS (local)', count: cnt(e => (e.source || 'pos') === 'pos') },
+      { id: 'tn', name: 'Tienda Nube', count: cnt(e => e.source === 'tn') },
+      { id: 'ml', name: 'Mercado Libre', count: cnt(e => e.source === 'ml') },
+    ], selected: state.sources, onChange: setF('sources') });
+  }
   const q = el.querySelector('#v-q');
   if (q) {
     let tm;

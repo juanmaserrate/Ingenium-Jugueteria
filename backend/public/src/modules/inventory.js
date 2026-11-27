@@ -13,6 +13,7 @@ import { activeBranchId, currentSession, isAdmin } from '../core/auth.js';
 import * as Audit from '../core/audit.js';
 import { exportSimple, exportToXLSX } from '../core/xlsx.js';
 import { printHTML } from '../core/pdf.js';
+import { multiFilterHtml, mountMultiFilter, closeMultiFilters } from '../components/multifilter.js';
 import { openMlPublishModal, openMlProductModal, openMlSyncModal, bulkUnpublishMl, mlUrl } from './inventory-ml.js';
 
 // Escapa caracteres reservados para incrustar contenido en value="..." de un input.
@@ -75,91 +76,6 @@ function mountCombo(wrap, { options, selectedId = '', allLabel = 'Todos', onPick
     closeMenu();
     onPick(pid);
   });
-}
-
-// ---- Filtro desplegable de selección múltiple con búsqueda ----
-// Un botón ("Categoría ▾", con la cantidad marcada) abre un panel con un buscador y la lista de
-// opciones con casillas. Marcar/desmarcar aplica al instante; el panel queda abierto (se vuelve a
-// abrir solo después de redibujar la tabla) hasta que se toca afuera o el botón.
-function multiFilterHtml(key, label, nSelected) {
-  const on = nSelected > 0;
-  return `<div class="mf-wrap relative" data-mf="${key}">
-    <button type="button" class="mf-btn ing-filter inline-flex items-center gap-1.5 ${on ? '!border-[#d82f1e] text-[#d82f1e] font-bold' : ''}" aria-haspopup="true">
-      ${escapeAttr(label)}${on ? ` <span class="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-[#d82f1e] text-white text-[11px] font-black">${nSelected}</span>` : ''}
-      <span class="material-symbols-outlined text-base">expand_more</span>
-    </button>
-    <div class="mf-panel hidden absolute z-40 mt-1 w-72 bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm p-2"></div>
-  </div>`;
-}
-
-let _mfOutsideBound = false;
-function mountMultiFilter(container, key, { options, selected, onChange, searchPlaceholder = 'Buscar…' }) {
-  const wrap = container.querySelector(`[data-mf="${key}"]`);
-  if (!wrap) return;
-  const btn = wrap.querySelector('.mf-btn');
-  const panel = wrap.querySelector('.mf-panel');
-  const sel = new Set(selected || []);
-  const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-
-  const draw = (q = '') => {
-    const needle = norm(q.trim());
-    const list = needle ? options.filter((o) => norm(o.name).includes(needle)) : options;
-    panel.innerHTML = `
-      <input class="mf-search ing-input w-full !py-1.5 text-sm" placeholder="${escapeAttr(searchPlaceholder)}" value="${escapeAttr(q)}" autocomplete="off" />
-      <div class="flex items-center justify-between px-1 py-1.5 text-xs">
-        <button type="button" class="mf-all text-[#d82f1e] font-bold hover:underline" ${list.length ? '' : 'disabled'}>Marcar ${needle ? 'los encontrados' : 'todos'}</button>
-        <button type="button" class="mf-none text-[#7d6c5c] font-bold hover:underline" ${sel.size ? '' : 'disabled'}>Desmarcar todo</button>
-      </div>
-      <div class="mf-list max-h-64 overflow-auto">
-        ${list.length ? list.map((o) => `
-          <label class="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-[#fff1e6]">
-            <input type="checkbox" data-mfopt="${escapeAttr(o.id)}" ${sel.has(o.id) ? 'checked' : ''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" />
-            <span class="flex-1 ${o.muted ? 'italic text-[#7d6c5c]' : ''}">${escapeAttr(o.name)}</span>
-            ${o.count != null ? `<span class="text-xs text-[#7d6c5c]">${o.count}</span>` : ''}
-          </label>`).join('') : `<div class="px-2 py-2 text-[#7d6c5c] italic">Sin resultados</div>`}
-      </div>`;
-    const search = panel.querySelector('.mf-search');
-    search.addEventListener('input', () => {
-      const pos = search.selectionStart;
-      const scroll = 0;
-      draw(search.value);
-      const s2 = panel.querySelector('.mf-search');
-      s2.focus(); try { s2.setSelectionRange(pos, pos); } catch { /* noop */ }
-      panel.querySelector('.mf-list').scrollTop = scroll;
-    });
-    search.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
-    const apply = () => {
-      state.openFilter = { key, q: panel.querySelector('.mf-search')?.value || '', scroll: panel.querySelector('.mf-list')?.scrollTop || 0 };
-      onChange([...sel]);
-    };
-    panel.querySelectorAll('[data-mfopt]').forEach((cb) => cb.addEventListener('change', () => {
-      if (cb.checked) sel.add(cb.dataset.mfopt); else sel.delete(cb.dataset.mfopt);
-      apply();
-    }));
-    panel.querySelector('.mf-all')?.addEventListener('click', () => { for (const o of list) sel.add(o.id); apply(); });
-    panel.querySelector('.mf-none')?.addEventListener('click', () => { sel.clear(); apply(); });
-  };
-  const open = (q = '', scroll = 0, focus = true) => {
-    container.querySelectorAll('.mf-panel').forEach((p) => { if (p !== panel) p.classList.add('hidden'); });
-    draw(q);
-    panel.classList.remove('hidden');
-    panel.querySelector('.mf-list').scrollTop = scroll;
-    if (focus) { const s = panel.querySelector('.mf-search'); s.focus(); try { s.setSelectionRange(q.length, q.length); } catch { /* noop */ } }
-  };
-  const close = () => { panel.classList.add('hidden'); if (state.openFilter?.key === key) state.openFilter = null; };
-  btn.addEventListener('click', () => (panel.classList.contains('hidden') ? open() : close()));
-
-  // Clic afuera: cierra cualquier panel abierto (un solo listener para toda la pantalla).
-  if (!_mfOutsideBound) {
-    _mfOutsideBound = true;
-    document.addEventListener('mousedown', (e) => {
-      if (e.target.closest?.('.mf-wrap')) return;
-      document.querySelectorAll('.mf-panel').forEach((p) => p.classList.add('hidden'));
-      state.openFilter = null;
-    });
-  }
-  // Si este panel estaba abierto antes de redibujar, se vuelve a abrir igual.
-  if (state.openFilter?.key === key) open(state.openFilter.q, state.openFilter.scroll, true);
 }
 
 // Claves de variante para filtrar: "Talle: S", "Color: Rojo"… (o el nombre si no tiene atributos).
@@ -297,7 +213,6 @@ const state = {
   selected: new Set(),
   page: 0,
   filters: { search: '', categories: [], brands: [], suppliers: [], channels: [], variants: [], stocks: [], stockMax: null },
-  openFilter: null, // panel de filtro abierto { key, q, scroll } para reabrirlo al redibujar
   // Orden de la lista: 'newest' (más nuevos primero, por defecto) o 'name' (A → Z). Lo cambia
   // el botón "A-Z" y se recuerda entre sesiones.
   sort: (() => { try { return localStorage.getItem('inv_sort') === 'name' ? 'name' : 'newest'; } catch { return 'newest'; } })(),
@@ -673,7 +588,7 @@ async function renderProducts(container, forceReload = false) {
     try { localStorage.setItem('inv_sort', state.sort); } catch { /* sin storage: no se recuerda */ }
     renderProducts(container);
   });
-  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search: '', categories: [], brands: [], suppliers: [], channels: [], variants: [], stocks: [], stockMax: null }; state.openFilter = null; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search: '', categories: [], brands: [], suppliers: [], channels: [], variants: [], stocks: [], stockMax: null }; closeMultiFilters(); state.page = 0; renderProducts(container); });
 
   container.querySelector('#btn-new')?.addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-bulkcost')?.addEventListener('click', () => openBulkCostModal(container));
