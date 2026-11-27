@@ -553,7 +553,8 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
         try {
           const it: any = await ml.getItem(x.itemId);
           const body: any = {};
-          if (x.title && x.title !== it.title) body.title = x.title;
+          // En las publicaciones con family_name (modelo nuevo de ML) el título sale de ahí.
+          if (x.title && x.title !== it.title) { if (it.family_name) body.family_name = x.title; else body.title = x.title; }
           const pics: any[] = Array.isArray(it.pictures) ? it.pictures : [];
           if (pics.length && (x.coverIndex != null || x.dropIndexes?.length)) {
             const drop = new Set(x.dropIndexes ?? []);
