@@ -358,13 +358,13 @@ async function renderProducts(container, forceReload = false) {
     if (f.categories.length && !f.categories.includes(p.category_id || '__none')) return false;
     if (f.brands.length && !f.brands.includes(p.brand_id || '__none')) return false;
     if (f.suppliers.length && !f.suppliers.includes(p.supplier_id || '__none')) return false;
-    // Dónde está publicado (casillas, se puede marcar más de una): cada producto cae en un solo
-    // grupo — solo Mercado Libre, solo Tienda Nube, en ambos o sin publicar — y se muestran los
-    // grupos marcados. Sin ninguna marcada no se filtra.
+    // Dónde está publicado (casillas, se puede marcar más de una; se muestra lo que cumpla
+    // alguna): "Mercado Libre" = está en ML (esté o no en TN); "Tienda Nube" = está en TN (esté
+    // o no en ML); "En ambos" = en los dos; "Sin publicar" = en ninguno. Sin marcar = todos.
     if (f.channels && f.channels.length) {
       const ml = !!p.linked_ml, tn = !!p.linked_tn;
-      const group = ml && tn ? 'both' : ml ? 'ml_only' : tn ? 'tn_only' : 'none';
-      if (!f.channels.includes(group)) return false;
+      const hit = { ml, tn, both: ml && tn, none: !ml && !tn };
+      if (!f.channels.some((c) => hit[c])) return false;
     }
     if (f.variants.length) {
       const want = new Set(f.variants);
@@ -572,13 +572,15 @@ async function renderProducts(container, forceReload = false) {
       { id: 'with', name: 'Con stock', count: scnt.get('with') || 0 },
       { id: 'zero', name: 'Sin stock (0)', count: scnt.get('zero') || 0 },
     ], selected: f.stocks, onChange: setF('stocks') });
-    const ccnt = countBy((p) => [p.linked_ml && p.linked_tn ? 'both' : p.linked_ml ? 'ml_only' : p.linked_tn ? 'tn_only' : 'none']);
+    const ccnt = countBy((p) => [p.linked_ml && 'ml', p.linked_tn && 'tn', p.linked_ml && p.linked_tn && 'both', !p.linked_ml && !p.linked_tn && 'none'].filter(Boolean));
+    // Los marcados con el criterio viejo (solo ML / solo TN) se descartan.
+    const chSel = (f.channels || []).filter((c) => ['ml', 'tn', 'both', 'none'].includes(c));
     mountMultiFilter(container, 'channels', { options: [
-      { id: 'ml_only', name: 'Solo Mercado Libre', count: ccnt.get('ml_only') || 0 },
-      { id: 'tn_only', name: 'Solo Tienda Nube', count: ccnt.get('tn_only') || 0 },
+      { id: 'ml', name: 'Mercado Libre', count: ccnt.get('ml') || 0 },
+      { id: 'tn', name: 'Tienda Nube', count: ccnt.get('tn') || 0 },
       { id: 'both', name: 'En ambos', count: ccnt.get('both') || 0 },
       { id: 'none', name: 'Sin publicar', count: ccnt.get('none') || 0 },
-    ], selected: f.channels, onChange: setF('channels') });
+    ], selected: chSel, onChange: setF('channels') });
   }
   container.querySelector('#f-stock-max').addEventListener('change', e => { const v = e.target.value.trim(); state.filters.stockMax = v === '' ? null : Math.max(0, Math.floor(Number(v) || 0)); state.page = 0; renderProducts(container); });
   // Botón A-Z: prende/apaga el orden alfabético. Ordena lo que dejen los filtros activos.
