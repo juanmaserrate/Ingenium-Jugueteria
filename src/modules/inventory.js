@@ -203,7 +203,7 @@ const state = {
   tab: 'products',
   selected: new Set(),
   page: 0,
-  filters: { search: '', category: '', brand: '', supplier: '', channel: 'all', variant: '', stock: 'all', stockMax: null },
+  filters: { search: '', category: '', brand: '', supplier: '', channels: [], variant: '', stock: 'all', stockMax: null },
   // Orden de la lista: 'newest' (más nuevos primero, por defecto) o 'name' (A → Z). Lo cambia
   // el botón "A-Z" y se recuerda entre sesiones.
   sort: (() => { try { return localStorage.getItem('inv_sort') === 'name' ? 'name' : 'newest'; } catch { return 'newest'; } })(),
@@ -348,17 +348,13 @@ async function renderProducts(container, forceReload = false) {
     if (f.category && p.category_id !== f.category) return false;
     if (f.brand && p.brand_id !== f.brand) return false;
     if (f.supplier && p.supplier_id !== f.supplier) return false;
-    // Dónde está publicado: Mercado Libre, Tienda Nube, ambos, uno solo o ninguno.
-    if (f.channel && f.channel !== 'all') {
+    // Dónde está publicado (casillas, se puede marcar más de una): cada producto cae en un solo
+    // grupo — solo Mercado Libre, solo Tienda Nube, en ambos o sin publicar — y se muestran los
+    // grupos marcados. Sin ninguna marcada no se filtra.
+    if (f.channels && f.channels.length) {
       const ml = !!p.linked_ml, tn = !!p.linked_tn;
-      const ok = f.channel === 'ml' ? ml
-        : f.channel === 'tn' ? tn
-        : f.channel === 'both' ? (ml && tn)
-        : f.channel === 'ml_only' ? (ml && !tn)
-        : f.channel === 'tn_only' ? (tn && !ml)
-        : f.channel === 'none' ? (!ml && !tn)
-        : true;
-      if (!ok) return false;
+      const group = ml && tn ? 'both' : ml ? 'ml_only' : tn ? 'tn_only' : 'none';
+      if (!f.channels.includes(group)) return false;
     }
     if (f.variant) {
       const vq = f.variant.toLowerCase();
@@ -480,7 +476,7 @@ async function renderProducts(container, forceReload = false) {
       </div>
 
       <!-- Panel de filtros: se abre con "Filtrar". Queda abierto si hay filtros activos. -->
-      <div id="filter-panel" class="${(f.category||f.brand||f.supplier||(f.variant&&f.variant.trim())||(f.stock&&f.stock!=='all')||f.stockMax!=null||(f.channel&&f.channel!=='all'))?'':'hidden'} mt-3 pt-3 border-t border-[#fff1e6] flex flex-wrap gap-3 items-center">
+      <div id="filter-panel" class="${(f.category||f.brand||f.supplier||(f.variant&&f.variant.trim())||(f.stock&&f.stock!=='all')||f.stockMax!=null||(f.channels&&f.channels.length))?'':'hidden'} mt-3 pt-3 border-t border-[#fff1e6] flex flex-wrap gap-3 items-center">
         <div class="combo-wrap relative w-[180px]" data-combo="category">
           <input id="f-category" class="ing-input w-full" autocomplete="off" placeholder="Todas las categorías" />
           <div class="combo-menu hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-[#e3ceba] rounded-xl shadow-lg text-sm"></div>
@@ -500,15 +496,13 @@ async function renderProducts(container, forceReload = false) {
           <option value="zero" ${f.stock==='zero'?'selected':''}>Sin stock (0)</option>
         </select>
         <input id="f-stock-max" type="number" min="0" inputmode="numeric" class="ing-filter w-28" placeholder="Stock ≤" title="Mostrar productos con stock total menor o igual a esta cantidad" value="${f.stockMax != null ? f.stockMax : ''}" />
-        <select id="f-channel" class="ing-filter" title="Filtrar por dónde está publicado">
-          <option value="all" ${(!f.channel||f.channel==='all')?'selected':''}>Publicado en: todos</option>
-          <option value="ml" ${f.channel==='ml'?'selected':''}>En Mercado Libre</option>
-          <option value="tn" ${f.channel==='tn'?'selected':''}>En Tienda Nube</option>
-          <option value="both" ${f.channel==='both'?'selected':''}>En ambos</option>
-          <option value="ml_only" ${f.channel==='ml_only'?'selected':''}>Solo en Mercado Libre</option>
-          <option value="tn_only" ${f.channel==='tn_only'?'selected':''}>Solo en Tienda Nube</option>
-          <option value="none" ${f.channel==='none'?'selected':''}>En ninguno</option>
-        </select>
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm" title="Marcá uno o varios. Sin marcar, se ven todos.">
+          <span class="font-black text-[#7d6c5c]">Publicado en:</span>
+          ${[['ml_only','Solo Mercado Libre'],['tn_only','Solo Tienda Nube'],['both','En ambos'],['none','Sin publicar']].map(([v, label]) => `
+          <label class="flex items-center gap-1.5 font-bold cursor-pointer">
+            <input type="checkbox" data-channel="${v}" ${(f.channels||[]).includes(v)?'checked':''} class="rounded text-[#d82f1e] focus:ring-[#d82f1e]" /> ${label}
+          </label>`).join('')}
+        </div>
         <button id="f-clear" class="text-xs text-[#d82f1e] font-bold hover:underline">Limpiar</button>
       </div>
 
@@ -585,7 +579,10 @@ async function renderProducts(container, forceReload = false) {
     onPick: (id) => { state.filters.supplier = id; state.page = 0; renderProducts(container); },
     onCreate: async (name) => { const s = await Suppliers.save({ name }); if (state.cache) state.cache.suppliers = [...(state.cache.suppliers||[]), s]; toast(`Proveedor "${name}" creado`, 'success'); return s; },
   });
-  container.querySelector('#f-channel').addEventListener('change', e => { state.filters.channel = e.target.value; state.page = 0; renderProducts(container); });
+  container.querySelectorAll('[data-channel]').forEach(cb => cb.addEventListener('change', () => {
+    state.filters.channels = [...container.querySelectorAll('[data-channel]:checked')].map(x => x.dataset.channel);
+    state.page = 0; renderProducts(container);
+  }));
   container.querySelector('#f-variant').addEventListener('input', e => { state.filters.variant = e.target.value; state.page = 0; scheduleFilterRender(container, 'f-variant'); });
   container.querySelector('#f-stock').addEventListener('change', e => { state.filters.stock = e.target.value; state.page = 0; renderProducts(container); });
   container.querySelector('#f-stock-max').addEventListener('change', e => { const v = e.target.value.trim(); state.filters.stockMax = v === '' ? null : Math.max(0, Math.floor(Number(v) || 0)); state.page = 0; renderProducts(container); });
@@ -596,7 +593,7 @@ async function renderProducts(container, forceReload = false) {
     try { localStorage.setItem('inv_sort', state.sort); } catch { /* sin storage: no se recuerda */ }
     renderProducts(container);
   });
-  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', channel:'all', variant:'', stock:'all', stockMax:null }; state.page = 0; renderProducts(container); });
+  container.querySelector('#f-clear').addEventListener('click', () => { state.filters = { search:'', category:'', brand:'', supplier:'', channels:[], variant:'', stock:'all', stockMax:null }; state.page = 0; renderProducts(container); });
 
   container.querySelector('#btn-new')?.addEventListener('click', () => openProductForm(null, container));
   container.querySelector('#btn-bulkcost')?.addEventListener('click', () => openBulkCostModal(container));
