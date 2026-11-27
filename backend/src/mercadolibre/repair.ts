@@ -285,7 +285,8 @@ async function republish(ctx: Ctx, unit: AuditRow[], dryRun: boolean): Promise<R
   const info = forced ? { categoryId: forced, generic: false } : await resolveMlCategoryInfo(r.productId, product.name);
   if (!info || info.generic) return { ...base(r), result: 'skipped', detail: 'Mercado Libre no sugiere una categoría específica: hay que elegirla a mano', from: r.categoryName };
   const to = await ctx.catPath(info.categoryId);
-  if (isGenericCategory(to)) return { ...base(r), result: 'skipped', detail: 'La categoría sugerida también es genérica', from: r.categoryName, to };
+  // Una genérica elegida a mano se respeta (sirve cuando el propio clasificador de ML la da como la correcta).
+  if (isGenericCategory(to) && !forced) return { ...base(r), result: 'skipped', detail: 'La categoría sugerida también es genérica', from: r.categoryName, to };
   const newTitle = ctx.titles[r.productId] ? String(ctx.titles[r.productId]).slice(0, 60) : undefined;
   // Misma categoría solo si cambia el título (ML la había bajado por cómo la clasificó por el título).
   if (info.categoryId === r.categoryId && !newTitle) return { ...base(r), result: 'skipped', detail: 'La categoría sugerida es la misma en la que Mercado Libre la dio de baja: revisar a mano', from: r.categoryName, to };
