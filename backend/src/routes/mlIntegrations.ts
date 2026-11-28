@@ -462,6 +462,13 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
       try { const { requireMlClient } = await import('../mercadolibre/client.js'); return await (await requireMlClient()).getItem(id); }
       catch (err: any) { return reply.status(502).send({ error: 'ml_error', status: err?.response?.status ?? null, details: err?.response?.data ?? err?.message }); }
     });
+    // Diagnóstico: calidad de la publicación según Mercado Libre (puntaje y qué le falta). Solo lee.
+    r.get('/integrations/ml/item/:id/quality', adminOnly, async (req, reply) => {
+      const id = String((req.params as any).id || '').toUpperCase();
+      if (!/^ML[A-Z]\d+$/.test(id)) return reply.status(400).send({ error: 'id inválido' });
+      try { const { requireMlClient } = await import('../mercadolibre/client.js'); return await (await requireMlClient()).itemPerformance(id); }
+      catch (err: any) { return reply.status(502).send({ error: 'ml_error', status: err?.response?.status ?? null, details: err?.response?.data ?? err?.message }); }
+    });
     // Categorías candidatas de ML para una lista de productos (solo lee): para elegir a mano.
     r.post('/ml-mass/category-candidates', adminOnly, async (req) => {
       const b = z.object({ productIds: z.array(z.string().max(60)).min(1).max(80) }).parse(req.body ?? {});
