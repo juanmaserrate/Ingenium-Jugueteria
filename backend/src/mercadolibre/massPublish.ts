@@ -325,11 +325,13 @@ export async function startPublish(opts: Partial<MassOptions>) {
   return { started: true, total: queue.length };
 }
 
-type ChosenExtra = { chosen: Record<string, string>; extraAttrs?: Record<string, ExtraAttr[]>; extraAttrsByProduct?: Record<string, ExtraAttr[]> };
+type ChosenExtra = { chosen: Record<string, string>; extraAttrs?: Record<string, ExtraAttr[]>; extraAttrsByProduct?: Record<string, ExtraAttr[]>; titles?: Record<string, string> };
 
 // Publica una lista puntual de productos: con la categoría elegida a mano para cada uno (si
 // viene) y con los datos obligatorios que se indiquen. No depende del análisis.
-export async function startPublishChosen(input: { categoryByProduct?: Record<string, string>; productIds?: string[]; extraAttrs?: Record<string, ExtraAttr[]>; extraAttrsByProduct?: Record<string, ExtraAttr[]>; minPrice?: number }) {
+// titleByProduct: título descriptivo para Mercado Libre (ML clasifica por el título: uno corto o ambiguo
+// hace que la dé de baja por "categoría incorrecta"; ver repair.ts).
+export async function startPublishChosen(input: { categoryByProduct?: Record<string, string>; productIds?: string[]; extraAttrs?: Record<string, ExtraAttr[]>; extraAttrsByProduct?: Record<string, ExtraAttr[]>; minPrice?: number; titleByProduct?: Record<string, string> }) {
   if (job?.status === 'running') return { started: false, reason: 'Ya hay un proceso corriendo' };
   const chosen = input.categoryByProduct ?? {};
   const ids = [...new Set([...Object.keys(chosen), ...(input.productIds ?? [])])];
@@ -341,7 +343,7 @@ export async function startPublishChosen(input: { categoryByProduct?: Record<str
   job = { ...newJob('publish', queue.length), options: { limit: null, pricing: 'target', priceFactor: 1, minPrice, listingTypeId: 'gold_special' } };
   stopRequested = false;
   const mine = job;
-  void runPublish(mine, queue, { chosen, extraAttrs: input.extraAttrs, extraAttrsByProduct: input.extraAttrsByProduct }).catch((err) => {
+  void runPublish(mine, queue, { chosen, extraAttrs: input.extraAttrs, extraAttrsByProduct: input.extraAttrsByProduct, titles: input.titleByProduct }).catch((err) => {
     mine.status = 'error'; mine.finishedAt = new Date().toISOString();
     mine.message = `La publicación se cortó: ${err?.message ?? 'error'}`;
     void kvSet(KV.report, mine);
@@ -368,6 +370,7 @@ async function runPublish(j: Job, queue: MassAnalysis['ready'], extra?: ChosenEx
       const one = await publishOne(item.productId, {
         listingTypeId, pricing, priceFactor, minPrice, requireSpecific: true,
         categoryId: extra?.chosen[item.productId], extraAttrs: extra?.extraAttrs, extraAttrsByProduct: extra?.extraAttrsByProduct,
+        ...(extra?.titles?.[item.productId] ? { title: extra.titles[item.productId] } : {}),
       }, holder);
       storePrice = one.storePrice;
       // Los baratos no se publican sueltos: el costo fijo de ML se come la ganancia.

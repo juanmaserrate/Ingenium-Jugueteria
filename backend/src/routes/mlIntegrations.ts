@@ -486,6 +486,7 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
         extraAttrs: z.record(z.array(attr).max(20)).optional(),
         extraAttrsByProduct: z.record(z.array(attr).max(20)).optional(),
         minPrice: z.number().min(0).optional(),
+        titleByProduct: z.record(z.string().min(5).max(60)).optional(),
       }).parse(req.body ?? {});
       return startPublishChosen(b);
     });
