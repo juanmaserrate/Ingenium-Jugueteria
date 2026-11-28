@@ -367,6 +367,19 @@ async function runMove(j: CatalogJob, targets: CatalogRow[], pairs: Record<strin
               need.fill.push(...extra.fill);
               need.blocking = extra.still;
             }
+            // Los datos de texto libre se completaban con el título; si la ficha trae el dato real
+            // (modelo, colección, personaje, título del libro…) se usa ese. Autor y editorial NO se
+            // inventan: si la ficha no los trae, la publicación no se mueve.
+            if (!sameDomain && need.fill.length) {
+              const fromFicha = new Map<string, string>();
+              for (const a of (Array.isArray(prod?.attributes) ? prod.attributes : [])) if (a?.id && a.value_name != null && String(a.value_name).trim() !== '') fromFicha.set(String(a.id), String(a.value_name));
+              need.fill = need.fill.map((a) => (fromFicha.has(a.id) ? { id: a.id, value_name: fromFicha.get(a.id)! } : a));
+              const fake = need.fill.filter((a) => (a.id === 'AUTHOR' || a.id === 'BOOK_PUBLISHER') && !fromFicha.has(a.id));
+              if (fake.length) {
+                need.fill = need.fill.filter((a) => !fake.includes(a));
+                need.blocking = [...need.blocking, ...fake.map((a) => (a.id === 'AUTHOR' ? 'Autor' : 'Editorial'))];
+              }
+            }
             if (need.blocking.length) push(r, 'skipped', `La categoría nueva pide datos que no tenemos: ${need.blocking.join(', ')}`, from, to);
             else if (dryRun) push(r, 'preview', sameDomain ? 'Ya está en el rubro de la ficha' : (need.fill.length ? `Se completaría: ${need.fill.map((a) => a.id).join(', ')}` : 'Cambio directo'), from, to);
             else {
