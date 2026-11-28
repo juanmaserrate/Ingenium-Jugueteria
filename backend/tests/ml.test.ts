@@ -89,6 +89,26 @@ test('catalogo ML: categoria del rubro de la ficha (prefiere una que no sea Otro
   assert.equal(pickCategoryForDomain(c, null), null);
 });
 
+test('catalogo ML: datos faltantes se completan con los de la ficha; categoria de respaldo por rubro', async () => {
+  const { fillFromCatalogProduct, categoryByDomain } = await import('../src/mercadolibre/catalogPure.js');
+  const schema = [
+    { id: 'IS_FACTORY_KIT', name: 'Es un kit de fábrica' },
+    { id: 'COLLECTION', name: 'Colección' },
+    { id: 'BRAND', name: 'Marca' },
+  ];
+  const prod = [{ id: 'IS_FACTORY_KIT', value_name: 'Sí' }, { id: 'COLLECTION', value_name: '' }, { id: 'BRAND', value_name: 'Hape' }];
+  const r = fillFromCatalogProduct(schema, ['Es un kit de fábrica', 'Colección'], prod);
+  assert.deepEqual(r.fill, [{ id: 'IS_FACTORY_KIT', value_name: 'Sí' }]);   // solo lo pedido y con valor
+  assert.deepEqual(r.still, ['Colección']);                                   // la ficha no lo tiene: sigue faltando
+  assert.deepEqual(fillFromCatalogProduct(schema, ['Otro dato'], prod).still, ['Otro dato']);
+  const m = categoryByDomain([
+    { domainId: 'MLA-PUZZLES', categoryId: 'MLA1858' }, { domainId: 'MLA-PUZZLES', categoryId: 'MLA1858' },
+    { domainId: 'MLA-PUZZLES', categoryId: 'MLA1161' }, { domainId: null, categoryId: 'MLA1' }, { domainId: 'MLA-DOLLS', categoryId: null },
+  ]);
+  assert.equal(m.get('MLA-PUZZLES'), 'MLA1858');
+  assert.equal(m.has('MLA-DOLLS'), false);
+});
+
 test('categorias genericas: "Otros" no se usa para publicar', async () => {
   const { isGenericCategory, pickPrediction, summarizeAudit } = await import('../src/mercadolibre/massPure.js');
   assert.equal(isGenericCategory('Juegos y Juguetes > Otros'), true);

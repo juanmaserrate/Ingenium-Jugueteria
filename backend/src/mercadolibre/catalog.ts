@@ -1,6 +1,7 @@
 import { prisma } from '../db.js';
 import { requireMlClient } from './client.js';
-import { summarizeCatalog, catalogStateOf, pickCatalogProduct, pickCategoryForDomain, type CatalogRow } from './catalogPure.js';
+import { summarizeCatalog, catalogStateOf, pickCatalogProduct, pickCategoryForDomain, fillFromCatalogProduct, categoryByDomain, type CatalogRow } from './catalogPure.js';
+import { auditRows } from './audit.js';
 import { missingForCategory } from './repairPure.js';
 import { isGenericCategory } from './massPure.js';
 import { pricingCtxOf, dimensionsFor, type PricingHolder } from './massPublish.js';
@@ -307,6 +308,10 @@ async function runMove(j: CatalogJob, targets: CatalogRow[], pairs: Record<strin
     return schemas.get(id)!;
   };
   // Categoría del rubro de la ficha: la que ML sugiere para el nombre de la ficha (o el nuestro).
+  // Respaldo: la categoría que ya usan nuestras publicaciones activas de cada rubro
+  // (rubro del relevamiento de catálogo + categoría de la última auditoría).
+  const catOfItem = new Map((await auditRows().catch(() => [])).filter((a) => a.status === 'active' && a.categoryId).map((a) => [a.itemId, a.categoryId]));
+  const ownByDomain = categoryByDomain(j.rows.filter((x) => x.state === 'in_catalog' || x.status === 'active').map((x) => ({ domainId: x.domainId, categoryId: catOfItem.get(x.itemId) ?? null })));
   const categoryFor = async (domainId: string, names: string[]) => {
     for (const q of names) {
       const name = String(q || '').slice(0, 60).trim();
@@ -322,7 +327,7 @@ async function runMove(j: CatalogJob, targets: CatalogRow[], pairs: Record<strin
       const hit = pickCategoryForDomain(cands, domainId);
       if (hit) { domainCat.set(domainId, hit); return hit; }
     }
-    return domainCat.get(domainId) ?? null;
+    return domainCat.get(domainId) ?? ownByDomain.get(domainId) ?? null;
   };
 
   let consecutive = 0;
@@ -356,6 +361,12 @@ async function runMove(j: CatalogJob, targets: CatalogRow[], pairs: Record<strin
             });
             const title = String(it.family_name || it.title || r.name).slice(0, 60);
             const need = sameDomain ? { fill: [], blocking: [] } : missingForCategory(await catAttrs(catId), it.attributes, { title, brand: product?.brand?.name ?? null });
+            // Lo que falte y sea de lista (ej. "Es un kit de fábrica", "Colección") se toma de la propia ficha.
+            if (need.blocking.length) {
+              const extra = fillFromCatalogProduct(await catAttrs(catId), need.blocking, prod?.attributes);
+              need.fill.push(...extra.fill);
+              need.blocking = extra.still;
+            }
             if (need.blocking.length) push(r, 'skipped', `La categoría nueva pide datos que no tenemos: ${need.blocking.join(', ')}`, from, to);
             else if (dryRun) push(r, 'preview', sameDomain ? 'Ya está en el rubro de la ficha' : (need.fill.length ? `Se completaría: ${need.fill.map((a) => a.id).join(', ')}` : 'Cambio directo'), from, to);
             else {

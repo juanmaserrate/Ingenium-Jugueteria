@@ -85,3 +85,42 @@ export function pickCategoryForDomain(cands: Array<{ categoryId: string; domainI
   const same = cands.filter((c) => c.categoryId && c.domainId === domainId);
   return (same.find((c) => !c.generic) ?? same[0])?.categoryId ?? null;
 }
+
+// Datos obligatorios que le faltan a la publicación para pasar a la categoría de su ficha:
+// se completan con los de la PROPIA ficha de catálogo (mismo producto → mismos datos).
+// blocking = nombres de los datos faltantes (como los devuelve missingForCategory).
+export function fillFromCatalogProduct(
+  schema: any[] | null | undefined,
+  blocking: string[],
+  productAttrs: any[] | null | undefined,
+): { fill: Array<{ id: string; value_name: string }>; still: string[] } {
+  const want = new Set(blocking);
+  const byId = new Map<string, any>();
+  for (const a of productAttrs || []) if (a?.id && a.value_name != null && String(a.value_name).trim() !== '') byId.set(String(a.id), a);
+  const fill: Array<{ id: string; value_name: string }> = [];
+  const still: string[] = [];
+  for (const a of schema || []) {
+    const name = String(a?.name || a?.id || '');
+    if (!a?.id || !want.has(name)) continue;
+    want.delete(name);
+    const src = byId.get(String(a.id));
+    if (src) fill.push({ id: String(a.id), value_name: String(src.value_name) });
+    else still.push(name);
+  }
+  return { fill, still: [...still, ...want] };
+}
+
+// Categoría más usada por las publicaciones propias de cada rubro (domain): sirve de respaldo
+// cuando la predicción por nombre no devuelve ninguna categoría de ese rubro.
+export function categoryByDomain(pairs: Array<{ domainId: string | null; categoryId: string | null }>): Map<string, string> {
+  const tally = new Map<string, Map<string, number>>();
+  for (const p of pairs) {
+    if (!p.domainId || !p.categoryId) continue;
+    const m = tally.get(p.domainId) ?? new Map<string, number>();
+    m.set(p.categoryId, (m.get(p.categoryId) || 0) + 1);
+    tally.set(p.domainId, m);
+  }
+  const out = new Map<string, string>();
+  for (const [d, m] of tally) out.set(d, [...m.entries()].sort((a, b) => b[1] - a[1])[0][0]);
+  return out;
+}
