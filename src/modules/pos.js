@@ -508,9 +508,9 @@ function renderSide(root, totals) {
       </div>
 
       <div>
-        <div class="text-xs font-bold text-[#7d6c5c] uppercase mb-1">Vendedor</div>
+        <div class="text-xs font-bold text-[#7d6c5c] uppercase mb-1">Vendedor <span class="text-[#d82f1e]">*</span></div>
         <select id="pos-seller" class="ing-input w-full">
-          <option value="">— Sin vendedor —</option>
+          <option value="">— Elegí el vendedor —</option>
           ${state.employees.map(e => `<option value="${e.id}" ${sale.seller_id===e.id?'selected':''}>${e.name} ${e.lastname||''}</option>`).join('')}
         </select>
       </div>
@@ -576,7 +576,7 @@ function renderSide(root, totals) {
   `;
 
   wireCustomerBox(root, side, sale, totals);
-  side.querySelector('#pos-seller').addEventListener('change', (ev) => { sale.seller_id = ev.target.value || null; persistDraft(); });
+  side.querySelector('#pos-seller').addEventListener('change', (ev) => { sale.seller_id = ev.target.value || null; ev.target.classList.toggle('!border-[#d82f1e]', !sale.seller_id); persistDraft(); });
   ['dpct', 'dfix', 'spct', 'sfix'].forEach(k => {
     const map = { dpct: 'discount_global_pct', dfix: 'discount_global_fixed', spct: 'surcharge_global_pct', sfix: 'surcharge_global_fixed' };
     side.querySelector(`#pos-${k}`).addEventListener('change', (ev) => { sale[map[k]] = Math.max(0, Number(ev.target.value) || 0); persistDraft(); renderCart(root); });
@@ -654,10 +654,23 @@ function senaRefundMethod(sale) {
   return methods.find(m => m.id === id) || methods.find(m => m.affects_cash) || methods[0] || null;
 }
 
+// Vendedor OBLIGATORIO en el POS (pedido del dueño 2026-11-28: 68 ventas de noviembre quedaron
+// sin vendedor y no entran en el ranking). Las ventas web / Mercado Libre no pasan por acá.
+// Si la sucursal no tiene vendedores cargados no se bloquea (no habría a quién elegir).
+function sellerMissing(root, sale) {
+  const emps = state.employees || [];
+  if (!emps.length || emps.some(e => e.id === sale.seller_id)) return false;
+  toast('Elegí el vendedor antes de cobrar la venta', 'warn');
+  const sel = root?.querySelector?.('#pos-seller');
+  if (sel) { sel.classList.add('!border-[#d82f1e]'); sel.scrollIntoView({ block: 'center', behavior: 'smooth' }); sel.focus(); }
+  return true;
+}
+
 async function openCobroModal(root) {
   const sale = activeSale();
   if (!sale) return;
   if (!sale.items.length) { toast('El carrito está vacío', 'warn'); return; }
+  if (sellerMissing(root, sale)) return;
   const totals = Sales.computeTotals(sale);
   allocateSenaPayments(sale, totals.total);
   // Arrancar con una fila vacía (sin método) si no hay pagos cargados.
@@ -877,6 +890,7 @@ async function _confirmSaleInner(root) {
   const t = activeTab();
   const sale = t.sale;
   if (!sale.items.length) { toast('El carrito está vacío', 'warn'); return; }
+  if (sellerMissing(root, sale)) return;
   const totals = Sales.computeTotals(sale);
   const paid = (sale.payments || []).reduce((s, p) => s + (Number(p.amount) || 0), 0);
   // Ya NO se asume efectivo: la forma de pago se elige en el modal de cobro.
