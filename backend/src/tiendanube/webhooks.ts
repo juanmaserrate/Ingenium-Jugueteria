@@ -3,7 +3,7 @@ import { repushStockForOrderItems } from '../services/pendingReserve.js';
 import { Prisma } from '@prisma/client';
 import { getTnClient } from './client.js';
 import { findOrCreateByEmail } from '../services/customers.js';
-import { processReturn } from '../services/returns.js';
+import { annulCancelledWebSale, notifyWebCancel } from '../services/webCancel.js';
 import { randomId } from '../utils/crypto.js';
 
 /**
@@ -100,7 +100,7 @@ export async function ingestPaidOrder(order: any) {
 
 export async function handleOrderCancelled(event: any) {
   const tnOrderId = String(event.id);
-  // Si la orden ya fue asignada a una venta en Ingenium, crear devoluci\u00f3n autom\u00e1tica
+  // Si la orden ya fue asignada a una venta en Ingenium, se anula esa venta (y se avisa)
   const pending = await prisma.tnOrderPending.findUnique({ where: { tnOrderId } });
   if (!pending) return { skipped: 'unknown order' };
 
@@ -113,31 +113,21 @@ export async function handleOrderCancelled(event: any) {
   if (flip.count !== 1) return { skipped: 'already cancelled' };
 
   // Cancelada antes de asignarse: se libera la reserva → el stock vuelve a publicarse.
-  if (pending.status !== 'assigned') await repushStockForOrderItems('tn', pending.items);
-
-  if (pending.status === 'assigned' && pending.assignedSaleId) {
-    const sale = await prisma.sale.findUnique({
-      where: { id: pending.assignedSaleId },
-      include: { items: true },
-    });
-    if (sale && sale.status === 'confirmed') {
-      // processReturn ya valida qty \u2264 vendida y deduplica contra devoluciones previas,
-      // as\u00ed que incluso ante un reintento no reembolsa de m\u00e1s.
-      await processReturn({
-        branchId: sale.branchId,
-        originalSaleId: sale.id,
-        customerId: sale.customerId,
-        returnedItems: sale.items.map((it) => ({
-          variantId: it.variantId,
-          qty: it.qty,
-          unitPrice: it.unitPrice,
-        })),
-        takenItems: [],
-        reason: `Orden TN #${tnOrderId} cancelada`,
-        source: 'tn_cancelled',
-        tnOrderId,
+  if (pending.status !== 'assigned') {
+    await repushStockForOrderItems('tn', pending.items);
+    if (pending.status === 'pending') {
+      const items = ((pending.items as any[]) ?? []).map((i) => i?.productName).filter(Boolean).join(', ');
+      await notifyWebCancel({
+        channel: 'tn', orderRef: pending.number || tnOrderId, total: pending.total, items,
+        detail: 'Todav\u00eda no estaba asignada a una sucursal: se sac\u00f3 de pendientes y el stock vuelve a publicarse.',
       });
     }
+  }
+
+  // Ya asignada: se ANULA la venta original (no se crea una devoluci\u00f3n con fecha de hoy,
+  // que restaba de las ventas del d\u00eda de la cancelaci\u00f3n). Ver services/webCancel.ts.
+  if (pending.status === 'assigned' && pending.assignedSaleId) {
+    await annulCancelledWebSale(pending.assignedSaleId, { channel: 'tn', orderRef: pending.number || tnOrderId });
   }
 
   return { ok: true };

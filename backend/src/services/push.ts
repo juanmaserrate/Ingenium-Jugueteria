@@ -42,21 +42,28 @@ export async function unregisterPushToken(token: string) {
 export async function notifySalePush(info: {
   number: number | string; branchName: string; total: number; source?: string | null; itemsCount?: number;
 }) {
-  let tokens: Array<{ token: string }>;
-  try { tokens = await prisma.pushToken.findMany({ select: { token: true } }); } catch { return; }
-  if (!tokens.length) return;
-
   const canal = info.source === 'tn' ? 'Tienda Nube' : info.source === 'ml' ? 'Mercado Libre' : 'Local';
   const monto = `$${Number(info.total || 0).toLocaleString('es-AR')}`;
   const items = info.itemsCount ? ` · ${info.itemsCount} ítem${info.itemsCount === 1 ? '' : 's'}` : '';
   const body = `${info.branchName} · ${monto}${items} · ${canal}`;
+  await notifyPush({
+    title: `Venta #${info.number}`, body,
+    data: { type: 'sale', number: String(info.number), branch: info.branchName },
+  });
+}
+
+// Aviso genérico a todos los dispositivos registrados (canal "ventas" de la app).
+export async function notifyPush(msg: { title: string; body: string; data?: Record<string, string> }) {
+  let tokens: Array<{ token: string }>;
+  try { tokens = await prisma.pushToken.findMany({ select: { token: true } }); } catch { return; }
+  if (!tokens.length) return;
 
   const messages = tokens.map((t) => ({
     to: t.token,
     sound: 'default',
-    title: `Venta #${info.number}`,
-    body,
-    data: { type: 'sale', number: String(info.number), branch: info.branchName },
+    title: msg.title,
+    body: msg.body,
+    data: msg.data ?? {},
     channelId: 'ventas',
     priority: 'high',
   }));

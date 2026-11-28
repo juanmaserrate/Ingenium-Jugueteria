@@ -3,7 +3,7 @@ import { repushStockForOrderItems } from '../services/pendingReserve.js';
 import { isHistoricalOrder, isBeforeCutoff, orderPaidAt } from '../services/pendingMath.js';
 import { Prisma } from '@prisma/client';
 import { requireMlClient, getMlClient } from './client.js';
-import { processReturn } from '../services/returns.js';
+import { annulCancelledWebSale, notifyWebCancel } from '../services/webCancel.js';
 import { randomId } from '../utils/crypto.js';
 import { invalidateQuestionsCount } from './questions.js';
 import { normalizeOrderItems } from './orderItems.js';
@@ -109,8 +109,8 @@ export async function ingestPaidMlOrder(order: any) {
   return { ok: true, mlOrderId };
 }
 
-// Orden cancelada: si ya era venta en Ingenium, crea la devolución (restock + re-push a
-// todos los canales vía el fan-out de enqueueSync). Guarda atómica anti-doble-devolución.
+// Orden cancelada: si ya era venta en Ingenium, se anula esa venta (restock + re-push a
+// todos los canales vía el fan-out de enqueueSync) y se avisa. Guarda atómica anti-doble.
 export async function handleMlOrderCancelled(order: any) {
   const mlOrderId = String(order.id);
   const pending = await prisma.mlOrderPending.findUnique({ where: { mlOrderId } });
@@ -123,21 +123,20 @@ export async function handleMlOrderCancelled(order: any) {
   if (flip.count !== 1) return { skipped: 'already cancelled' };
 
   // Cancelada antes de asignarse: se libera la reserva → el stock vuelve a publicarse.
-  if (pending.status !== 'assigned') await repushStockForOrderItems('ml', pending.items);
-
-  if (pending.status === 'assigned' && pending.assignedSaleId) {
-    const sale = await prisma.sale.findUnique({ where: { id: pending.assignedSaleId }, include: { items: true } });
-    if (sale && sale.status === 'confirmed') {
-      await processReturn({
-        branchId: sale.branchId,
-        originalSaleId: sale.id,
-        customerId: sale.customerId,
-        returnedItems: sale.items.map((it) => ({ variantId: it.variantId, qty: it.qty, unitPrice: it.unitPrice })),
-        takenItems: [],
-        reason: `Orden ML #${mlOrderId} cancelada`,
-        source: 'ml_cancelled',
+  if (pending.status !== 'assigned') {
+    await repushStockForOrderItems('ml', pending.items);
+    if (pending.status === 'pending') {
+      const items = ((pending.items as any[]) ?? []).map((i) => i?.title).filter(Boolean).join(', ');
+      await notifyWebCancel({
+        channel: 'ml', orderRef: mlOrderId, total: pending.total, items,
+        detail: 'Todavía no estaba asignada a una sucursal: se sacó de pendientes y el stock vuelve a publicarse.',
       });
     }
+  }
+
+  // Ya asignada: se ANULA la venta original (no se crea una devolución con fecha de hoy).
+  if (pending.status === 'assigned' && pending.assignedSaleId) {
+    await annulCancelledWebSale(pending.assignedSaleId, { channel: 'ml', orderRef: mlOrderId });
   }
   return { ok: true };
 }

@@ -9,6 +9,7 @@ import { computeMlStockForVariant } from '../services/stock.js';
 import { confirmSale } from '../services/sales.js';
 import { buildCostMetaForMl } from '../services/paymentCost.js';
 import { maybeReconcileMl } from '../mercadolibre/webhooks.js';
+import { convertCancelReturns } from '../services/webCancel.js';
 import { predictCategory, publishProduct } from '../mercadolibre/publish.js';
 import { buildSyncPlan, applyLinks, ensureProductMapping, unlinkProduct, productMlStatus } from '../mercadolibre/syncExisting.js';
 import { ValidationError } from '../utils/errors.js';
@@ -384,6 +385,13 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
 
     // Descarta de una vez todo el HISTORIAL (compras anteriores a la conexión de la cuenta)
     // que el respaldo importó como pendiente.
+    // Corrección: cancelaciones web registradas como devolución del día de la cancelación →
+    // se borra esa devolución y se anula la venta original (ver services/webCancel.ts).
+    r.post('/web-cancel/convert-returns', adminOnly, async (req) => {
+      const body = z.object({ dryRun: z.boolean().optional() }).parse(req.body ?? {});
+      return convertCancelReturns({ dryRun: body.dryRun, userId: (req as any).user?.userId });
+    });
+
     r.post('/ml-orders/dismiss-historical', adminOnly, async () => {
       const integ = await prisma.integration.findUnique({ where: { provider: 'mercadolibre' } });
       const rows = await prisma.mlOrderPending.findMany({ where: { status: 'pending' }, select: { id: true, rawPayload: true } });
