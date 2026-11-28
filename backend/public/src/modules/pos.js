@@ -411,7 +411,7 @@ function renderCart(root) {
   } else {
     container.innerHTML = `
       <div class="ing-card overflow-hidden">
-        <div class="grid grid-cols-[48px_1fr_80px_110px_90px_110px_40px] gap-3 px-4 py-2 bg-[#fff8f4] text-xs font-bold text-[#7d6c5c] uppercase">
+        <div class="grid grid-cols-[40px_1fr_120px_150px_90px_150px_40px] gap-3 px-4 py-2 bg-[#fff8f4] text-xs font-bold text-[#7d6c5c] uppercase">
           <div>#</div><div>Producto</div><div class="text-center">Cant.</div><div class="text-right">Precio</div><div class="text-center">Dto %</div><div class="text-right">Subtotal</div><div></div>
         </div>
         <div class="divide-y divide-[#fff1e6]">
@@ -432,20 +432,20 @@ function renderCart(root) {
 
 function cartRow(it, i) {
   return `
-    <div class="grid grid-cols-[48px_1fr_80px_110px_90px_110px_40px] gap-3 px-4 py-2 items-center hover:bg-[#fff8f4]">
+    <div class="grid grid-cols-[40px_1fr_120px_150px_90px_150px_40px] gap-3 px-4 py-2 items-center hover:bg-[#fff8f4]">
       <div class="text-xs font-bold text-[#7d6c5c]">${i + 1}</div>
       <div class="min-w-0">
         <div class="font-bold text-sm text-[#241a0d] break-words leading-tight">${it.name}</div>
         <div class="text-[10px] text-[#7d6c5c] font-mono break-all">${it.code || ''}</div>
       </div>
       <div class="flex items-center justify-center gap-1">
-        <button data-item-qty-minus="${i}" class="w-6 h-6 rounded-md bg-[#fff1e6] text-[#7d6c5c] hover:bg-[#d82f1e] hover:text-white flex items-center justify-center font-bold">−</button>
-        <input data-item-qty-input="${i}" type="number" min="1" value="${it.qty}" class="w-12 h-6 text-center border border-[#fff1e6] rounded-md text-sm font-bold" />
-        <button data-item-qty-plus="${i}" class="w-6 h-6 rounded-md bg-[#fff1e6] text-[#7d6c5c] hover:bg-[#d82f1e] hover:text-white flex items-center justify-center font-bold">+</button>
+        <button data-item-qty-minus="${i}" class="w-8 h-8 rounded-md bg-[#fff1e6] text-[#7d6c5c] hover:bg-[#d82f1e] hover:text-white flex items-center justify-center font-bold">−</button>
+        <input data-item-qty-input="${i}" type="number" min="1" value="${it.qty}" class="w-14 h-8 text-center border border-[#fff1e6] rounded-md text-sm font-bold" />
+        <button data-item-qty-plus="${i}" class="w-8 h-8 rounded-md bg-[#fff1e6] text-[#7d6c5c] hover:bg-[#d82f1e] hover:text-white flex items-center justify-center font-bold">+</button>
       </div>
       <div data-item-edit-price="${i}" class="text-right font-bold text-sm text-[#241a0d] cursor-pointer hover:text-[#d82f1e]" title="Doble-click para editar">${money(it.unit_price)}</div>
       <div class="flex items-center justify-center">
-        <input data-item-discount="${i}" type="number" min="0" max="100" value="${it.discount_pct || 0}" class="w-14 h-6 text-center border border-[#fff1e6] rounded-md text-xs" />
+        <input data-item-discount="${i}" type="number" min="0" max="100" value="${it.discount_pct || 0}" class="w-16 h-8 text-center border border-[#fff1e6] rounded-md text-sm" />
       </div>
       <div class="text-right font-bold text-sm text-[#d82f1e]">${money(it.subtotal || 0)}</div>
       <div>

@@ -48,6 +48,8 @@ async function render(path) {
   // "Ruta no encontrada". El query sigue en location.hash para que el módulo lo lea.
   const [base, ...rest] = path.split('?')[0].split('/').filter(Boolean);
   const key = `/${base || 'dashboard'}`;
+  // La pantalla actual queda marcada en el contenedor (el CSS agranda la letra en POS y Ventas).
+  container.dataset.route = key;
   // Guard de rol: el encargado no accede a módulos de administración ni por URL.
   if (ADMIN_ONLY.has(key) && !isAdmin()) {
     if (location.hash !== '#/pos') { location.hash = '/pos'; return; }

@@ -301,3 +301,17 @@ html.sb-collapsed #sidebar .sb-item { justify-content: center; padding-left: 0 !
 html.sb-collapsed #sidebar nav { padding-top: .25rem; }
 html.sb-collapsed #sidebar .sb-badge { position: absolute; top: 0; right: 2px; min-width: 16px; height: 16px; font-size: 9px; margin: 0; }
 html.sb-collapsed #sidebar #btn-new-sale { padding-left: 0; padding-right: 0; }
+
+/* ---- Letra y números más grandes en POS y Ventas (pedido del local: cuesta leerlos) ----
+   El router marca la pantalla en #router-outlet[data-route]. Se sube un escalón cada tamaño. */
+#router-outlet:is([data-route="/pos"], [data-route="/ventas"]) { font-size: 1.1rem; }
+#router-outlet:is([data-route="/pos"], [data-route="/ventas"]) :is(.text-\[10px\], .text-\[11px\], .text-\[0\.6rem\], .text-\[0\.625rem\], .text-\[0\.7rem\]) { font-size: .875rem; line-height: 1.25rem; }
+#router-outlet:is([data-route="/pos"], [data-route="/ventas"]) .text-xs { font-size: .975rem; line-height: 1.4rem; }
+#router-outlet:is([data-route="/pos"], [data-route="/ventas"]) .text-sm { font-size: 1.1rem; line-height: 1.55rem; }
+#router-outlet:is([data-route="/pos"], [data-route="/ventas"]) .text-base { font-size: 1.225rem; line-height: 1.75rem; }
+#router-outlet:is([data-route="/pos"], [data-route="/ventas"]) .text-lg { font-size: 1.375rem; line-height: 1.9rem; }
+#router-outlet:is([data-route="/pos"], [data-route="/ventas"]) .text-xl { font-size: 1.55rem; line-height: 2.05rem; }
+#router-outlet:is([data-route="/pos"], [data-route="/ventas"]) .text-2xl { font-size: 1.8rem; line-height: 2.3rem; }
+#router-outlet:is([data-route="/pos"], [data-route="/ventas"]) .text-3xl { font-size: 2.15rem; line-height: 2.6rem; }
+#router-outlet:is([data-route="/pos"], [data-route="/ventas"]) .ing-filter { font-size: .975rem; }
+#router-outlet:is([data-route="/pos"], [data-route="/ventas"]) .ing-input { font-size: 1.1rem; }
