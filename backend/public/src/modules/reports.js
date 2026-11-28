@@ -21,7 +21,7 @@ import { multiFilterHtml, mountMultiFilter } from '../components/multifilter.js'
 const REPORTS = [
   { id: 'by-customer', name: 'Compras por cliente', desc: 'Agrupado por cliente: sus compras, detalle de productos e importes. Elegís los filtros al generar.', icon: 'shopping_cart', filters: ['date', 'branch', 'source', 'customer'] },
   { id: 'sales', name: 'Ventas', desc: 'Todas las ventas con costo, ganancia y margen; detalle por ítem. Filtrable por proveedor.', icon: 'trending_up', filters: ['date', 'branch', 'source', 'supplier'] },
-  { id: 'by-seller', name: 'Ventas por vendedor', desc: 'Agrupado por vendedor. Período mensual o anual.', icon: 'badge', filters: ['period', 'branch', 'source'] },
+  { id: 'by-seller', name: 'Ranking de vendedores', desc: 'Ranking por importe vendido y el detalle de qué productos vendió cada uno, en un mismo archivo. Mensual, anual o por rango.', icon: 'badge', filters: ['period', 'branch', 'source'] },
   { id: 'by-supplier', name: 'Ventas por proveedor', desc: 'Por proveedor: ventas, unidades, importe, costo, ganancia, margen y participación. Filtrable por proveedor. Mensual o anual.', icon: 'local_shipping', filters: ['period', 'branch', 'source', 'supplier'] },
   { id: 'by-category', name: 'Ventas por rubro', desc: 'Unidades e importe por rubro (categoría), filtrable por proveedor. Mensual o anual.', icon: 'category', filters: ['period', 'branch', 'source', 'supplier'] },
   { id: 'by-customer-sum', name: 'Ventas por cliente', desc: 'Resumen por cliente: ventas, unidades e importe. Mensual o anual.', icon: 'groups', filters: ['period', 'branch', 'source'] },
@@ -347,12 +347,18 @@ async function salesContext(f = {}) {
   return { sales: sales || [], vMap, catMap, suMap, brMap, cuMap };
 }
 
+// Ranking de vendedores + qué vendió cada uno, en un mismo archivo (3 hojas):
+//   Ranking                → puesto por importe vendido, con ventas, unidades, ticket, ganancia.
+//   Productos por vendedor → por cada vendedor (en orden del ranking), sus productos sumados.
+//   Detalle de ventas      → renglón por renglón: fecha, N° de venta, producto, cantidad, precio.
+// "Sin vendedor" (ventas online o sin vendedor cargado) va al final y no ocupa puesto.
 async function repBySeller(f = {}) {
-  const { sales } = await salesContext(f);
+  const { sales, vMap, brMap } = await salesContext(f);
+  const SIN = 'Sin vendedor';
   const g = new Map();
   let gran = 0;
   for (const s of sales) {
-    const k = s.sellerName || 'Sin vendedor';
+    const k = s.sellerName || SIN;
     const e = g.get(k) || { Vendedor: k, Ventas: 0, Unidades: 0, Importe: 0, Costo: 0 };
     e.Ventas += 1; e.Unidades += unidadesDe(s);
     e.Importe = round2(e.Importe + (s.total || 0));
@@ -361,19 +367,58 @@ async function repBySeller(f = {}) {
     g.set(k, e);
   }
   gran = round2(gran);
-  const rows = [...g.values()].map(e => {
+  const ordered = [...g.values()].sort((a, b) => (a.Vendedor === SIN) - (b.Vendedor === SIN) || b.Importe - a.Importe);
+  const puesto = new Map();
+  let n = 0;
+  for (const e of ordered) puesto.set(e.Vendedor, e.Vendedor === SIN ? '-' : ++n);
+  const rows = ordered.map(e => {
     const gan = round2(e.Importe - e.Costo);
     return {
-      Vendedor: e.Vendedor, Ventas: e.Ventas, Unidades: e.Unidades, Importe: e.Importe,
+      Puesto: puesto.get(e.Vendedor), Vendedor: e.Vendedor, Ventas: e.Ventas, Unidades: e.Unidades, Importe: e.Importe,
       'Ticket prom.': e.Ventas ? round2(e.Importe / e.Ventas) : 0, Costo: e.Costo, Ganancia: gan,
       'Margen %': e.Importe ? round2((gan / e.Importe) * 100) : 0, 'Part. %': gran ? round2((e.Importe / gran) * 100) : 0,
     };
-  }).sort((a, b) => b.Importe - a.Importe);
+  });
   if (rows.length) {
     const t = rows.reduce((a, r) => { a.Ventas += r.Ventas; a.Unidades += r.Unidades; a.Importe = round2(a.Importe + r.Importe); a.Costo = round2(a.Costo + r.Costo); a.Ganancia = round2(a.Ganancia + r.Ganancia); return a; }, { Ventas: 0, Unidades: 0, Importe: 0, Costo: 0, Ganancia: 0 });
-    rows.push({ Vendedor: 'TOTAL', Ventas: t.Ventas, Unidades: t.Unidades, Importe: t.Importe, 'Ticket prom.': '', Costo: t.Costo, Ganancia: t.Ganancia, 'Margen %': t.Importe ? round2((t.Ganancia / t.Importe) * 100) : 0, 'Part. %': 100 });
+    rows.push({ Puesto: '', Vendedor: 'TOTAL', Ventas: t.Ventas, Unidades: t.Unidades, Importe: t.Importe, 'Ticket prom.': '', Costo: t.Costo, Ganancia: t.Ganancia, 'Margen %': t.Importe ? round2((t.Ganancia / t.Importe) * 100) : 0, 'Part. %': 100 });
   }
-  return saveXLSX('ventas_por_vendedor.xlsx', [{ name: 'Por vendedor', rows }]);
+
+  // Productos sumados por vendedor + detalle renglón por renglón.
+  const prodName = (it, info) => `${it.productNameSnap || info.nombre || ''}${it.variantNameSnap && it.variantNameSnap !== 'default' ? ` (${it.variantNameSnap})` : ''}`;
+  const byProd = new Map(); // vendedor|variante -> agregado
+  const detail = [];
+  for (const s of sales) {
+    const vend = s.sellerName || SIN;
+    const canal = s.source === 'tn' ? 'Tienda Nube' : s.source === 'ml' ? 'Mercado Libre' : 'POS';
+    for (const it of (s.items || [])) {
+      const info = vMap[it.variantId] || {};
+      const key = `${vend}|${it.variantId}`;
+      const e = byProd.get(key) || { Vendedor: vend, Codigo: info.code || '', Producto: prodName(it, info), Rubro: info.categoria || 'Sin rubro', Cantidad: 0, Importe: 0 };
+      e.Cantidad += it.qty || 0;
+      e.Importe = round2(e.Importe + (it.subtotal || 0));
+      byProd.set(key, e);
+      detail.push({
+        _dt: String(s.datetime || ''), Puesto: puesto.get(vend), Vendedor: vend, Fecha: fmtDateTime(s.datetime), 'N° venta': s.number,
+        Sucursal: brMap[s.branchId] || s.branchId || '', Canal: canal, Codigo: info.code || '', Producto: prodName(it, info),
+        Cantidad: it.qty || 0, 'Precio unit.': it.qty ? round2((it.subtotal || 0) / it.qty) : 0, Subtotal: round2(it.subtotal || 0),
+      });
+    }
+  }
+  const rank = (v) => (v === SIN ? 1e9 : puesto.get(v));
+  const prodRows = [];
+  for (const e of ordered) {
+    const mine = [...byProd.values()].filter(x => x.Vendedor === e.Vendedor).sort((a, b) => b.Importe - a.Importe);
+    for (const x of mine) prodRows.push({ Puesto: puesto.get(e.Vendedor), Vendedor: x.Vendedor, Codigo: x.Codigo, Producto: x.Producto, Rubro: x.Rubro, Cantidad: x.Cantidad, 'Precio unit.': x.Cantidad ? round2(x.Importe / x.Cantidad) : 0, Importe: x.Importe });
+    if (mine.length) prodRows.push({ Puesto: '', Vendedor: `TOTAL ${e.Vendedor}`, Codigo: '', Producto: `${mine.length} producto(s)`, Rubro: '', Cantidad: mine.reduce((a, x) => a + x.Cantidad, 0), 'Precio unit.': '', Importe: round2(mine.reduce((a, x) => a + x.Importe, 0)) });
+  }
+  detail.sort((a, b) => rank(a.Vendedor) - rank(b.Vendedor) || a._dt.localeCompare(b._dt));
+  const detailRows = detail.map(({ _dt, ...r }) => r);
+  return saveXLSX('ranking_vendedores.xlsx', [
+    { name: 'Ranking', rows },
+    { name: 'Productos por vendedor', rows: prodRows },
+    { name: 'Detalle de ventas', rows: detailRows },
+  ]);
 }
 
 async function repByCustomerSum(f = {}) {
