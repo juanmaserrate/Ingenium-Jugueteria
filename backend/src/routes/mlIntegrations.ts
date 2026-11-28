@@ -651,10 +651,9 @@ export async function mlIntegrationsRoutes(app: FastifyInstance) {
           out.cutoffLimits = dr?.availables?.cutoffs?.global ?? null;
           out.rawRanges = dr?.delivery_ranges ?? null;
         } catch (err: any) { out.rangesError = fail(err); }
-        if (out.cutoffByZone) {
-          try { out.zones = await ml.flexZones('MLA', integ.mlUserId!, s.service_id); }
-          catch (err: any) { out.zonesError = fail(err); }
-        }
+        // Zonas de cobertura (cuáles tiene habilitadas el vendedor). Solo lectura.
+        try { out.zones = await ml.flexZones('MLA', integ.mlUserId!, s.service_id); }
+        catch (err: any) { out.zonesError = fail(err); }
         return out;
       }));
       return { subscribed: services.length > 0, services };
